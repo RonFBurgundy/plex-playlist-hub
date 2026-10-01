@@ -327,26 +327,26 @@ class Database:
             if enabled_only:
                 cur = self.conn.execute(
                     """
-                    SELECT p.id, p.name, p.service, p.description, p.poster_url, p.enabled, p.creator_id, p.tracks_json,
+                    SELECT DISTINCT p.id, p.name, p.service, p.description, p.poster_url, p.enabled, p.creator_id, p.tracks_json,
                            p.last_synced_at, p.sync_status, p.created_at, p.updated_at
                     FROM playlists p
-                    INNER JOIN playlist_targets pt ON p.id = pt.playlist_id
-                    WHERE pt.user_id = ? AND p.enabled = 1
+                    LEFT JOIN playlist_targets pt ON p.id = pt.playlist_id
+                    WHERE (pt.user_id = ? OR p.creator_id = ?) AND p.enabled = 1
                     ORDER BY p.name ASC
                     """,
-                    (str(user_id),),
+                    (str(user_id), str(user_id)),
                 )
             else:
                 cur = self.conn.execute(
                     """
-                    SELECT p.id, p.name, p.service, p.description, p.poster_url, p.enabled, p.creator_id, p.tracks_json,
+                    SELECT DISTINCT p.id, p.name, p.service, p.description, p.poster_url, p.enabled, p.creator_id, p.tracks_json,
                            p.last_synced_at, p.sync_status, p.created_at, p.updated_at
                     FROM playlists p
-                    INNER JOIN playlist_targets pt ON p.id = pt.playlist_id
-                    WHERE pt.user_id = ?
+                    LEFT JOIN playlist_targets pt ON p.id = pt.playlist_id
+                    WHERE (pt.user_id = ? OR p.creator_id = ?)
                     ORDER BY p.name ASC
                     """,
-                    (str(user_id),),
+                    (str(user_id), str(user_id)),
                 )
         else:
             if enabled_only:

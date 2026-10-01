@@ -111,6 +111,7 @@ class TestStaticAssets:
         assert "pasteFromClipboard" in resp.text
         assert "getBookmarkletHref" in resp.text
         assert "checkHashImport" in resp.text
+        assert "openPlexAuth" in resp.text
         assert "fetchLidarrStatus" in resp.text
         assert "pushAllToLidarr" in resp.text
         assert "pushTrackToLidarr" in resp.text

@@ -93,10 +93,9 @@ def verify_pin(
             detail="Plex PIN is not yet authorized or has expired",
         )
 
-    # 2. Determine target Plex machine ID
-    machine_id = req.target_machine_id or os.getenv("PLEX_MACHINE_IDENTIFIER")
-    if not machine_id and plex_client:
-        machine_id = plex_client.machine_identifier
+    # 2. Determine target Plex machine ID (server machine identifier takes precedence over client input)
+    server_machine_id = os.getenv("PLEX_MACHINE_IDENTIFIER") or (plex_client.machine_identifier if plex_client else None)
+    machine_id = server_machine_id or req.target_machine_id
 
     if not machine_id:
         logger.error("No Plex machine identifier configured to verify user access")
@@ -134,12 +133,14 @@ def verify_pin(
     username = plex_user["username"]
     email = plex_user.get("email")
 
-    # 5. Upsert user in database
+    # 5. Upsert user in database (preserve existing admin status if already granted)
+    existing_user = db.get_user(user_id)
+    is_admin = is_owner or (bool(existing_user["is_admin"]) if existing_user else False)
     user = db.upsert_user(
         user_id=user_id,
         username=username,
         email=email,
-        is_admin=is_owner,
+        is_admin=is_admin,
     )
 
     # 6. Create signed session token and store in DB

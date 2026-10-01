@@ -171,15 +171,14 @@
             <div class="pin-code-digit text-3xl font-mono text-[#e5a00d] select-all" x-text="pin.code"></div>
             
             <div class="pt-2">
-              <a :href="pin.auth_url" 
-                 target="_blank" 
-                 rel="noopener noreferrer"
-                 class="inline-flex items-center justify-center space-x-2 w-full px-5 py-3 rounded-lg bg-[#e5a00d] hover:bg-[#cc8f0c] text-slate-950 font-bold text-sm transition shadow-lg shadow-[#e5a00d]/20">
-                <span>Authorize at plex.tv</span>
+              <button type="button"
+                      @click="openPlexAuth()" 
+                      class="inline-flex items-center justify-center space-x-2 w-full px-5 py-3 rounded-lg bg-[#e5a00d] hover:bg-[#cc8f0c] text-slate-950 font-bold text-sm transition shadow-lg shadow-[#e5a00d]/20">
+                <span>Authorize with Plex</span>
                 <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"></path>
                 </svg>
-              </a>
+              </button>
             </div>
 
             <!-- Polling Radar Indicator -->

@@ -210,7 +210,12 @@ document.addEventListener('alpine:init', () => {
             body: JSON.stringify({ pin_id: this.pin.id })
           });
 
-          if (res.status === 200) {
+            if (this.plexPopup && !this.plexPopup.closed) {
+              try {
+                this.plexPopup.close();
+              } catch (e) {}
+              this.plexPopup = null;
+            }
             clearInterval(this.pinPollingTimer);
             this.pinPollingTimer = null;
             const data = await res.json();
@@ -226,6 +231,12 @@ document.addEventListener('alpine:init', () => {
             this.initSSE();
             this.checkHashImport();
           } else if (res.status === 403) {
+            if (this.plexPopup && !this.plexPopup.closed) {
+              try {
+                this.plexPopup.close();
+              } catch (e) {}
+              this.plexPopup = null;
+            }
             clearInterval(this.pinPollingTimer);
             this.pinPollingTimer = null;
             const data = await res.json().catch(() => null);
@@ -241,6 +252,19 @@ document.addEventListener('alpine:init', () => {
           // Network hiccup during poll, continue waiting
         }
       }, 2000);
+    },
+
+    openPlexAuth() {
+      if (!this.pin?.auth_url) return;
+      const width = 600;
+      const height = 700;
+      const left = Math.max(0, Math.floor((window.innerWidth - width) / 2 + window.screenX));
+      const top = Math.max(0, Math.floor((window.innerHeight - height) / 2 + window.screenY));
+      this.plexPopup = window.open(
+        this.pin.auth_url,
+        'plex_oauth_popup',
+        `width=${width},height=${height},top=${top},left=${left},scrollbars=yes,status=no,toolbar=no,menubar=no`
+      );
     },
 
     async logout() {
