@@ -219,6 +219,13 @@ def get_or_create_secret_key(data_dir: str = "/data") -> bytes:
     """
     base = Path(data_dir).resolve()
     base.mkdir(parents=True, exist_ok=True)
+    if not os.access(base, os.W_OK):
+        uid = os.getuid() if hasattr(os, "getuid") else "N/A"
+        gid = os.getgid() if hasattr(os, "getgid") else "N/A"
+        raise PermissionError(
+            f"Data directory '{base}' is not writable (UID {uid}, GID {gid}). "
+            f"Cannot create or access session secret key."
+        )
     secret_path = safe_data_path(".session_secret", base_dir=str(base))
 
     if secret_path.exists():

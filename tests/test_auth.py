@@ -304,6 +304,12 @@ class TestSessionSecretKey:
         assert len(key) == 32
         assert key != b"too_short"
 
+    def test_get_or_create_secret_key_unwritable_directory_raises(self, tmp_path):
+        with patch("os.access", return_value=False):
+            with pytest.raises(PermissionError) as exc_info:
+                get_or_create_secret_key(data_dir=str(tmp_path))
+            assert "not writable" in str(exc_info.value)
+
 
 class TestSessionTokens:
     """Tests for create_session_token and verify_session_token."""

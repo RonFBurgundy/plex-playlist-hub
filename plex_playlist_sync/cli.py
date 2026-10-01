@@ -1,6 +1,7 @@
 import logging
 import os
 import signal
+import sqlite3
 import sys
 import threading
 import time
@@ -123,7 +124,17 @@ def main() -> int:
     # 3. Web UI & REST Server Mode (Default)
     logger.info("Starting Plex Playlist Hub Web Server on %s:%d", config.host, config.port)
     db_path = str(safe_data_path("sync_db.sqlite", base_dir=config.data_dir))
-    db = Database(db_path)
+    try:
+        db = Database(db_path)
+    except (PermissionError, sqlite3.OperationalError) as e:
+        logger.critical(
+            "Failed to initialize SQLite database at '%s': %s. "
+            "Please verify file and directory permissions on '%s' (e.g. Unraid PUID/PGID).",
+            db_path,
+            e,
+            config.data_dir,
+        )
+        return 1
 
     # Auto-discover Plex Home users and populate database
     if plex_client is not None:

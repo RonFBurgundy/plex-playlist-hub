@@ -2,6 +2,7 @@
 
 from datetime import datetime, timezone
 import sqlite3
+from unittest.mock import patch
 import pytest
 
 from plex_playlist_sync.models import Playlist, Track
@@ -69,6 +70,29 @@ class TestDatabaseInitAndMigrations:
         assert user is not None
         assert user["username"] == "user1"
         db2.close()
+
+    def test_unwritable_directory_raises_permission_error(self, tmp_path):
+        db_file = tmp_path / "protected_dir" / "playlists.db"
+        with patch("os.access", return_value=False):
+            with pytest.raises(PermissionError) as exc_info:
+                Database(db_file)
+            assert "not writable" in str(exc_info.value)
+            assert "PUID/PGID" in str(exc_info.value)
+
+    def test_unwritable_database_file_raises_permission_error(self, tmp_path):
+        db_file = tmp_path / "existing.db"
+        db_file.touch()
+
+        def custom_access(path, mode):
+            # Directory writable, but db file itself unwritable
+            if str(path) == str(db_file):
+                return False
+            return True
+
+        with patch("os.access", side_effect=custom_access):
+            with pytest.raises(PermissionError) as exc_info:
+                Database(db_file)
+            assert "exists but is not writable" in str(exc_info.value)
 
 
 class TestUsersCRUD:

@@ -102,3 +102,19 @@ def test_cli_web_mode_custom_port(mock_plex_class, mock_db_class, mock_server_cl
         code = main()
         assert code == 0
         mock_server.run.assert_called_once()
+
+
+@patch("plex_playlist_sync.cli.Database")
+@patch("plex_playlist_sync.cli.PlexClient")
+def test_cli_web_mode_database_permission_error(mock_plex_class, mock_db_class, tmp_path):
+    mock_db_class.side_effect = PermissionError("Permission denied: /data/sync_db.sqlite")
+
+    env = {
+        "PLEX_URL": "http://localhost:32400",
+        "PLEX_TOKEN": "token",
+        "DATA_DIR": str(tmp_path),
+    }
+    with patch.dict(os.environ, env, clear=True):
+        code = main()
+        assert code == 1
+

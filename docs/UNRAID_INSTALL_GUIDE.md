@@ -112,8 +112,15 @@ If you don't know your `X-Plex-Token`:
 
 ## Troubleshooting & FAQ
 
-#### The container says "Permission Denied: /data/sync_db.sqlite"
-Plex Playlist Hub natively supports Unraid permissions. The template defaults to `PUID=99` and `PGID=100` (`nobody:users`), automatically ensuring that files in `/mnt/user/appdata/plex-playlist-hub` remain writable.
+#### The WebUI is unreachable or logs show "unable to open database file"
+This occurs if the host `/mnt/user/appdata/plex-playlist-hub` folder permissions do not match the container user. Plex Playlist Hub includes dynamic `PUID`/`PGID` permission mapping:
+1. Ensure the template settings for `PUID` and `PGID` are set to `99` and `100` (standard Unraid `nobody:users`).
+2. If the folder was previously created with root or different ownership, open the Unraid terminal and run:
+   ```bash
+   chown -R 99:100 /mnt/user/appdata/plex-playlist-hub
+   chmod -R 775 /mnt/user/appdata/plex-playlist-hub
+   ```
+3. Restart the container. The database will initialize and the WebUI will be reachable at port 5250.
 
 #### Can my family members use this too?
 Yes! Anyone in your Plex Home can browse to `http://YOUR-UNRAID-IP:5250`, sign in with their own Plex account, and transfer their personal Spotify mixes or Liked Songs directly to their personal Plex profile.

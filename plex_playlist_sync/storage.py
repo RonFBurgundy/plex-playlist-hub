@@ -1,6 +1,7 @@
 """SQLite persistence engine for plex-playlist-sync with WAL mode and migrations."""
 
 import json
+import os
 import sqlite3
 import threading
 from datetime import datetime
@@ -28,7 +29,30 @@ class Database:
             if self.db_path != ":memory:":
                 assert isinstance(self.db_path, Path)
                 self.db_path.parent.mkdir(parents=True, exist_ok=True)
-                conn = sqlite3.connect(str(self.db_path), check_same_thread=False)
+                parent_dir = self.db_path.parent
+                if not os.access(parent_dir, os.W_OK):
+                    uid = os.getuid() if hasattr(os, "getuid") else "N/A"
+                    gid = os.getgid() if hasattr(os, "getgid") else "N/A"
+                    raise PermissionError(
+                        f"Database directory '{parent_dir}' is not writable (UID {uid}, GID {gid}). "
+                        f"Please verify permissions on your appdata volume or configure PUID/PGID."
+                    )
+                if self.db_path.exists() and not os.access(self.db_path, os.W_OK):
+                    uid = os.getuid() if hasattr(os, "getuid") else "N/A"
+                    gid = os.getgid() if hasattr(os, "getgid") else "N/A"
+                    raise PermissionError(
+                        f"Database file '{self.db_path}' exists but is not writable (UID {uid}, GID {gid}). "
+                        f"Please verify permissions on your appdata volume."
+                    )
+                try:
+                    conn = sqlite3.connect(str(self.db_path), check_same_thread=False)
+                except sqlite3.OperationalError as e:
+                    uid = os.getuid() if hasattr(os, "getuid") else "N/A"
+                    gid = os.getgid() if hasattr(os, "getgid") else "N/A"
+                    raise sqlite3.OperationalError(
+                        f"Failed to open SQLite database at '{self.db_path}': {e}. "
+                        f"Ensure directory '{parent_dir}' is writable by user UID {uid} / GID {gid}."
+                    ) from e
             else:
                 conn = sqlite3.connect(":memory:", check_same_thread=False)
 
