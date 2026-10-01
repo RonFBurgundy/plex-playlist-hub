@@ -19,8 +19,8 @@ from plex_playlist_sync.security import safe_data_path
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_CLIENT_IDENTIFIER = "plex-playlist-hub"
-DEFAULT_PRODUCT_NAME = "Plex Playlist Hub"
+DEFAULT_CLIENT_IDENTIFIER = "trackseerr"
+DEFAULT_PRODUCT_NAME = "TrackSeerr"
 PLEX_API_URL = "https://plex.tv/api/v2"
 PLEX_AUTH_APP_URL = "https://app.plex.tv/auth#"
 

@@ -1,5 +1,5 @@
 /**
- * Plex Playlist Hub - Alpine.js Application Controller & API Client
+ * TrackSeerr - Alpine.js Application Controller & API Client
  * Zero-build, responsive single-page dashboard.
  */
 
@@ -835,7 +835,7 @@ document.addEventListener('alpine:init', () => {
 
     getBookmarkletHref() {
       const origin = window.location.origin;
-      const script = `javascript:(function(){try{const h=document.querySelector('h1'),name=(h?h.innerText:document.title.replace(/\\s*\\|\\s*Spotify.*$/i,'')).trim()||'Spotify Playlist',rows=document.querySelectorAll('[data-testid="tracklist-row"]'),tracks=[];rows.forEach(r=>{const t=r.querySelector('[data-testid="internal-track-link"],div[aria-colindex="2"] a,a[href*="/track/"]'),arts=r.querySelectorAll('a[href*="/artist/"]'),alb=r.querySelector('a[href*="/album/"]'),title=t?t.innerText.trim():'',artists=Array.from(arts).map(a=>a.innerText.trim()).filter(Boolean),artist=artists.join(', ')||'Unknown Artist',album=alb?alb.innerText.trim():'';if(title){tracks.push({title,artist,album})}});if(!tracks.length){alert('Plex Playlist Hub: No tracks detected. Make sure you are on a Spotify playlist and scroll down to load songs!');return}const payload=JSON.stringify({name,tracks});navigator.clipboard.writeText(payload).then(()=>{window.open('${origin}/#import=clipboard','_blank')}).catch(()=>{prompt('Copy track data manually:',payload)})}catch(e){alert('Plex Playlist Hub: '+e.message)}})();`;
+      const script = `javascript:(function(){try{const h=document.querySelector('h1'),name=(h?h.innerText:document.title.replace(/\\s*\\|\\s*Spotify.*$/i,'')).trim()||'Spotify Playlist',rows=document.querySelectorAll('[data-testid="tracklist-row"]'),tracks=[];rows.forEach(r=>{const t=r.querySelector('[data-testid="internal-track-link"],div[aria-colindex="2"] a,a[href*="/track/"]'),arts=r.querySelectorAll('a[href*="/artist/"]'),alb=r.querySelector('a[href*="/album/"]'),title=t?t.innerText.trim():'',artists=Array.from(arts).map(a=>a.innerText.trim()).filter(Boolean),artist=artists.join(', ')||'Unknown Artist',album=alb?alb.innerText.trim():'';if(title){tracks.push({title,artist,album})}});if(!tracks.length){alert('TrackSeerr: No tracks detected. Make sure you are on a Spotify playlist and scroll down to load songs!');return}const payload=JSON.stringify({name,tracks});navigator.clipboard.writeText(payload).then(()=>{window.open('${origin}/#import=clipboard','_blank')}).catch(()=>{prompt('Copy track data manually:',payload)})}catch(e){alert('TrackSeerr: '+e.message)}})();`;
       return script.replace(/\\s+/g, ' ');
     },
 

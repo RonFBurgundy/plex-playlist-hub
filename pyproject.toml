@@ -3,9 +3,9 @@ requires = ["setuptools>=61.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "plex-playlist-hub"
+name = "trackseerr"
 version = "0.1.0.dev1"
-description = "Multi-user playlist synchronization and control hub for Plex & Plexamp (Spotify & Deezer)."
+description = "The music request, discovery, and playlist sync suite for Plex, Plexamp & Lidarr."
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "GPL-3.0-only" }
@@ -41,6 +41,7 @@ dev = [
 ]
 
 [project.scripts]
+trackseerr = "plex_playlist_sync.cli:main"
 plex-playlist-hub = "plex_playlist_sync.cli:main"
 
 [tool.setuptools.packages.find]

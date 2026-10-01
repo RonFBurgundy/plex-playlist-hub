@@ -1,4 +1,4 @@
-"""FastAPI REST Service for Plex Playlist Hub."""
+"""FastAPI REST Service for TrackSeerr."""
 
 from plex_playlist_sync.api.app import create_app
 

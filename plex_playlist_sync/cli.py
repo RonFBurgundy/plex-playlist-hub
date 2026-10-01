@@ -47,7 +47,7 @@ def main() -> int:
     config = Config.from_env()
     setup_logging(config.log_level)
 
-    logger.info("Initializing Plex Playlist Hub v1.0.0")
+    logger.info("Initializing TrackSeerr v1.0.0")
 
     if not config.plex_url or not config.plex_token:
         logger.error("Missing mandatory environment variables: PLEX_URL and PLEX_TOKEN must be specified.")
@@ -103,7 +103,7 @@ def main() -> int:
     if config.run_once:
         logger.info("RUN_ONCE enabled; running single sync cycle and exiting.")
         coordinator.run_sync_cycle()
-        logger.info("Plex Playlist Hub run-once completed cleanly.")
+        logger.info("TrackSeerr run-once completed cleanly.")
         return 0
 
     # 2. Headless mode (no web UI)
@@ -118,11 +118,11 @@ def main() -> int:
             while slept < config.wait_seconds and not _shutdown_requested:
                 time.sleep(min(1, config.wait_seconds - slept))
                 slept += 1
-        logger.info("Plex Playlist Hub terminated cleanly.")
+        logger.info("TrackSeerr terminated cleanly.")
         return 0
 
     # 3. Web UI & REST Server Mode (Default)
-    logger.info("Starting Plex Playlist Hub Web Server on %s:%d", config.host, config.port)
+    logger.info("Starting TrackSeerr Web Server on %s:%d", config.host, config.port)
     db_path = str(safe_data_path("sync_db.sqlite", base_dir=config.data_dir))
     try:
         db = Database(db_path)
@@ -261,7 +261,7 @@ def main() -> int:
     finally:
         db.close()
 
-    logger.info("Plex Playlist Hub server terminated cleanly.")
+    logger.info("TrackSeerr server terminated cleanly.")
     return 0
 
 

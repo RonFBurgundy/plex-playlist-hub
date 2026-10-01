@@ -164,7 +164,7 @@ def feed_missing_rss(
         artist = escape(t.get("artist", "") or "Unknown Artist")
         track_title = escape(t.get("title", ""))
         pl_name_esc = escape(p_name)
-        guid = f"plex-playlist-hub-missing-{t.get('id', 0)}"
+        guid = f"trackseerr-missing-{t.get('id', 0)}"
 
         def _clean_cdata(val: Any) -> str:
             return str(val or "").replace("]]>", "]]&gt;")
@@ -190,7 +190,7 @@ def feed_missing_rss(
     rss_xml = f"""<?xml version="1.0" encoding="UTF-8"?>
 <rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom">
   <channel>
-    <title>Plex Playlist Hub - Missing Music</title>
+    <title>TrackSeerr - Missing Music</title>
     <description>{escape(channel_desc)}</description>
     <link>http://localhost:5250</link>
     <language>en-us</language>

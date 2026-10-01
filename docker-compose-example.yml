@@ -1,7 +1,7 @@
 services:
-  plex-playlist-hub:
-    image: ghcr.io/ronfburgundy/plex-playlist-hub:latest
-    container_name: plex-playlist-hub
+  trackseerr:
+    image: ghcr.io/ronfburgundy/trackseerr:latest
+    container_name: trackseerr
     restart: unless-stopped
     ports:
       - "5250:5250"

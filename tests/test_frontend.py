@@ -47,7 +47,7 @@ class TestFrontendDashboard:
         resp = client.get("/")
         assert resp.status_code == 200
         assert "text/html" in resp.headers.get("content-type", "")
-        assert "Plex Playlist Hub" in resp.text
+        assert "TrackSeerr" in resp.text
 
     def test_root_contains_dashboard_elements(self, client):
         resp = client.get("/")
@@ -63,7 +63,7 @@ class TestFrontendDashboard:
         assert "bg-slate-950" in html
 
         # Key navigation & header elements
-        assert "Plex Playlist Hub" in html
+        assert "TrackSeerr" in html
         assert "Live Sync Status" in html or "syncStatus" in html
 
         # Modals & drawers

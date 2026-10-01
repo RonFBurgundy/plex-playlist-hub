@@ -124,7 +124,7 @@ class TestAuthEndpoints:
         mock_create_pin.return_value = {
             "id": 12345,
             "code": "CODE12",
-            "auth_url": "https://app.plex.tv/auth#?clientID=plex-playlist-hub&code=CODE12",
+            "auth_url": "https://app.plex.tv/auth#?clientID=trackseerr&code=CODE12",
         }
         _, client = app_and_client
         resp = client.post("/api/auth/plex/pin")

@@ -78,11 +78,11 @@ class TestMissingFeeds:
 
         body = resp.text
         assert "<rss version=\"2.0\"" in body
-        assert "<title>Plex Playlist Hub - Missing Music</title>" in body
+        assert "<title>TrackSeerr - Missing Music</title>" in body
         assert "<title>Queen - Bohemian Rhapsody</title>" in body
         assert "<title>David Bowie - Heroes</title>" in body
         assert "A Night at the Opera" in body
-        assert "<guid isPermaLink=\"false\">plex-playlist-hub-missing-" in body
+        assert "<guid isPermaLink=\"false\">trackseerr-missing-" in body
 
     def test_rss_feed_token_protection(self, client):
         # Invalid token returns 401 when feed_token is set

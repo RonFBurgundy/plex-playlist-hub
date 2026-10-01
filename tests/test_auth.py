@@ -38,14 +38,14 @@ class TestPlexPinCreation:
         assert result["id"] == 12345
         assert result["code"] == "ABCD"
         assert result["auth_url"].startswith("https://app.plex.tv/auth#?")
-        assert "clientID=plex-playlist-hub" in result["auth_url"]
+        assert "clientID=trackseerr" in result["auth_url"]
         assert "code=ABCD" in result["auth_url"]
-        assert "context%5Bdevice%5D%5Bproduct%5D=Plex+Playlist+Hub" in result["auth_url"]
+        assert "context%5Bdevice%5D%5Bproduct%5D=TrackSeerr" in result["auth_url"]
 
         # Verify headers sent
         call_headers = mock_post.call_args[1]["headers"]
-        assert call_headers["X-Plex-Product"] == "Plex Playlist Hub"
-        assert call_headers["X-Plex-Client-Identifier"] == "plex-playlist-hub"
+        assert call_headers["X-Plex-Product"] == "TrackSeerr"
+        assert call_headers["X-Plex-Client-Identifier"] == "trackseerr"
         assert call_headers["Accept"] == "application/json"
 
     @patch("plex_playlist_sync.auth.requests.post")

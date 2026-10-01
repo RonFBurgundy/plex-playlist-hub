@@ -23,7 +23,7 @@ def create_app(
 ) -> FastAPI:
     """Creates and configures a FastAPI application instance."""
     app = FastAPI(
-        title="Plex Playlist Hub API",
+        title="TrackSeerr API",
         version="1.0.0",
         docs_url="/api/docs",
         redoc_url="/api/redoc",

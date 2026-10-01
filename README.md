@@ -1,28 +1,28 @@
-# Plex Playlist Hub
+# TrackSeerr
 
-[![CI](https://github.com/RonFBurgundy/plex-playlist-hub/actions/workflows/ci.yml/badge.svg)](https://github.com/RonFBurgundy/plex-playlist-hub/actions/workflows/ci.yml)
-[![Docker](https://github.com/RonFBurgundy/plex-playlist-hub/actions/workflows/docker-publish.yml/badge.svg)](https://github.com/RonFBurgundy/plex-playlist-hub/actions/workflows/docker-publish.yml)
+[![CI](https://github.com/RonFBurgundy/trackseerr/actions/workflows/ci.yml/badge.svg)](https://github.com/RonFBurgundy/trackseerr/actions/workflows/ci.yml)
+[![Docker](https://github.com/RonFBurgundy/trackseerr/actions/workflows/docker-publish.yml/badge.svg)](https://github.com/RonFBurgundy/trackseerr/actions/workflows/docker-publish.yml)
 [![License: GPL-3.0](https://img.shields.io/badge/License-GPL--3.0-blue.svg)](LICENSE.md)
 [![Python 3.12](https://img.shields.io/badge/python-3.12-blue.svg)](https://www.python.org/downloads/release/python-3120/)
 [![Status: Work in Progress](https://img.shields.io/badge/status-active%20development-orange.svg)](#roadmap)
 
 > [!NOTE]
-> **Active Development / Work in Progress**: Plex Playlist Hub is currently undergoing active development. The multi-user control hub, Plex OAuth authentication, and web dashboard are being actively built and hardened.
+> **Active Development / Work in Progress**: TrackSeerr is currently undergoing active development. The multi-user control hub, Plex OAuth authentication, and web dashboard are being actively built and hardened.
 
 ---
 
 ## Overview
 
-**Plex Playlist Hub** is a self-hosted, multi-user playlist management and synchronization platform for your local **Plex Media Server** and **Plexamp**. It allows server administrators and Plex Home users to seamlessly import, manage, and synchronize playlists from **Spotify** and **Deezer** directly into their personal Plex profiles.
+**TrackSeerr** is a self-hosted, multi-user music request, discovery, and playlist management suite for your local **Plex Media Server**, **Plexamp**, and **Lidarr**. It allows server administrators and Plex Home users to seamlessly discover music, request tracks and albums, and import/synchronize playlists from **Spotify** and **Deezer** directly into their personal Plexamp profiles.
 
 > [!IMPORTANT]
-> This tool matches existing tracks within your local Plex music library. It **does not** download or scrape audio files from third-party services.
+> This tool matches existing tracks within your local Plex music library and orchestrates paced acquisitions via Lidarr. It **does not** scrape illegal streams from third-party services.
 
 ---
 
 ## Lineage & Acknowledgments
 
-Plex Playlist Hub was originally conceived from [rnagabhyrava/plex-playlist-sync](https://github.com/rnagabhyrava/plex-playlist-sync). We extend our sincere gratitude to the original author for the foundational playlist matching concept. 
+TrackSeerr was originally conceived from [rnagabhyrava/plex-playlist-sync](https://github.com/rnagabhyrava/plex-playlist-sync). We extend our sincere gratitude to the original author for the foundational playlist matching concept. 
 
 This project has been completely re-architected and rewritten from the ground up as an independent, multi-user web application with modern security controls, dynamic target routing, and Plex OAuth support.
 
@@ -89,11 +89,11 @@ This project has been completely re-architected and rewritten from the ground up
 Installing on Unraid takes less than 2 minutes. Open your Unraid Terminal (`>_` icon in the top right menu) and run:
 
 ```bash
-curl -o /boot/config/plugins/dockerMan/templates-user/my-plex-playlist-hub.xml \
-  https://raw.githubusercontent.com/RonFBurgundy/plex-playlist-hub/main/unraid/plex-playlist-hub.xml
+curl -o /boot/config/plugins/dockerMan/templates-user/my-trackseerr.xml \
+  https://raw.githubusercontent.com/RonFBurgundy/trackseerr/main/unraid/trackseerr.xml
 ```
 
-Then navigate to **Docker** &rarr; **Add Container** &rarr; select **my-plex-playlist-hub** from the **Template** dropdown, verify your Plex LAN IP address, and click **Apply**!
+Then navigate to **Docker** &rarr; **Add Container** &rarr; select **my-trackseerr** from the **Template** dropdown, verify your Plex LAN IP address, and click **Apply**!
 
 > [!TIP]
 > *Read the complete, human-friendly [Unraid Installation Guide](docs/UNRAID_INSTALL_GUIDE.md) for step-by-step walkthroughs, token tips, and troubleshooting.*
@@ -104,9 +104,9 @@ Then navigate to **Docker** &rarr; **Add Container** &rarr; select **my-plex-pla
 
 ```yaml
 services:
-  plex-playlist-hub:
-    image: ghcr.io/ronfburgundy/plex-playlist-hub:latest
-    container_name: plex-playlist-hub
+  trackseerr:
+    image: ghcr.io/ronfburgundy/trackseerr:latest
+    container_name: trackseerr
     restart: unless-stopped
     ports:
       - "5250:5250"

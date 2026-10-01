@@ -1,0 +1,73 @@
+<?xml version="1.0"?>
+<Container version="2">
+  <Name>trackseerr</Name>
+  <Repository>ghcr.io/ronfburgundy/trackseerr:latest</Repository>
+  <Registry>https://github.com/RonFBurgundy/trackseerr/pkgs/container/trackseerr</Registry>
+  <Network>bridge</Network>
+  <MyIP/>
+  <Shell>bash</Shell>
+  <Privileged>false</Privileged>
+  <Support>https://github.com/RonFBurgundy/trackseerr/issues</Support>
+  <Project>https://github.com/RonFBurgundy/trackseerr</Project>
+  <Overview>
+TrackSeerr is the self-hosted, multi-user music request, discovery, and playlist synchronization suite for your local Plex Media Server, Plexamp, and Lidarr.
+
+Key Features:
+- Music Discovery &amp; Requests: Browse trending charts and request albums/tracks with family quotas.
+- Multi-User Plex Home Routing: Share and sync playlists with specific users, kids, or the entire home.
+- Zero Spotify API Key Required: Built-in scraper allows seamless public Spotify playlist syncing without developer accounts.
+- 1-Click Bookmarklet &amp; Clipboard Import: Easily import personal Spotify playlists and Liked Songs into Plexamp.
+- Scalable Lidarr Trickle Automation: Paced background trickle worker automatically monitors missing albums and triggers targeted searches without overloading MusicBrainz.
+- Beautiful Dark Web UI: Interactive web dashboard on port 5250 with Plex OAuth sign-in.
+  </Overview>
+  <Category>MediaApp:Music MediaServer:Music Tools:Utilities</Category>
+  <WebUI>http://[IP]:[PORT:5250]</WebUI>
+  <TemplateURL>https://raw.githubusercontent.com/RonFBurgundy/trackseerr/main/unraid/trackseerr.xml</TemplateURL>
+  <Icon>https://raw.githubusercontent.com/RonFBurgundy/trackseerr/main/unraid/trackseerr.png</Icon>
+  <ExtraParams/>
+  <PostArgs/>
+  <CPUset/>
+  <DateInstalled/>
+  <DonateText/>
+  <DonateLink/>
+  <Requires/>
+  <License>GPL-3.0</License>
+  
+  <Config Name="WebUI &amp; API Port" Target="5250" Default="5250" Mode="tcp" Description="Web Dashboard and REST API port. Accessible in your browser." Type="Port" Display="always" Required="true" Mask="false">5250</Config>
+
+  <Config Name="AppData Storage" Target="/data" Default="/mnt/user/appdata/trackseerr" Mode="rw" Description="Persistent directory for the SQLite database, sessions, sync logs, and missing track exports." Type="Path" Display="always" Required="true" Mask="false">/mnt/user/appdata/trackseerr</Config>
+
+  <Config Name="Plex Server URL" Target="PLEX_URL" Default="http://192.168.1.100:32400" Mode="" Description="Base URL of your Plex Media Server, using your server's LAN IP and port 32400. IMPORTANT: Do NOT use localhost on bridge networking." Type="Variable" Display="always" Required="true" Mask="false">http://192.168.1.100:32400</Config>
+
+  <Config Name="Plex Token" Target="PLEX_TOKEN" Default="" Mode="" Description="Plex Admin X-Plex-Token. Optional initially if using the Web Dashboard Plex OAuth PIN login, but required for background daemon sync." Type="Variable" Display="always" Required="false" Mask="true"></Config>
+
+  <Config Name="Plex Music Library Section" Target="PLEX_MUSIC_SECTION" Default="Music" Mode="" Description="Name of your Plex music library section." Type="Variable" Display="always" Required="false" Mask="false">Music</Config>
+
+  <Config Name="Plex Machine Identifier" Target="PLEX_MACHINE_IDENTIFIER" Default="" Mode="" Description="Plex server machine identifier for multi-user access pinning. Leave blank to auto-detect." Type="Variable" Display="advanced" Required="false" Mask="false"></Config>
+
+  <Config Name="Plex SSL Verification" Target="PLEX_VERIFY_SSL" Default="1" Mode="" Description="Set to 0 if your Plex Media Server uses a self-signed certificate without valid chain." Type="Variable" Display="advanced" Required="false" Mask="false">1</Config>
+
+  <Config Name="Lidarr URL" Target="LIDARR_URL" Default="" Mode="" Description="Optional: Base URL to your Lidarr server (e.g. http://192.168.1.100:8686) for automated missing track acquisition." Type="Variable" Display="always" Required="false" Mask="false"></Config>
+
+  <Config Name="Lidarr API Key" Target="LIDARR_API_KEY" Default="" Mode="" Description="Optional: Lidarr API Key (from Settings &gt; General &gt; Security) for automated missing track acquisition." Type="Variable" Display="always" Required="false" Mask="true"></Config>
+
+  <Config Name="Lidarr Auto-Search" Target="LIDARR_AUTO_SEARCH" Default="1" Mode="" Description="Trigger interactive search immediately when queuing missing tracks in Lidarr (1 or 0)." Type="Variable" Display="advanced" Required="false" Mask="false">1</Config>
+
+  <Config Name="Lidarr Trickle Rate (Seconds)" Target="LIDARR_TRICKLE_RATE_SECONDS" Default="3.0" Mode="" Description="Delay in seconds between artist lookups during background trickle push to prevent rate limits." Type="Variable" Display="advanced" Required="false" Mask="false">3.0</Config>
+
+  <Config Name="Lidarr Trickle Batch Size" Target="LIDARR_TRICKLE_BATCH_SIZE" Default="25" Mode="" Description="Number of tracks pushed per manual batch or scheduled drip." Type="Variable" Display="advanced" Required="false" Mask="false">25</Config>
+
+  <Config Name="Lidarr Auto Trickle" Target="LIDARR_AUTO_TRICKLE" Default="0" Mode="" Description="Set to 1 to enable scheduled automated background trickle drips." Type="Variable" Display="advanced" Required="false" Mask="false">0</Config>
+
+  <Config Name="Lidarr Auto Trickle Interval (Minutes)" Target="LIDARR_AUTO_TRICKLE_INTERVAL_MINUTES" Default="30" Mode="" Description="Interval in minutes between automated background trickle runs." Type="Variable" Display="advanced" Required="false" Mask="false">30</Config>
+
+  <Config Name="Feed Access Token" Target="FEED_TOKEN" Default="" Mode="" Description="Optional: Secret token to protect RSS feeds, plain text lists, and webhook endpoints if exposed to untrusted networks." Type="Variable" Display="advanced" Required="false" Mask="true"></Config>
+
+  <Config Name="Sync Interval (Seconds)" Target="SECONDS_TO_WAIT" Default="14400" Mode="" Description="Duration in seconds between automated background sync cycles (default 14400 = 4 hours)." Type="Variable" Display="advanced" Required="false" Mask="false">14400</Config>
+
+  <Config Name="User ID (PUID)" Target="PUID" Default="99" Mode="" Description="Unraid nobody user ID for file permission compatibility." Type="Variable" Display="advanced" Required="true" Mask="false">99</Config>
+
+  <Config Name="Group ID (PGID)" Target="PGID" Default="100" Mode="" Description="Unraid users group ID for file permission compatibility." Type="Variable" Display="advanced" Required="true" Mask="false">100</Config>
+
+  <Config Name="Umask" Target="UMASK" Default="022" Mode="" Description="Standard umask permissions for created files." Type="Variable" Display="advanced" Required="false" Mask="false">022</Config>
+</Container>
