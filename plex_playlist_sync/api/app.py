@@ -84,7 +84,7 @@ def create_app(
     api_router.include_router(sync.router, prefix="/sync", tags=["sync"])
     api_router.include_router(missing.router, prefix="/missing", tags=["missing"])
 
-    @api_router.get("/health", tags=["health"])
+    @api_router.api_route("/health", methods=["GET", "HEAD"], tags=["health"])
     def health_check() -> dict[str, str]:
         return {"status": "ok"}
 
@@ -95,7 +95,7 @@ def create_app(
     static_dir.mkdir(parents=True, exist_ok=True)
     app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
 
-    @app.get("/", response_class=FileResponse, include_in_schema=False)
+    @app.api_route("/", methods=["GET", "HEAD"], response_class=FileResponse, include_in_schema=False)
     def serve_index() -> FileResponse:
         index_file = static_dir / "index.html"
         return FileResponse(str(index_file), media_type="text/html")

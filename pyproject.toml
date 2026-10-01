@@ -47,6 +47,9 @@ plex-playlist-hub = "plex_playlist_sync.cli:main"
 where = ["."]
 include = ["plex_playlist_sync*"]
 
+[tool.setuptools.package-data]
+plex_playlist_sync = ["static/*"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 python_files = ["test_*.py"]

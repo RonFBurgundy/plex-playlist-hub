@@ -61,6 +61,10 @@ class Config:
     deezer_user_id: Optional[str] = None
     deezer_playlist_ids: List[str] = field(default_factory=list)
 
+    port: int = 5250
+    host: str = "0.0.0.0"
+    headless: bool = False
+
     @classmethod
     def from_env(cls) -> "Config":
         plex_url = os.getenv("PLEX_URL", "").strip()
@@ -98,6 +102,14 @@ class Config:
 
         data_path = os.getenv("DATA_DIR", "/data").strip()
 
+        try:
+            port = int(os.getenv("PORT", "5250"))
+        except ValueError:
+            port = 5250
+
+        host = os.getenv("HOST", "0.0.0.0").strip() or "0.0.0.0"
+        headless = _parse_bool(os.getenv("HEADLESS"), False)
+
         return cls(
             plex_url=plex_url,
             plex_token=plex_token,
@@ -118,6 +130,9 @@ class Config:
             spotify_playlist_ids=sp_ids,
             deezer_user_id=os.getenv("DEEZER_USER_ID") or None,
             deezer_playlist_ids=dz_ids,
+            port=port,
+            host=host,
+            headless=headless,
         )
 
     @property

@@ -2,7 +2,8 @@ FROM python:3.12-slim
 
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
-    PIP_NO_CACHE_DIR=1
+    PIP_NO_CACHE_DIR=1 \
+    PORT=5250
 
 WORKDIR /app
 
@@ -21,6 +22,11 @@ RUN mkdir -p /data && \
 
 USER appuser
 
+EXPOSE 5250
+
 VOLUME ["/data"]
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+    CMD python3 -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:5250/api/health')" || exit 1
 
 CMD ["python", "-m", "plex_playlist_sync"]

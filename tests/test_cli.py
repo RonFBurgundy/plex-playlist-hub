@@ -25,3 +25,80 @@ def test_cli_run_once_success(mock_coord_class, mock_plex_class):
         code = main()
         assert code == 0
         mock_coord.run_sync_cycle.assert_called_once()
+
+
+@patch("plex_playlist_sync.cli.PlexClient")
+@patch("plex_playlist_sync.cli.SyncCoordinator")
+def test_cli_headless_mode(mock_coord_class, mock_plex_class):
+    mock_coord = MagicMock()
+    mock_coord_class.return_value = mock_coord
+
+    env = {
+        "PLEX_URL": "http://localhost:32400",
+        "PLEX_TOKEN": "token",
+        "HEADLESS": "1",
+        "SECONDS_TO_WAIT": "1",
+    }
+    # Simulate a shutdown request after first cycle
+    with patch.dict(os.environ, env, clear=True):
+        with patch("plex_playlist_sync.cli._shutdown_requested", True):
+            code = main()
+            assert code == 0
+
+
+@patch("plex_playlist_sync.cli.uvicorn.Server")
+@patch("plex_playlist_sync.cli.Database")
+@patch("plex_playlist_sync.cli.PlexClient")
+def test_cli_web_mode_default(mock_plex_class, mock_db_class, mock_server_class, tmp_path):
+    mock_plex = MagicMock()
+    mock_plex.get_home_users.return_value = [
+        {"id": "user-1", "name": "Ron", "email": "ron@test.local", "admin": True}
+    ]
+    mock_plex_class.return_value = mock_plex
+
+    mock_db = MagicMock()
+    mock_db_class.return_value = mock_db
+
+    mock_server = MagicMock()
+    mock_server_class.return_value = mock_server
+
+    env = {
+        "PLEX_URL": "http://localhost:32400",
+        "PLEX_TOKEN": "token",
+        "PORT": "5250",
+        "DATA_DIR": str(tmp_path),
+        "SECONDS_TO_WAIT": "0",  # Disable background thread for unit test
+    }
+    with patch.dict(os.environ, env, clear=True):
+        code = main()
+        assert code == 0
+        mock_plex.get_home_users.assert_called_once()
+        mock_db.upsert_user.assert_called_once_with(
+            user_id="user-1", username="Ron", email="ron@test.local", is_admin=True
+        )
+        mock_server.run.assert_called_once()
+
+
+@patch("plex_playlist_sync.cli.uvicorn.Server")
+@patch("plex_playlist_sync.cli.Database")
+@patch("plex_playlist_sync.cli.PlexClient")
+def test_cli_web_mode_custom_port(mock_plex_class, mock_db_class, mock_server_class, tmp_path):
+    mock_plex = MagicMock()
+    mock_plex.get_home_users.return_value = []
+    mock_plex_class.return_value = mock_plex
+
+    mock_server = MagicMock()
+    mock_server_class.return_value = mock_server
+
+    env = {
+        "PLEX_URL": "http://localhost:32400",
+        "PLEX_TOKEN": "token",
+        "PORT": "8080",
+        "HOST": "127.0.0.1",
+        "DATA_DIR": str(tmp_path),
+        "SECONDS_TO_WAIT": "0",
+    }
+    with patch.dict(os.environ, env, clear=True):
+        code = main()
+        assert code == 0
+        mock_server.run.assert_called_once()
