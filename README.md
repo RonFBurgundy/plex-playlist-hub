@@ -33,6 +33,13 @@ This project has been completely re-architected and rewritten from the ground up
 - **Multi-User Plex Home Routing**:
   - Dynamically share playlists with specific individual users, groups, or the entire household (e.g. *Today's Top Hits* &rarr; Ron & Sarah; *Disney Singalongs* &rarr; Kids).
   - Syncs directly into individual user libraries so playlists render natively in **Plexamp**.
+- **Zero Spotify API Key Required (Keyless Scraper)**:
+  - Synchronize public Spotify playlists with zero developer credentials or API registration.
+  - Automatically falls back to built-in SSR web scraper when `SPOTIFY_CLIENT_ID` / `SPOTIFY_CLIENT_SECRET` are omitted.
+- **Personal & Private Playlist Transfer**:
+  - Non-technical Plex Home users can import their private playlists, personal mixes, and *Liked Songs*.
+  - **1-Click Browser Bookmarklet Helper**: Drag the bookmarklet into your browser, click it on Spotify Web Player, and transfer playlists directly into Plexamp with one click.
+  - **Clipboard & Text Parsing**: Paste track lists, table rows, or `Artist - Title` lines with automatic format recognition.
 - **Spotify Integration**:
   - Automatic dynamic pagination across all user-owned and followed playlists (no 50-item limit).
   - Explicit playlist syncing via Spotify URLs, Spotify URIs, or IDs.

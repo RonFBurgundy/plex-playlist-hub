@@ -3,5 +3,6 @@
 from .deezer import DeezerClient
 from .plex import PlexClient
 from .spotify import SpotifyClient
+from .spotify_scraper import SpotifyWebScraper
 
-__all__ = ["PlexClient", "SpotifyClient", "DeezerClient"]
+__all__ = ["PlexClient", "SpotifyClient", "SpotifyWebScraper", "DeezerClient"]

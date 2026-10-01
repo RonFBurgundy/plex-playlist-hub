@@ -79,6 +79,14 @@ class TestFrontendDashboard:
         assert "target-pill" in html or "toggleUserTarget" in html
         assert "Export Safe CSV" in html
 
+        # Keyless Spotify & Multi-tab Import Features
+        assert "By Link" in html
+        assert "Paste Tracks" in html
+        assert "1-Click Helper" in html
+        assert "No Spotify API Key Needed" in html
+        assert "Send to Plexamp" in html
+        assert "Import to Plexamp" in html
+
 
 class TestStaticAssets:
     """Validates that JavaScript, CSS, and asset files are served correctly."""
@@ -92,6 +100,11 @@ class TestStaticAssets:
         assert "api/sync/stream" in resp.text
         assert "api/auth/plex/pin" in resp.text
         assert "api/missing/csv" in resp.text
+        assert "api/playlists/import" in resp.text
+        assert "parseImportText" in resp.text
+        assert "pasteFromClipboard" in resp.text
+        assert "getBookmarkletHref" in resp.text
+        assert "checkHashImport" in resp.text
 
     def test_static_style_css_served(self, client):
         resp = client.get("/static/style.css")

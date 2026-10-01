@@ -546,6 +546,85 @@ class TestPlaylistsEndpoints:
         assert resp_admin.status_code == 200
         assert test_db.get_playlist("p2") is None
 
+    def test_import_playlist_tracks_regular_user_targets_self_only(
+        self, app_and_client, seeded_users, test_db, secret_key
+    ):
+        _, client = app_and_client
+        alice_auth = create_auth_headers_or_cookies(test_db, seeded_users["alice"], secret_key)
+
+        resp = client.post(
+            "/api/playlists/import",
+            json={
+                "name": "My Offline Playlist",
+                "service": "spotify",
+                "tracks": [
+                    {"title": "Track One", "artist": "Artist One"},
+                    {"title": "Track Two", "artist": "Artist Two", "album": "Album Two"},
+                ],
+                "targets": ["user-bob", "admin-1"],  # Alice attempts targeting others
+            },
+            cookies=alice_auth["cookies"],
+        )
+        assert resp.status_code == 201
+        data = resp.json()
+        assert data["name"] == "My Offline Playlist"
+        assert data["track_count"] == 2
+        # Target must be strictly restricted to Alice
+        assert data["targets"] == ["user-alice"]
+        assert test_db.get_playlist(data["id"]) is not None
+
+    def test_import_playlist_tracks_admin_targets(
+        self, app_and_client, seeded_users, test_db, secret_key
+    ):
+        _, client = app_and_client
+        admin_auth = create_auth_headers_or_cookies(test_db, seeded_users["admin"], secret_key)
+
+        resp = client.post(
+            "/api/playlists/import",
+            json={
+                "name": "Shared Family Mix",
+                "service": "spotify",
+                "tracks": [
+                    {"title": "Family Track", "artist": "Artist"},
+                ],
+                "targets": ["user-alice", "user-bob"],
+            },
+            cookies=admin_auth["cookies"],
+        )
+        assert resp.status_code == 201
+        data = resp.json()
+        assert data["targets"] == ["user-alice", "user-bob"]
+        assert test_db.get_playlist_targets(data["id"]) == ["user-alice", "user-bob"]
+
+    def test_import_playlist_sanitization_and_validation(
+        self, app_and_client, seeded_users, test_db, secret_key
+    ):
+        _, client = app_and_client
+        admin_auth = create_auth_headers_or_cookies(test_db, seeded_users["admin"], secret_key)
+
+        # XSS sanitization
+        resp = client.post(
+            "/api/playlists/import",
+            json={
+                "name": "Clean Mix <script>alert(1)</script>",
+                "tracks": [
+                    {"title": "Track <b style='color:red'>Bold</b>", "artist": "Artist"},
+                ],
+            },
+            cookies=admin_auth["cookies"],
+        )
+        assert resp.status_code == 201
+        assert "<script>" not in resp.json()["name"]
+        assert "Clean Mix alert(1)" in resp.json()["name"]
+
+        # Empty tracks validation
+        resp_empty = client.post(
+            "/api/playlists/import",
+            json={"name": "Empty Mix", "tracks": []},
+            cookies=admin_auth["cookies"],
+        )
+        assert resp_empty.status_code == 422
+
 
 # =============================================================================
 # Sync Endpoints Tests
@@ -793,7 +872,15 @@ class TestEdgeCasesAndBranchCoverage:
             spotify_client_secret="secret",
             data_dir=str(tmp_path),
         )
+        # Test get_spotify_client falls back to SpotifyWebScraper if SpotifyClient fails
         with patch("plex_playlist_sync.api.dependencies.SpotifyClient", side_effect=Exception("Spotify init fail")):
+            fallback_client = get_spotify_client(cfg_bad_sp)
+            assert fallback_client is not None
+            assert hasattr(fallback_client, "get_playlist_by_id")
+
+        # Test get_spotify_client returns None if both fail
+        with patch("plex_playlist_sync.api.dependencies.SpotifyClient", side_effect=Exception("Spotify init fail")), \
+             patch("plex_playlist_sync.api.dependencies.SpotifyWebScraper", side_effect=Exception("Scraper fail")):
             assert get_spotify_client(cfg_bad_sp) is None
 
         # Test get_deezer_client exception handling

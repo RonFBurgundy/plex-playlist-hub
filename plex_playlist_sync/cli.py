@@ -12,6 +12,7 @@ from .api.routes.sync import sync_state
 from .clients.deezer import DeezerClient
 from .clients.plex import PlexClient
 from .clients.spotify import SpotifyClient
+from .clients.spotify_scraper import SpotifyWebScraper
 from .config import Config
 from .security import safe_data_path
 from .storage import Database
@@ -76,7 +77,11 @@ def main() -> int:
                 client_secret=config.spotify_client_secret,  # type: ignore
             )
         except Exception as e:
-            logger.error("Failed to initialize Spotify client: %s. Skipping Spotify sync.", e)
+            logger.error("Failed to initialize Spotify client: %s. Falling back to web scraper.", e)
+            spotify_client = SpotifyWebScraper()
+    else:
+        logger.info("No Spotify API credentials configured; activating keyless SpotifyWebScraper")
+        spotify_client = SpotifyWebScraper()
 
     deezer_client = None
     if config.has_deezer:

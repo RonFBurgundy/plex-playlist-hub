@@ -577,13 +577,13 @@
        class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-sm"
        style="display: none;">
     <div @click.away="closeAddModal()" 
-         class="glass-modal rounded-2xl w-full max-w-lg p-6 space-y-6 shadow-2xl border border-slate-700/80">
+         class="glass-modal rounded-2xl w-full max-w-xl p-6 space-y-5 shadow-2xl border border-slate-700/80">
       
       <!-- Modal Header -->
-      <div class="flex items-center justify-between border-b border-slate-800 pb-4">
+      <div class="flex items-center justify-between border-b border-slate-800 pb-3">
         <div>
           <h3 class="text-lg font-bold text-white">Add Playlist</h3>
-          <p class="text-xs text-slate-400">Import a Spotify or Deezer playlist into your hub</p>
+          <p class="text-xs text-slate-400">Import Spotify or Deezer playlists into your Plex server</p>
         </div>
         <button @click="closeAddModal()" class="p-1 rounded text-slate-400 hover:text-white transition">
           <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -592,9 +592,57 @@
         </button>
       </div>
 
-      <!-- Modal Form -->
-      <form @submit.prevent="submitAddPlaylist()" class="space-y-4">
-        
+      <!-- Navigation Tabs -->
+      <div class="flex items-center space-x-1 p-1 bg-slate-900/90 rounded-xl border border-slate-800 text-xs">
+        <button type="button" 
+                @click="addTab = 'link'"
+                :class="addTab === 'link' ? 'bg-[#e5a00d] text-slate-950 font-bold shadow' : 'text-slate-400 hover:text-white font-medium'"
+                class="flex-1 py-1.5 px-3 rounded-lg flex items-center justify-center space-x-1.5 transition">
+          <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1"></path>
+          </svg>
+          <span>By Link</span>
+        </button>
+
+        <button type="button" 
+                @click="addTab = 'paste'"
+                :class="addTab === 'paste' ? 'bg-[#e5a00d] text-slate-950 font-bold shadow' : 'text-slate-400 hover:text-white font-medium'"
+                class="flex-1 py-1.5 px-3 rounded-lg flex items-center justify-center space-x-1.5 transition">
+          <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4"></path>
+          </svg>
+          <span>Paste Tracks</span>
+        </button>
+
+        <button type="button" 
+                @click="addTab = 'helper'"
+                :class="addTab === 'helper' ? 'bg-[#e5a00d] text-slate-950 font-bold shadow' : 'text-slate-400 hover:text-white font-medium'"
+                class="flex-1 py-1.5 px-3 rounded-lg flex items-center justify-center space-x-1.5 transition">
+          <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path>
+          </svg>
+          <span>1-Click Helper</span>
+        </button>
+      </div>
+
+      <!-- ================= TAB 1: BY LINK ================= -->
+      <form x-show="addTab === 'link'" @submit.prevent="submitAddPlaylist()" class="space-y-4">
+        <!-- Zero Key Badge -->
+        <div class="p-3 rounded-xl bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 text-xs flex items-center justify-between">
+          <div class="flex items-center space-x-2.5">
+            <div class="w-5 h-5 rounded-full bg-emerald-500/20 flex items-center justify-center flex-shrink-0">
+              <svg class="w-3 h-3 text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M5 13l4 4L19 7"></path>
+              </svg>
+            </div>
+            <div>
+              <span class="font-semibold text-white">No Spotify API Key Needed</span>
+              <p class="text-[11px] text-emerald-300/80">Built-in keyless scraper syncs public playlists with zero setup.</p>
+            </div>
+          </div>
+          <span class="text-[10px] uppercase font-bold tracking-wider px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 hidden sm:inline-block">Keyless Scraper Active</span>
+        </div>
+
         <!-- Input: URL or ID -->
         <div class="space-y-1.5">
           <label class="block text-xs font-semibold uppercase tracking-wider text-slate-300">
@@ -616,7 +664,7 @@
           </div>
         </div>
 
-        <!-- Service Hint Dropdown (Optional override) -->
+        <!-- Service Hint Dropdown -->
         <div class="space-y-1.5">
           <label class="block text-xs font-semibold uppercase tracking-wider text-slate-300">
             Service (Optional Hint)
@@ -642,7 +690,7 @@
             </div>
           </div>
 
-          <div class="grid grid-cols-2 gap-2 max-h-36 overflow-y-auto p-1 bg-slate-950/40 rounded-lg border border-slate-800/80">
+          <div class="grid grid-cols-2 gap-2 max-h-32 overflow-y-auto p-1 bg-slate-950/40 rounded-lg border border-slate-800/80">
             <template x-for="user in users" :key="user.id">
               <label class="flex items-center space-x-2 p-2 rounded hover:bg-slate-800/50 cursor-pointer text-xs">
                 <input type="checkbox" 
@@ -662,7 +710,7 @@
         </template>
 
         <!-- Submit Button -->
-        <div class="flex items-center justify-end space-x-3 pt-4 border-t border-slate-800">
+        <div class="flex items-center justify-end space-x-3 pt-3 border-t border-slate-800">
           <button type="button" @click="closeAddModal()" class="px-4 py-2 text-xs font-medium text-slate-300 hover:text-white transition">Cancel</button>
           <button type="submit" 
                   :disabled="addLoading" 
@@ -674,8 +722,159 @@
             <span x-text="addLoading ? 'Adding...' : 'Add Playlist'"></span>
           </button>
         </div>
-
       </form>
+
+      <!-- ================= TAB 2: PASTE TRACKS ================= -->
+      <form x-show="addTab === 'paste'" @submit.prevent="submitImportPlaylist()" class="space-y-4" style="display: none;">
+        <!-- Helper Tip Bar -->
+        <div class="p-3 rounded-xl bg-slate-900 border border-slate-800 text-xs text-slate-300 flex items-center justify-between">
+          <div class="flex items-center space-x-2">
+            <svg class="w-4 h-4 text-[#e5a00d] flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+            </svg>
+            <span>Transfer <strong>private playlists</strong>, <strong>Liked Songs</strong>, or copy from Spotify.</span>
+          </div>
+          <button type="button" @click="pasteFromClipboard()" class="flex items-center space-x-1 px-2.5 py-1 rounded bg-slate-800 hover:bg-slate-700 text-[#e5a00d] border border-slate-700 font-semibold text-[11px] transition">
+            <span>📋 Read Clipboard</span>
+          </button>
+        </div>
+
+        <!-- Playlist Name -->
+        <div class="space-y-1.5">
+          <label class="block text-xs font-semibold uppercase tracking-wider text-slate-300">
+            Playlist Name <span class="text-[#e5a00d]">*</span>
+          </label>
+          <input type="text" 
+                 x-model="pasteForm.name" 
+                 required
+                 placeholder="e.g. My Liked Songs or Road Trip 2024"
+                 class="w-full px-3.5 py-2.5 bg-slate-900 border border-slate-700 rounded-lg text-xs text-slate-100 placeholder-slate-500 focus:outline-none focus:border-[#e5a00d] transition">
+        </div>
+
+        <!-- Textarea: Paste Tracks -->
+        <div class="space-y-1.5">
+          <div class="flex items-center justify-between">
+            <label class="block text-xs font-semibold uppercase tracking-wider text-slate-300">
+              Paste Tracks (Ctrl+V) <span class="text-[#e5a00d]">*</span>
+            </label>
+            <span class="text-[11px] text-slate-500">Supports table copy, "Title - Artist", or JSON</span>
+          </div>
+          <textarea x-model="pasteForm.rawText" 
+                    @input="onPasteInput()"
+                    rows="4" 
+                    placeholder="Press Ctrl+V to paste tracks copied from Spotify desktop/web, or enter lines like:&#10;Bohemian Rhapsody - Queen&#10;Heroes - David Bowie"
+                    class="w-full px-3.5 py-2.5 bg-slate-900 border border-slate-700 rounded-lg text-xs font-mono text-slate-100 placeholder-slate-600 focus:outline-none focus:border-[#e5a00d] transition"></textarea>
+          
+          <!-- Live Parse Status & Preview -->
+          <div class="flex items-center justify-between text-xs pt-0.5">
+            <span :class="parsedTracks.length > 0 ? 'text-emerald-400 font-semibold' : 'text-slate-500'"
+                  x-text="parsedTracks.length > 0 ? '✓ ' + parsedTracks.length + ' tracks recognized' : '0 tracks detected yet'">
+            </span>
+            <template x-if="parsedTracks.length > 0">
+              <button type="button" @click="showParsedPreview = !showParsedPreview" class="text-[#e5a00d] hover:underline text-[11px]" x-text="showParsedPreview ? 'Hide preview' : 'Preview tracks (' + parsedTracks.length + ')'"></button>
+            </template>
+          </div>
+
+          <!-- Preview List -->
+          <div x-show="showParsedPreview && parsedTracks.length > 0" class="max-h-32 overflow-y-auto p-2 bg-slate-950/80 rounded-lg border border-slate-800 text-[11px] font-mono space-y-1">
+            <template x-for="(t, idx) in parsedTracks.slice(0, 15)" :key="idx">
+              <div class="truncate text-slate-300">
+                <span class="text-slate-500" x-text="(idx + 1) + '.'"></span>
+                <span class="text-white font-medium" x-text="t.title"></span>
+                <span class="text-slate-400" x-text="t.artist ? ' — ' + t.artist : ''"></span>
+              </div>
+            </template>
+            <div v-if="parsedTracks.length > 15" class="text-slate-500 text-[10px] italic" x-text="'+ ' + (parsedTracks.length - 15) + ' more tracks...'"></div>
+          </div>
+        </div>
+
+        <!-- Initial Target Checkboxes -->
+        <div class="space-y-2 pt-2 border-t border-slate-800">
+          <div class="flex items-center justify-between">
+            <label class="block text-xs font-semibold uppercase tracking-wider text-slate-300">
+              Assign to Plex Home Users
+            </label>
+            <div class="space-x-2 text-[11px]">
+              <button type="button" @click="selectAllPasteTargets()" class="text-[#e5a00d] hover:underline">Select All</button>
+              <span class="text-slate-600">|</span>
+              <button type="button" @click="clearAllPasteTargets()" class="text-slate-400 hover:underline">Clear</button>
+            </div>
+          </div>
+
+          <div class="grid grid-cols-2 gap-2 max-h-32 overflow-y-auto p-1 bg-slate-950/40 rounded-lg border border-slate-800/80">
+            <template x-for="user in users" :key="user.id">
+              <label class="flex items-center space-x-2 p-2 rounded hover:bg-slate-800/50 cursor-pointer text-xs">
+                <input type="checkbox" 
+                       :value="String(user.id)" 
+                       :checked="pasteForm.targets.includes(String(user.id))"
+                       @change="togglePasteFormTarget(user.id)"
+                       class="rounded border-slate-700 bg-slate-900 text-[#e5a00d] focus:ring-[#e5a00d]">
+                <span class="text-slate-200" x-text="user.username"></span>
+              </label>
+            </template>
+          </div>
+        </div>
+
+        <!-- Error Feedback -->
+        <template x-if="addError">
+          <div class="p-3 rounded-lg bg-rose-500/10 border border-rose-500/30 text-rose-400 text-xs" x-text="addError"></div>
+        </template>
+
+        <!-- Submit Button -->
+        <div class="flex items-center justify-end space-x-3 pt-3 border-t border-slate-800">
+          <button type="button" @click="closeAddModal()" class="px-4 py-2 text-xs font-medium text-slate-300 hover:text-white transition">Cancel</button>
+          <button type="submit" 
+                  :disabled="addLoading || parsedTracks.length === 0" 
+                  class="flex items-center space-x-2 px-5 py-2 text-xs font-bold rounded-lg bg-[#e5a00d] hover:bg-[#cc8f0c] text-slate-950 transition shadow-md shadow-[#e5a00d]/15 disabled:opacity-50">
+            <svg v-if="addLoading" class="animate-spin w-4 h-4 text-slate-950" fill="none" viewBox="0 0 24 24">
+              <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+              <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z"></path>
+            </svg>
+            <span x-text="addLoading ? 'Importing...' : 'Import to Plexamp'"></span>
+          </button>
+        </div>
+      </form>
+
+      <!-- ================= TAB 3: 1-CLICK HELPER ================= -->
+      <div x-show="addTab === 'helper'" class="space-y-4" style="display: none;">
+        <div class="p-5 rounded-xl bg-slate-950/70 border border-slate-800 text-center space-y-3">
+          <p class="text-xs text-slate-400">Drag this button up to your browser's <strong>Bookmarks Toolbar</strong>:</p>
+          <div>
+            <a :href="getBookmarkletHref()"
+               @click.prevent="alert('Drag this button to your browser Bookmarks Bar!')"
+               class="inline-flex items-center space-x-2 px-5 py-2.5 rounded-xl bg-gradient-to-r from-[#e5a00d] to-amber-500 hover:from-amber-500 hover:to-amber-600 text-slate-950 font-bold text-xs shadow-lg shadow-amber-500/20 cursor-grab active:cursor-grabbing transition transform hover:scale-105">
+              <svg class="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
+                <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 14.5v-9l6 4.5-6 4.5z"/>
+              </svg>
+              <span>🎵 Send to Plexamp</span>
+            </a>
+          </div>
+          <p class="text-[11px] text-slate-500">Zero extensions or passwords. Safe, client-side browser helper.</p>
+        </div>
+
+        <div class="space-y-2 text-xs text-slate-300">
+          <div class="font-semibold text-white">How it works:</div>
+          <ol class="space-y-2 pl-4 list-decimal text-slate-400">
+            <li>Open <a href="https://open.spotify.com" target="_blank" class="text-[#e5a00d] hover:underline font-medium">open.spotify.com</a> and view any playlist or your <em>Liked Songs</em>.</li>
+            <li>Scroll down through your playlist so Spotify loads the songs in the page.</li>
+            <li>Click <strong>🎵 Send to Plexamp</strong> in your browser bookmarks bar.</li>
+            <li>It securely bridges the songs to this Hub and opens the 1-click import confirmation!</li>
+          </ol>
+        </div>
+
+        <button type="button" 
+                @click="readClipboardAndSwitch()" 
+                class="w-full py-2.5 px-4 rounded-xl bg-slate-900 hover:bg-slate-800 text-[#e5a00d] font-semibold text-xs border border-slate-700/80 flex items-center justify-center space-x-2 transition">
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4"></path>
+          </svg>
+          <span>Already clicked the bookmarklet? Click here to load from clipboard</span>
+        </button>
+
+        <div class="flex justify-end pt-2 border-t border-slate-800">
+          <button type="button" @click="closeAddModal()" class="px-4 py-2 text-xs font-medium text-slate-300 hover:text-white transition">Close</button>
+        </div>
+      </div>
     </div>
   </div>
 

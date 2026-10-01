@@ -43,11 +43,20 @@ document.addEventListener('alpine:init', () => {
     missingSearch: '',
 
     // Add Playlist Form State
+    addTab: 'link', // 'link' | 'paste' | 'helper'
     addForm: {
       url_or_id: '',
       service: '',
       targets: []
     },
+    pasteForm: {
+      name: '',
+      rawText: '',
+      service: 'spotify',
+      targets: []
+    },
+    parsedTracks: [],
+    showParsedPreview: false,
     addLoading: false,
     addError: '',
 
@@ -76,6 +85,8 @@ document.addEventListener('alpine:init', () => {
           this.fetchSyncStatus();
         }
       }, 6000);
+
+      window.addEventListener('hashchange', () => this.checkHashImport());
     },
 
     // HTTP Helper
@@ -137,6 +148,7 @@ document.addEventListener('alpine:init', () => {
           this.isAuthenticated = true;
           this.loadDashboardData();
           this.initSSE();
+          this.checkHashImport();
         } else {
           this.handleUnauthorized();
         }
@@ -206,6 +218,7 @@ document.addEventListener('alpine:init', () => {
             this.showToast(`Signed in as ${this.currentUser.username}`, 'success');
             this.loadDashboardData();
             this.initSSE();
+            this.checkHashImport();
           } else if (res.status === 403) {
             clearInterval(this.pinPollingTimer);
             this.pinPollingTimer = null;
@@ -355,13 +368,22 @@ document.addEventListener('alpine:init', () => {
     },
 
     // Add Playlist Modal
-    openAddModal() {
+    openAddModal(tab = 'link') {
       const initialTargets = this.currentUser ? [String(this.currentUser.id)] : [];
+      this.addTab = tab;
       this.addForm = {
         url_or_id: '',
         service: '',
-        targets: initialTargets
+        targets: [...initialTargets]
       };
+      this.pasteForm = {
+        name: '',
+        rawText: '',
+        service: 'spotify',
+        targets: [...initialTargets]
+      };
+      this.parsedTracks = [];
+      this.showParsedPreview = false;
       this.addError = '';
       this.addLoading = false;
       this.isAddModalOpen = true;
@@ -426,6 +448,239 @@ document.addEventListener('alpine:init', () => {
         this.closeAddModal();
       } catch (err) {
         this.addError = err.message || 'Failed to add playlist. Check URL format.';
+      } finally {
+        this.addLoading = false;
+      }
+    },
+
+    // Paste & Direct Import Handling
+    togglePasteFormTarget(userId) {
+      const uid = String(userId);
+      if (this.pasteForm.targets.includes(uid)) {
+        this.pasteForm.targets = this.pasteForm.targets.filter(id => id !== uid);
+      } else {
+        this.pasteForm.targets.push(uid);
+      }
+    },
+
+    selectAllPasteTargets() {
+      this.pasteForm.targets = this.users.map(u => String(u.id));
+    },
+
+    clearAllPasteTargets() {
+      this.pasteForm.targets = [];
+    },
+
+    onPasteInput() {
+      const res = this.parseImportText(this.pasteForm.rawText);
+      if (res.name && (!this.pasteForm.name || this.pasteForm.name === 'Spotify Playlist')) {
+        this.pasteForm.name = res.name;
+      }
+      this.parsedTracks = res.tracks;
+    },
+
+    parseImportText(rawText) {
+      if (!rawText || !rawText.trim()) {
+        return { name: '', tracks: [] };
+      }
+      const text = rawText.trim();
+
+      // 1. Try parsing JSON (from bookmarklet or exported format)
+      if (text.startsWith('{') || text.startsWith('[')) {
+        try {
+          const parsed = JSON.parse(text);
+          if (Array.isArray(parsed)) {
+            const tracks = parsed.filter(t => t && (t.title || t.name)).map(t => ({
+              title: String(t.title || t.name).trim(),
+              artist: String(t.artist || '').trim(),
+              album: String(t.album || '').trim()
+            }));
+            if (tracks.length > 0) {
+              return { name: '', tracks };
+            }
+          } else if (parsed && typeof parsed === 'object') {
+            const name = parsed.name || parsed.title || '';
+            const rawTracks = Array.isArray(parsed.tracks) ? parsed.tracks : [];
+            const tracks = rawTracks.filter(t => t && (t.title || t.name)).map(t => ({
+              title: String(t.title || t.name).trim(),
+              artist: String(t.artist || '').trim(),
+              album: String(t.album || '').trim()
+            }));
+            if (tracks.length > 0) {
+              return { name: String(name).trim(), tracks };
+            }
+          }
+        } catch (e) {
+          // Continue to line parsing
+        }
+      }
+
+      // 2. Line-by-line parsing
+      const lines = text.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+      const tracks = [];
+
+      for (const line of lines) {
+        // Tab-separated (Spotify Desktop or table copy: Index \t Title \t Artist \t Album \t Duration)
+        if (line.includes('\t')) {
+          const cols = line.split('\t').map(c => c.trim()).filter(Boolean);
+          if (cols.length >= 2) {
+            if (/^\d+$/.test(cols[0]) && cols.length >= 3) {
+              tracks.push({
+                title: cols[1],
+                artist: cols[2],
+                album: cols[3] || ''
+              });
+            } else {
+              tracks.push({
+                title: cols[0],
+                artist: cols[1],
+                album: cols[2] || ''
+              });
+            }
+            continue;
+          }
+        }
+
+        // CSV parsing: "Title","Artist","Album"
+        if (line.includes('","') || (line.startsWith('"') && line.includes(','))) {
+          const match = line.match(/^"([^"]+)",\s*"([^"]+)"(?:,\s*"([^"]+)")?/);
+          if (match) {
+            tracks.push({
+              title: match[1].trim(),
+              artist: match[2].trim(),
+              album: match[3] ? match[3].trim() : ''
+            });
+            continue;
+          }
+        }
+
+        // Artist - Title
+        if (line.includes(' - ')) {
+          const parts = line.split(' - ').map(p => p.trim());
+          if (parts.length >= 2) {
+            tracks.push({
+              title: parts[1],
+              artist: parts[0],
+              album: parts[2] || ''
+            });
+            continue;
+          }
+        }
+
+        // Title by Artist
+        const byMatch = line.match(/^(.+?)\s+by\s+(.+)$/i);
+        if (byMatch) {
+          tracks.push({
+            title: byMatch[1].trim(),
+            artist: byMatch[2].trim(),
+            album: ''
+          });
+          continue;
+        }
+
+        // Comma separated fallback: Title, Artist
+        if (line.includes(',')) {
+          const parts = line.split(',').map(p => p.trim());
+          if (parts.length >= 2) {
+            tracks.push({
+              title: parts[0],
+              artist: parts[1],
+              album: parts[2] || ''
+            });
+            continue;
+          }
+        }
+
+        // Plain line fallback (as title)
+        if (line.length > 1 && !line.startsWith('http://') && !line.startsWith('https://')) {
+          tracks.push({
+            title: line,
+            artist: '',
+            album: ''
+          });
+        }
+      }
+
+      return { name: '', tracks };
+    },
+
+    async pasteFromClipboard() {
+      try {
+        if (!navigator.clipboard || !navigator.clipboard.readText) {
+          this.showToast('Clipboard API not available. Please press Ctrl+V in the box below.', 'info');
+          return;
+        }
+        const clipText = await navigator.clipboard.readText();
+        if (clipText && clipText.trim()) {
+          this.pasteForm.rawText = clipText;
+          this.onPasteInput();
+          if (this.parsedTracks.length > 0) {
+            this.showToast(`Loaded ${this.parsedTracks.length} tracks from clipboard!`, 'success');
+          } else {
+            this.showToast('Pasted clipboard content. Check track formatting.', 'info');
+          }
+        } else {
+          this.showToast('Clipboard is empty. Copy tracks from Spotify and try again.', 'info');
+        }
+      } catch (err) {
+        this.showToast('Browser blocked automatic clipboard read. Please press Ctrl+V inside the box below.', 'info');
+      }
+    },
+
+    readClipboardAndSwitch() {
+      this.addTab = 'paste';
+      this.pasteFromClipboard();
+    },
+
+    getBookmarkletHref() {
+      const origin = window.location.origin;
+      const script = `javascript:(function(){try{const h=document.querySelector('h1'),name=(h?h.innerText:document.title.replace(/\\s*\\|\\s*Spotify.*$/i,'')).trim()||'Spotify Playlist',rows=document.querySelectorAll('[data-testid="tracklist-row"]'),tracks=[];rows.forEach(r=>{const t=r.querySelector('[data-testid="internal-track-link"],div[aria-colindex="2"] a,a[href*="/track/"]'),arts=r.querySelectorAll('a[href*="/artist/"]'),alb=r.querySelector('a[href*="/album/"]'),title=t?t.innerText.trim():'',artists=Array.from(arts).map(a=>a.innerText.trim()).filter(Boolean),artist=artists.join(', ')||'Unknown Artist',album=alb?alb.innerText.trim():'';if(title){tracks.push({title,artist,album})}});if(!tracks.length){alert('Plex Playlist Hub: No tracks detected. Make sure you are on a Spotify playlist and scroll down to load songs!');return}const payload=JSON.stringify({name,tracks});navigator.clipboard.writeText(payload).then(()=>{window.open('${origin}/#import=clipboard','_blank')}).catch(()=>{prompt('Copy track data manually:',payload)})}catch(e){alert('Plex Playlist Hub: '+e.message)}})();`;
+      return script.replace(/\\s+/g, ' ');
+    },
+
+    checkHashImport() {
+      if (window.location.hash.includes('import=clipboard')) {
+        history.replaceState(null, '', window.location.pathname + window.location.search);
+        if (this.isAuthenticated) {
+          this.openAddModal('paste');
+          this.pasteFromClipboard();
+        }
+      }
+    },
+
+    async submitImportPlaylist() {
+      const name = (this.pasteForm.name || '').trim();
+      if (!name) {
+        this.addError = 'Please provide a playlist name.';
+        return;
+      }
+      if (!this.parsedTracks || this.parsedTracks.length === 0) {
+        this.addError = 'No tracks detected. Please paste tracks into the box.';
+        return;
+      }
+
+      this.addLoading = true;
+      this.addError = '';
+
+      try {
+        const payload = {
+          name: name,
+          service: this.pasteForm.service || 'spotify',
+          tracks: this.parsedTracks,
+          targets: this.pasteForm.targets
+        };
+
+        const res = await this.apiRequest('/api/playlists/import', {
+          method: 'POST',
+          body: payload
+        });
+
+        this.showToast(`Imported "${res.name}" (${res.track_count} tracks, ${res.matched_count} matched in Plex)`, 'success');
+        this.closeAddModal();
+        await this.fetchPlaylists();
+        await this.fetchMissingTracks();
+      } catch (err) {
+        this.addError = err.message || 'Failed to import playlist.';
       } finally {
         this.addLoading = false;
       }

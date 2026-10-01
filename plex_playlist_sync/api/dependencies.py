@@ -4,7 +4,7 @@ import logging
 import os
 import threading
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Optional, Union
 
 from fastapi import Depends, HTTPException, Request, status
 
@@ -12,6 +12,7 @@ from plex_playlist_sync.auth import get_or_create_secret_key, verify_session_tok
 from plex_playlist_sync.clients.deezer import DeezerClient
 from plex_playlist_sync.clients.plex import PlexClient
 from plex_playlist_sync.clients.spotify import SpotifyClient
+from plex_playlist_sync.clients.spotify_scraper import SpotifyWebScraper
 from plex_playlist_sync.config import Config
 from plex_playlist_sync.security import safe_data_path
 from plex_playlist_sync.storage import Database
@@ -62,17 +63,23 @@ def get_plex_client(config: Config = Depends(get_config)) -> Optional[PlexClient
         return None
 
 
-def get_spotify_client(config: Config = Depends(get_config)) -> Optional[SpotifyClient]:
-    """Dependency providing SpotifyClient instance if credentials exist."""
-    if not config.spotify_client_id or not config.spotify_client_secret:
-        return None
+def get_spotify_client(
+    config: Config = Depends(get_config),
+) -> Union[SpotifyClient, SpotifyWebScraper, None]:
+    """Dependency providing SpotifyClient if credentials exist, falling back to keyless SpotifyWebScraper."""
+    if config.spotify_client_id and config.spotify_client_secret:
+        try:
+            return SpotifyClient(
+                client_id=config.spotify_client_id,
+                client_secret=config.spotify_client_secret,
+            )
+        except Exception as e:
+            logger.error("Failed to initialize SpotifyClient: %s. Falling back to web scraper.", e)
+
     try:
-        return SpotifyClient(
-            client_id=config.spotify_client_id,
-            client_secret=config.spotify_client_secret,
-        )
+        return SpotifyWebScraper()
     except Exception as e:
-        logger.error("Failed to initialize SpotifyClient: %s", e)
+        logger.error("Failed to initialize SpotifyWebScraper: %s", e)
         return None
 
 
