@@ -1152,16 +1152,25 @@
             <span>Lidarr & Feeds</span>
           </button>
 
-          <!-- Push All to Lidarr (if configured) -->
+          <!-- Push Next 25 / Push All (Paced) to Lidarr (if configured) -->
           <template x-if="lidarrConfig && lidarrConfig.configured">
-            <button @click="pushAllToLidarr()"
-                    :disabled="isPushingLidarr || filteredMissingTracks.length === 0"
-                    class="flex items-center space-x-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white transition disabled:opacity-50">
-              <svg class="w-3.5 h-3.5" :class="isPushingLidarr ? 'animate-spin' : ''" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path>
-              </svg>
-              <span x-text="isPushingLidarr ? 'Pushing...' : 'Push All to Lidarr'"></span>
-            </button>
+            <div class="flex items-center space-x-1.5">
+              <button @click="pushNextBatchToLidarr(25)"
+                      :disabled="isPushingLidarr || lidarrQueue.is_running || filteredMissingTracks.length === 0"
+                      title="Queues the next 25 unmonitored tracks at a safe trickle pace"
+                      class="flex items-center space-x-1 px-2.5 py-1.5 text-xs font-semibold rounded-lg bg-slate-800 hover:bg-slate-700 text-emerald-400 border border-emerald-500/30 transition disabled:opacity-50">
+                <span>Push Next 25</span>
+              </button>
+              <button @click="pushAllToLidarr(true)"
+                      :disabled="isPushingLidarr || lidarrQueue.is_running || filteredMissingTracks.length === 0"
+                      title="Queues all unmonitored tracks into the background trickle worker"
+                      class="flex items-center space-x-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white transition disabled:opacity-50">
+                <svg class="w-3.5 h-3.5" :class="lidarrQueue.is_running ? 'animate-spin' : ''" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path>
+                </svg>
+                <span x-text="lidarrQueue.is_running ? 'Trickling...' : 'Push All (Paced)'"></span>
+              </button>
+            </div>
           </template>
 
           <!-- Export Safe CSV -->
@@ -1283,19 +1292,19 @@
         </div>
         
         <p class="text-slate-400 text-[11px]">
-          Connect Lidarr or RSS clients to monitor and download missing tracks. When Lidarr downloads and Plex indexes a track, the Hub's self-healing loop automatically adds it to your playlists and clears it from missing!
+          Connect Lidarr via Direct REST API (<code class="text-indigo-300">LIDARR_URL</code> + <code class="text-indigo-300">LIDARR_API_KEY</code>) to monitor and queue specific missing albums with one click. Configure Lidarr's Webhook to trigger automated self-healing sync whenever downloads finish!
         </p>
 
-        <div class="grid grid-cols-1 md:grid-cols-2 gap-3 pt-1">
-          <!-- Lidarr Custom List URL -->
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-3 pt-1">
+          <!-- Webhook URL -->
           <div class="bg-slate-950 p-2.5 rounded-lg border border-slate-800 space-y-1">
             <div class="flex items-center justify-between text-slate-300 font-semibold text-[11px]">
-              <span>Lidarr Custom Import List (JSON)</span>
-              <button @click="copyToClipboard(getLidarrListUrl(), 'Lidarr Import List URL')"
+              <span>Self-Healing Webhook Trigger</span>
+              <button @click="copyToClipboard(getWebhookUrl(), 'Webhook URL')"
                       class="text-indigo-400 hover:text-indigo-300 text-[11px] font-mono">Copy</button>
             </div>
-            <div class="text-[10px] font-mono text-slate-400 truncate bg-slate-900 px-2 py-1 rounded" x-text="getLidarrListUrl()"></div>
-            <div class="text-[10px] text-slate-500">Lidarr -> Settings -> Import Lists -> Custom List</div>
+            <div class="text-[10px] font-mono text-slate-400 truncate bg-slate-900 px-2 py-1 rounded" x-text="getWebhookUrl()"></div>
+            <div class="text-[10px] text-slate-500">Lidarr -> Settings -> Connect -> Webhook (On Download / On Upgrade)</div>
           </div>
 
           <!-- RSS 2.0 Feed URL -->
@@ -1319,17 +1328,40 @@
             <div class="text-[10px] font-mono text-slate-400 truncate bg-slate-900 px-2 py-1 rounded" x-text="getTextFeedUrl()"></div>
             <div class="text-[10px] text-slate-500">Simple one-track-per-line list for scripts and downstream tools</div>
           </div>
+        </div>
+      </div>
 
-          <!-- Webhook URL -->
-          <div class="bg-slate-950 p-2.5 rounded-lg border border-slate-800 space-y-1">
-            <div class="flex items-center justify-between text-slate-300 font-semibold text-[11px]">
-              <span>Self-Healing Webhook Trigger</span>
-              <button @click="copyToClipboard(getWebhookUrl(), 'Webhook URL')"
-                      class="text-indigo-400 hover:text-indigo-300 text-[11px] font-mono">Copy</button>
-            </div>
-            <div class="text-[10px] font-mono text-slate-400 truncate bg-slate-900 px-2 py-1 rounded" x-text="getWebhookUrl()"></div>
-            <div class="text-[10px] text-slate-500">Lidarr -> Settings -> Connect -> Webhook (On Download / On Upgrade)</div>
+      <!-- Live Lidarr Trickle Worker Status Banner -->
+      <div x-show="lidarrQueue && (lidarrQueue.is_running || lidarrQueue.is_paused)" 
+           x-transition
+           class="bg-slate-900 border border-emerald-500/40 rounded-xl p-3.5 shadow-lg space-y-2.5 flex-shrink-0 text-xs">
+        <div class="flex items-center justify-between">
+          <div class="flex items-center space-x-2.5">
+            <span class="inline-block w-2.5 h-2.5 rounded-full" 
+                  :class="lidarrQueue.is_paused ? 'bg-amber-400' : (lidarrQueue.is_rate_limited ? 'bg-amber-500 animate-ping' : 'bg-emerald-400 animate-pulse')"></span>
+            <span class="font-bold text-white" 
+                  x-text="lidarrQueue.is_paused ? 'Lidarr Worker Paused' : (lidarrQueue.is_rate_limited ? 'Lidarr Cooldown Active' : 'Lidarr Background Trickle Active')"></span>
+            <span class="text-slate-400" 
+                  x-text="`(${lidarrQueue.processed_items} / ${lidarrQueue.total_items} tracks processed)`"></span>
           </div>
+          <div class="flex items-center space-x-2">
+            <template x-if="!lidarrQueue.is_paused">
+              <button @click="pauseLidarrQueue()" class="px-2.5 py-1 text-[11px] font-semibold bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 rounded transition">Pause</button>
+            </template>
+            <template x-if="lidarrQueue.is_paused">
+              <button @click="resumeLidarrQueue()" class="px-2.5 py-1 text-[11px] font-semibold bg-emerald-600 hover:bg-emerald-500 text-white rounded transition">Resume</button>
+            </template>
+            <button @click="cancelLidarrQueue()" class="px-2.5 py-1 text-[11px] font-semibold bg-rose-950 hover:bg-rose-900 text-rose-300 border border-rose-800/60 rounded transition">Cancel</button>
+          </div>
+        </div>
+        <!-- Progress Bar -->
+        <div class="w-full bg-slate-950 rounded-full h-1.5 overflow-hidden">
+          <div class="bg-gradient-to-r from-emerald-500 to-indigo-500 h-1.5 transition-all duration-300"
+               :style="`width: ${lidarrQueue.total_items > 0 ? (lidarrQueue.processed_items / lidarrQueue.total_items * 100) : 0}%`"></div>
+        </div>
+        <div class="flex items-center justify-between text-[11px] text-slate-400">
+          <span class="truncate text-slate-300" x-text="lidarrQueue.message || `Processing queue...`"></span>
+          <span class="font-mono text-slate-500 flex-shrink-0 ml-2" x-text="`${lidarrQueue.delay_seconds}s pacing • ${lidarrQueue.successful_items} monitored • ${lidarrQueue.failed_items} failed`"></span>
         </div>
       </div>
 
@@ -1397,12 +1429,25 @@
                     </button>
 
                     <template x-if="lidarrConfig && lidarrConfig.configured">
-                      <button @click="pushTrackToLidarr(track.id)"
-                              :disabled="pushingTrackId === track.id"
-                              title="Queue artist & album in Lidarr"
-                              class="inline-flex items-center space-x-1 text-[11px] text-emerald-400 hover:text-emerald-300 font-semibold disabled:opacity-50">
-                        <span x-text="pushingTrackId === track.id ? 'Queueing...' : '+ Lidarr'"></span>
-                      </button>
+                      <span class="inline-flex items-center">
+                        <template x-if="track.lidarr_status === 'monitored'">
+                          <span class="inline-flex items-center space-x-1 px-1.5 py-0.5 rounded text-[10px] font-medium bg-emerald-500/10 text-emerald-400 border border-emerald-500/20"
+                                title="Monitored in Lidarr">
+                            <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path>
+                            </svg>
+                            <span>Monitored</span>
+                          </span>
+                        </template>
+                        <template x-if="track.lidarr_status !== 'monitored'">
+                          <button @click="pushTrackToLidarr(track.id)"
+                                  :disabled="pushingTrackId === track.id"
+                                  title="Queue artist & album in Lidarr"
+                                  class="inline-flex items-center space-x-1 text-[11px] text-emerald-400 hover:text-emerald-300 font-semibold disabled:opacity-50">
+                            <span x-text="pushingTrackId === track.id ? 'Queueing...' : '+ Lidarr'"></span>
+                          </button>
+                        </template>
+                      </span>
                     </template>
                     <a :href="getTrackSearchUrl(track)" 
                        target="_blank" 

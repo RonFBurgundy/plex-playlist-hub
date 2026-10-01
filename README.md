@@ -43,8 +43,8 @@ This project has been completely re-architected and rewritten from the ground up
   - *Read the full [Spotify Import & Keyless Sync Guide](docs/SPOTIFY_IMPORT_GUIDE.md) for step-by-step instructions.*
 - **Lidarr Integration & Self-Healing Missing Tracks**:
   - Automatically track songs in synchronized or imported playlists that are missing from your local Plex Music Library.
-  - **Direct Lidarr Push**: Monitor artists and trigger album searches directly from the web dashboard.
-  - **Automated Feeds**: Expose missing tracks to Lidarr via Custom Import Lists (JSON), universal RSS 2.0 feeds, or plain text.
+  - **Direct Lidarr Push & Paced Trickle**: Monitor artists and trigger targeted album searches directly from the web dashboard or paced via background trickle worker.
+  - **Automated Feeds**: Expose missing tracks to universal RSS 2.0 feeds or plain text lists for external download automation.
   - **Self-Healing Webhook Loop**: When Lidarr downloads and Plex indexes a missing song, a webhook ping automatically injects the track into the user's Plexamp playlist and clears it from missing tracks!
   - *Read the full [Lidarr Integration & Automation Guide](docs/LIDARR_AND_AUTOMATION_GUIDE.md) for step-by-step instructions.*
 - **Spotify Integration**:
@@ -126,9 +126,12 @@ services:
       # Spotify: Leave blank to use the built-in KEYLESS web scraper!
       - SPOTIFY_CLIENT_ID=
       - SPOTIFY_CLIENT_SECRET=
-      # Optional: Lidarr integration & missing track feed security
+      # Optional: Lidarr integration & automated trickle
       # - LIDARR_URL=http://192.168.1.100:8686
       # - LIDARR_API_KEY=your_lidarr_api_key
+      # - LIDARR_TRICKLE_RATE_SECONDS=3.0
+      # - LIDARR_TRICKLE_BATCH_SIZE=25
+      # - LIDARR_AUTO_TRICKLE=0
       # - FEED_TOKEN=my-secure-token
 ```
 
@@ -167,10 +170,14 @@ Access the web dashboard in your browser at: `http://<your-server-ip>:5250`
 | `LIDARR_URL` | *Optional* | Base URL of Lidarr server (e.g. `http://192.168.1.100:8686`) |
 | `LIDARR_API_KEY` | *Optional* | Lidarr API Key |
 | `LIDARR_AUTO_SEARCH` | `1` | Automatically trigger interactive search when pushing to Lidarr |
+| `LIDARR_TRICKLE_RATE_SECONDS` | `3.0` | Delay between artist lookups in seconds during background trickle push |
+| `LIDARR_TRICKLE_BATCH_SIZE` | `25` | Number of missing tracks pushed per manual batch or scheduled drip |
+| `LIDARR_AUTO_TRICKLE` | `0` | Set to `1` to enable scheduled automated background drip |
+| `LIDARR_AUTO_TRICKLE_INTERVAL_MINUTES` | `30` | Interval in minutes between automated drip runs |
 | `LIDARR_ROOT_FOLDER` | *Auto* | Custom Lidarr root folder path |
 | `LIDARR_QUALITY_PROFILE_ID` | *Auto* | Custom Lidarr quality profile ID |
 | `LIDARR_METADATA_PROFILE_ID` | *Auto* | Custom Lidarr metadata profile ID |
-| `FEED_TOKEN` | *Optional* | Secret token protecting RSS feeds, JSON lists, and webhooks |
+| `FEED_TOKEN` | *Optional* | Secret token protecting RSS feeds, plain text lists, and webhooks |
 
 ---
 

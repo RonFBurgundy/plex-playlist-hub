@@ -15,7 +15,7 @@ flowchart TD
     C -->|Found Tracks| D["Plexamp Playlists (Per User)"]
     B -->|Unmatched Tracks| E["Missing Tracks Database"]
     
-    E -->|Direct API Push / Custom Import List| F["Lidarr"]
+    E -->|Direct REST API Push (+ Lidarr / Push All)| F["Lidarr"]
     F -->|Monitors & Downloads| G["Music Downloader (Usenet / Torrents)"]
     G -->|Imports New Files| C
     
@@ -27,7 +27,7 @@ flowchart TD
 ```
 
 1. **Detection**: Tracks in synchronized or imported playlists that are not found in Plex are logged to the Hub's persistent SQLite database.
-2. **Acquisition**: Missing tracks are exposed to Lidarr via **Direct API Push**, **Lidarr Custom Import Lists (JSON)**, or **RSS 2.0 Feeds**.
+2. **Acquisition**: Missing tracks are queued into Lidarr via **Direct REST API Push**, or exported via **RSS 2.0 Feeds** and **Plain Text** for external download managers.
 3. **Automatic Notification**: When Lidarr finishes importing a track and notifies Plex to scan its library, Lidarr fires a webhook back to the Hub.
 4. **Self-Healing Sync**: The Hub re-matches the newly acquired tracks and injects them directly into the targeted users' Plexamp playlists, automatically removing them from the missing list.
 
@@ -35,9 +35,24 @@ flowchart TD
 
 ## Integration Methods
 
-### Option 1: Direct Lidarr API Push (Recommended)
+### Option 1: Direct Lidarr API Push (Recommended & Supported)
 
-With Direct API integration, you can monitor and trigger automatic searches in Lidarr directly from the Plex Playlist Hub Web Dashboard.
+Direct API integration is the official and supported method to connect Lidarr to Plex Playlist Hub. It is built from the ground up for high scalability when onboarding massive libraries with thousands of missing tracks.
+
+> [!NOTE]
+> **Why not Lidarr's "Custom List"?**
+> Lidarr's internal Custom Import List parser is strictly limited to importing entire artists via MusicBrainz Artist UUIDs (`musicBrainzId`). It does not support track-level or single-album scoping and ignores artist/album title text, which causes "no list items to process" errors or downloads entire artist discographies. The Direct API completely avoids this by searching Lidarr's metadata lookup for the exact artist, monitoring only the specific missing album, and triggering a targeted `AlbumSearch`.
+
+#### Scalable Trickle Architecture
+
+When onboarding thousands of missing tracks, sending rapid synchronous requests can easily overwhelm Lidarr, hit MusicBrainz rate limits (`api.lidarr.audio`), or choke downstream Usenet/BitTorrent indexers. Plex Playlist Hub protects your infrastructure with an enterprise-grade trickle architecture:
+
+1. **Artist-First Batching & Deduplication**: Missing tracks are grouped by artist. Lidarr's metadata lookup runs only **once** per artist rather than once per track, reducing API lookups by 60–80%.
+2. **Targeted Album Monitoring**: When a new artist is added, their root monitoring profile is set to `monitor: "none"`. Only the specific missing album(s) are set to monitored. A batched `AlbumSearch` command is queued specifically for those albums, avoiding unwanted discography downloads.
+3. **Paced Background Trickle Worker**: A dedicated background worker drips requests with configurable delays (default: 3.0s + gentle jitter) between artists.
+4. **Adaptive Rate-Limit Backoff**: If Lidarr or MusicBrainz responds with HTTP 429 (Too Many Requests) or HTTP 503 (Service Unavailable), the worker automatically pauses for 60 seconds before retrying, preventing IP bans.
+5. **Interactive Queue Controls**: Monitor live worker progress in the dashboard with an animated progress bar, active artist indicator, and instant **Pause**, **Resume**, and **Cancel** buttons.
+6. **Persistent Tracking**: Once a track has been submitted to Lidarr, it is marked as `Monitored` in the local SQLite database. Subsequent playlist syncs preserve this status so duplicate searches are never sent.
 
 #### 1. Configure Environment Variables
 
@@ -52,6 +67,11 @@ services:
       - LIDARR_URL=http://192.168.1.100:8686
       - LIDARR_API_KEY=your_lidarr_api_key_here
       - LIDARR_AUTO_SEARCH=1
+      # Trickle & Rate-Limiting Controls
+      - LIDARR_TRICKLE_RATE_SECONDS=3.0      # Delay between artist lookups in seconds
+      - LIDARR_TRICKLE_BATCH_SIZE=25         # Number of tracks per manual chunk or cron drip
+      - LIDARR_AUTO_TRICKLE=0                # Set to 1 to enable automated background drip
+      - LIDARR_AUTO_TRICKLE_INTERVAL_MINUTES=30 # Run automated drip every 30 minutes
       # Optional Lidarr Profile Overrides
       # - LIDARR_ROOT_FOLDER=/music
       # - LIDARR_QUALITY_PROFILE_ID=1
@@ -64,42 +84,17 @@ services:
 
 1. In Plex Playlist Hub, click the **Unmatched Tracks** button in the dashboard navigation.
 2. A green badge **"Direct API Connected"** will appear in the **Lidarr & Feeds** section.
-3. Click **"Push All to Lidarr"** to automatically queue and monitor all missing tracks, or click the **"+ Lidarr"** button next to individual tracks in the list.
+3. Choose your push strategy:
+   - **"Push Next 25"**: Enqueues the next chunk of 25 unmonitored tracks into the trickle worker. Ideal for incremental testing.
+   - **"Push All (Paced)"**: Enqueues all unmonitored tracks into the background worker. The worker smoothly drips artist searches with jitter and backoff.
+   - **Row-level `+ Lidarr`**: Instantly queue an individual track without touching the rest of the queue. Once queued, the button transitions to an emerald **Monitored** badge.
+4. While the worker is running, a live banner appears showing real-time progress, currently processing artist, completed count, and **Pause** / **Resume** / **Cancel** controls.
 
 ---
 
-### Option 2: Lidarr Custom Import List (Periodic Poll)
+### Option 2: RSS 2.0 & Plain Text Feeds (For External Downloaders)
 
-Lidarr can periodically poll Plex Playlist Hub for missing tracks using its built-in Custom List import feature.
-
-#### Endpoint URL
-```
-http://<your-hub-ip>:5250/api/missing/lidarr
-```
-
-*To monitor tracks for only a specific playlist:*
-```
-http://<your-hub-ip>:5250/api/missing/lidarr?playlist_id=<playlist_id>
-```
-
-#### Step-by-Step Setup in Lidarr:
-1. Open Lidarr and navigate to **Settings** &rarr; **Import Lists**.
-2. Click the large **`+`** icon to add a new list.
-3. Select **Advanced Lists** &rarr; **Custom List**.
-4. Configure the settings:
-   - **Name**: `Plex Playlist Hub Missing Tracks`
-   - **Enable Auto Search**: Yes (Checked)
-   - **Monitor**: All Albums or Only New Albums (based on preference)
-   - **List URL**: `http://<your-hub-ip>:5250/api/missing/lidarr`
-   - *If `FEED_TOKEN` is enabled*: append `?token=<your_feed_token>` to the URL, or add an HTTP header `X-Api-Key: <your_feed_token>`.
-5. Click **Test** and then **Save**.
-6. Lidarr will now periodically query the Hub and queue missing music.
-
----
-
-### Option 3: RSS 2.0 & Plain Text Feeds
-
-For universal compatibility with third-party RSS aggregators, Prowlarr, or command-line scripts, Plex Playlist Hub provides standard RSS and text feeds.
+For universal compatibility with third-party RSS aggregators, Prowlarr, qBittorrent RSS rules, or command-line batch scripts, Plex Playlist Hub provides standard RSS and text feeds.
 
 #### RSS 2.0 Feed
 - **URL**: `http://<your-hub-ip>:5250/api/missing/rss`
@@ -149,7 +144,7 @@ environment:
   - FEED_TOKEN=my-secure-random-token-here
 ```
 
-When `FEED_TOKEN` is configured, requests to `/api/missing/rss`, `/api/missing/lidarr`, `/api/missing/text`, and `/api/sync/webhook` must provide the token via:
+When `FEED_TOKEN` is configured, requests to `/api/missing/rss`, `/api/missing/text`, and `/api/sync/webhook` must provide the token via:
 - URL query parameter: `?token=my-secure-random-token-here`
 - Header: `X-Api-Key: my-secure-random-token-here`
 - Header: `Authorization: Bearer my-secure-random-token-here`
@@ -165,6 +160,10 @@ When `FEED_TOKEN` is configured, requests to `/api/missing/rss`, `/api/missing/l
 | `LIDARR_URL` | *None* | Base URL to your Lidarr server (e.g. `http://192.168.1.100:8686`) |
 | `LIDARR_API_KEY` | *None* | Lidarr API Key (from *Settings -> General -> Security*) |
 | `LIDARR_AUTO_SEARCH` | `1` | Automatically trigger an interactive search in Lidarr when pushing tracks (`1` or `0`) |
+| `LIDARR_TRICKLE_RATE_SECONDS` | `3.0` | Delay between artist lookups in seconds during background trickle push |
+| `LIDARR_TRICKLE_BATCH_SIZE` | `25` | Number of missing tracks pushed per manual batch or scheduled drip |
+| `LIDARR_AUTO_TRICKLE` | `0` | Enable scheduled automated drip trickle in the background (`1` or `0`) |
+| `LIDARR_AUTO_TRICKLE_INTERVAL_MINUTES` | `30` | Interval between automated drip runs in minutes |
 | `LIDARR_ROOT_FOLDER` | *Auto-detected* | Custom Lidarr root folder path (auto-detects first active root folder if omitted) |
 | `LIDARR_QUALITY_PROFILE_ID` | *Auto-detected* | Custom Lidarr quality profile ID (auto-detects first active profile if omitted) |
 | `LIDARR_METADATA_PROFILE_ID` | *Auto-detected* | Custom Lidarr metadata profile ID (auto-detects standard profile if omitted) |

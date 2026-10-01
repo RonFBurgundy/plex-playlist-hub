@@ -47,6 +47,22 @@ document.addEventListener('alpine:init', () => {
     isLidarrDrawerOpen: false,
     isPushingLidarr: false,
     pushingTrackId: null,
+    lidarrQueue: {
+      is_running: false,
+      is_paused: false,
+      total_items: 0,
+      processed_items: 0,
+      remaining_items: 0,
+      successful_items: 0,
+      failed_items: 0,
+      current_artist: null,
+      current_album: null,
+      delay_seconds: 3.0,
+      is_rate_limited: false,
+      rate_limit_seconds_remaining: 0,
+      message: 'Idle'
+    },
+    lidarrQueueTimer: null,
 
     // Add Playlist Form State
     addTab: 'link', // 'link' | 'featured' | 'smart' | 'm3u' | 'paste' | 'helper'
@@ -304,7 +320,8 @@ document.addEventListener('alpine:init', () => {
         this.fetchUsers(),
         this.fetchSyncStatus(),
         this.fetchMissingTracks(),
-        this.fetchLidarrStatus()
+        this.fetchLidarrStatus(),
+        this.fetchLidarrQueue()
       ]);
     },
 
@@ -1101,13 +1118,6 @@ document.addEventListener('alpine:init', () => {
         : `${base}/api/missing/rss`;
     },
 
-    getLidarrListUrl() {
-      const base = window.location.origin;
-      return this.selectedMissingPlaylistId 
-        ? `${base}/api/missing/lidarr?playlist_id=${encodeURIComponent(this.selectedMissingPlaylistId)}`
-        : `${base}/api/missing/lidarr`;
-    },
-
     getTextFeedUrl() {
       const base = window.location.origin;
       return this.selectedMissingPlaylistId 
@@ -1137,19 +1147,81 @@ document.addEventListener('alpine:init', () => {
       }
     },
 
-    async pushAllToLidarr() {
+    async fetchLidarrQueue() {
+      try {
+        const data = await this.apiRequest('/api/missing/lidarr/queue');
+        if (data) {
+          const wasRunning = this.lidarrQueue.is_running;
+          this.lidarrQueue = data;
+          if (data.is_running || data.is_paused) {
+            this.startLidarrQueuePolling();
+          } else if (wasRunning && !data.is_running) {
+            this.stopLidarrQueuePolling();
+            this.fetchMissingTracks(this.selectedMissingPlaylistId);
+          }
+        }
+      } catch (err) {
+        // Silently handle
+      }
+    },
+
+    startLidarrQueuePolling() {
+      if (this.lidarrQueueTimer) return;
+      this.lidarrQueueTimer = setInterval(() => {
+        this.fetchLidarrQueue();
+      }, 2000);
+    },
+
+    stopLidarrQueuePolling() {
+      if (this.lidarrQueueTimer) {
+        clearInterval(this.lidarrQueueTimer);
+        this.lidarrQueueTimer = null;
+      }
+    },
+
+    async pushNextBatchToLidarr(batchSize = 25) {
       if (this.isPushingLidarr) return;
       this.isPushingLidarr = true;
       try {
         const payload = {
           playlist_id: this.selectedMissingPlaylistId || null,
-          auto_search: true
+          batch_size: batchSize,
+          trickle: true,
+          auto_search: this.lidarrConfig.auto_search !== false
         };
         const res = await this.apiRequest('/api/missing/lidarr/push', {
           method: 'POST',
           body: payload
         });
-        this.showToast(`Lidarr Push: ${res.added_to_lidarr} added, ${res.already_monitored} existing, ${res.failed} failed`, 'success');
+        this.showToast(res.message || `Queued next ${batchSize} tracks into Lidarr`, 'success');
+        await this.fetchLidarrQueue();
+      } catch (err) {
+        this.showToast(`Lidarr batch failed: ${err.message}`, 'error');
+      } finally {
+        this.isPushingLidarr = false;
+      }
+    },
+
+    async pushAllToLidarr(useTrickle = true) {
+      if (this.isPushingLidarr) return;
+      this.isPushingLidarr = true;
+      try {
+        const payload = {
+          playlist_id: this.selectedMissingPlaylistId || null,
+          auto_search: this.lidarrConfig.auto_search !== false,
+          trickle: useTrickle
+        };
+        const res = await this.apiRequest('/api/missing/lidarr/push', {
+          method: 'POST',
+          body: payload
+        });
+        if (res.trickle) {
+          this.showToast(res.message || 'Queued missing tracks into Lidarr trickle worker', 'success');
+          await this.fetchLidarrQueue();
+        } else {
+          this.showToast(`Lidarr Push: ${res.added} added, ${res.already_monitored} existing, ${res.failed} failed`, 'success');
+          await this.fetchMissingTracks(this.selectedMissingPlaylistId);
+        }
       } catch (err) {
         this.showToast(`Lidarr push failed: ${err.message}`, 'error');
       } finally {
@@ -1163,16 +1235,17 @@ document.addEventListener('alpine:init', () => {
       try {
         const payload = {
           track_ids: [trackId],
-          auto_search: true
+          auto_search: this.lidarrConfig.auto_search !== false,
+          trickle: false
         };
         const res = await this.apiRequest('/api/missing/lidarr/push', {
           method: 'POST',
           body: payload
         });
-        if (res.added_to_lidarr > 0) {
+        if (res.added > 0 || res.already_monitored > 0) {
           this.showToast('Queued in Lidarr successfully', 'success');
-        } else if (res.already_monitored > 0) {
-          this.showToast('Already monitored in Lidarr', 'info');
+          const t = this.missingTracks.find(item => item.id === trackId);
+          if (t) t.lidarr_status = 'monitored';
         } else {
           this.showToast('Failed to queue in Lidarr', 'error');
         }
@@ -1180,6 +1253,36 @@ document.addEventListener('alpine:init', () => {
         this.showToast(`Lidarr queue failed: ${err.message}`, 'error');
       } finally {
         this.pushingTrackId = null;
+      }
+    },
+
+    async pauseLidarrQueue() {
+      try {
+        await this.apiRequest('/api/missing/lidarr/queue/pause', { method: 'POST' });
+        this.showToast('Lidarr trickle worker paused', 'info');
+        await this.fetchLidarrQueue();
+      } catch (err) {
+        this.showToast(`Failed to pause worker: ${err.message}`, 'error');
+      }
+    },
+
+    async resumeLidarrQueue() {
+      try {
+        await this.apiRequest('/api/missing/lidarr/queue/resume', { method: 'POST' });
+        this.showToast('Lidarr trickle worker resumed', 'success');
+        await this.fetchLidarrQueue();
+      } catch (err) {
+        this.showToast(`Failed to resume worker: ${err.message}`, 'error');
+      }
+    },
+
+    async cancelLidarrQueue() {
+      try {
+        await this.apiRequest('/api/missing/lidarr/queue/cancel', { method: 'POST' });
+        this.showToast('Lidarr trickle worker canceled', 'info');
+        await this.fetchLidarrQueue();
+      } catch (err) {
+        this.showToast(`Failed to cancel worker: ${err.message}`, 'error');
       }
     },
 

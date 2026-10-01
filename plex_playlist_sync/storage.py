@@ -112,6 +112,7 @@ class Database:
                 (2, self._migration_v2),
                 (3, self._migration_v3),
                 (4, self._migration_v4),
+                (5, self._migration_v5),
             ]
 
             for version, migration_fn in migrations:
@@ -228,6 +229,16 @@ class Database:
         )
         cur.execute(
             "CREATE INDEX IF NOT EXISTS idx_match_overrides_lookup ON match_overrides(source_title, source_artist)"
+        )
+
+    def _migration_v5(self, cur: sqlite3.Cursor) -> None:
+        cur.execute(
+            """
+            ALTER TABLE missing_tracks ADD COLUMN lidarr_status TEXT NOT NULL DEFAULT 'unmonitored'
+            """
+        )
+        cur.execute(
+            "CREATE INDEX IF NOT EXISTS idx_missing_tracks_lidarr_status ON missing_tracks(lidarr_status)"
         )
 
     # -------------------------------------------------------------------------
@@ -492,6 +503,19 @@ class Database:
                 """,
                 (str(status), p_id),
             )
+            # Preserve existing lidarr_status across sync cycles
+            existing_lidarr_status: dict[tuple[str, str], str] = {}
+            try:
+                cur = self.conn.execute(
+                    "SELECT title, artist, lidarr_status FROM missing_tracks WHERE playlist_id = ?",
+                    (p_id,),
+                )
+                for r in cur.fetchall():
+                    key = (str(r["title"]).strip().lower(), str(r["artist"]).strip().lower())
+                    existing_lidarr_status[key] = str(r["lidarr_status"] or "unmonitored")
+            except Exception:
+                pass
+
             self.conn.execute(
                 "DELETE FROM missing_tracks WHERE playlist_id = ?",
                 (p_id,),
@@ -510,12 +534,14 @@ class Database:
                         url = item.get("url", "") or ""
                     else:
                         continue
+                    key = (str(title).strip().lower(), str(artist).strip().lower())
+                    l_status = existing_lidarr_status.get(key, "unmonitored")
                     self.conn.execute(
                         """
-                        INSERT INTO missing_tracks (playlist_id, title, artist, album, url)
-                        VALUES (?, ?, ?, ?, ?)
+                        INSERT INTO missing_tracks (playlist_id, title, artist, album, url, lidarr_status)
+                        VALUES (?, ?, ?, ?, ?, ?)
                         """,
-                        (p_id, str(title), str(artist), str(album), str(url)),
+                        (p_id, str(title), str(artist), str(album), str(url), l_status),
                     )
             self.conn.commit()
 
@@ -526,7 +552,7 @@ class Database:
             if playlist_id is not None:
                 cur = self.conn.execute(
                     """
-                    SELECT id, playlist_id, title, artist, album, url, created_at
+                    SELECT id, playlist_id, title, artist, album, url, lidarr_status, created_at
                     FROM missing_tracks
                     WHERE playlist_id = ?
                     ORDER BY id ASC
@@ -536,12 +562,36 @@ class Database:
             else:
                 cur = self.conn.execute(
                     """
-                    SELECT id, playlist_id, title, artist, album, url, created_at
+                    SELECT id, playlist_id, title, artist, album, url, lidarr_status, created_at
                     FROM missing_tracks
                     ORDER BY id ASC
                     """
                 )
             return [dict(row) for row in cur.fetchall()]
+
+    def update_missing_track_lidarr_status(self, track_id: int, status: str) -> bool:
+        """Updates the Lidarr monitoring status for a specific missing track."""
+        with self._lock:
+            cur = self.conn.execute(
+                "UPDATE missing_tracks SET lidarr_status = ? WHERE id = ?",
+                (str(status), int(track_id)),
+            )
+            self.conn.commit()
+            return cur.rowcount > 0
+
+    def update_missing_tracks_lidarr_status_bulk(self, track_ids: list[int], status: str) -> int:
+        """Updates the Lidarr monitoring status for a list of track IDs."""
+        if not track_ids:
+            return 0
+        with self._lock:
+            placeholders = ",".join("?" for _ in track_ids)
+            params = [str(status)] + [int(tid) for tid in track_ids]
+            cur = self.conn.execute(
+                f"UPDATE missing_tracks SET lidarr_status = ? WHERE id IN ({placeholders})",
+                params,
+            )
+            self.conn.commit()
+            return cur.rowcount
 
     # -------------------------------------------------------------------------
     # Sessions

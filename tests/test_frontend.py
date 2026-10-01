@@ -116,7 +116,7 @@ class TestStaticAssets:
         assert "pushAllToLidarr" in resp.text
         assert "pushTrackToLidarr" in resp.text
         assert "getRssFeedUrl" in resp.text
-        assert "getLidarrListUrl" in resp.text
+        assert "getTextFeedUrl" in resp.text
         assert "getWebhookUrl" in resp.text
 
     def test_static_style_css_served(self, client):

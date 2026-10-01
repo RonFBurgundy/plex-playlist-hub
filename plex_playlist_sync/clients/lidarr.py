@@ -119,18 +119,26 @@ class LidarrClient:
             logger.warning("Could not discover Lidarr metadata profile: %s", e)
         return 1
 
-    def search_and_add_track(
+    def add_artist_and_albums(
         self,
         artist_name: str,
-        album_name: str = "",
-        title: str = "",
+        album_names: Optional[list[str]] = None,
         auto_search: Optional[bool] = None,
+        monitor_mode: str = "specific",
     ) -> dict[str, Any]:
-        """Finds artist/album in Lidarr, ensures it is monitored, and triggers search."""
+        """Looks up an artist, ensures the artist and requested albums are monitored in Lidarr.
+
+        Optimized for bulk onboarding:
+        - 1 artist lookup per artist (drastically reduces MusicBrainz network calls)
+        - Supports monitor_mode="specific" to prevent downloading full artist discographies
+        - Batches album search commands into a single AlbumSearch call
+        - Gracefully handles HTTP 429 / 503 rate limits with retry-after guidance
+        """
         clean_artist = artist_name.strip()
         if not clean_artist:
             return {"status": "error", "message": "Empty artist name"}
 
+        clean_albums = [a.strip() for a in (album_names or []) if a and a.strip()]
         should_search = self.auto_search if auto_search is None else auto_search
         headers = self._get_headers()
 
@@ -139,6 +147,16 @@ class LidarrClient:
                 # 1. Look up artist in Lidarr / MusicBrainz
                 lookup_url = f"{self.base_url}/api/v1/artist/lookup?term={quote(clean_artist)}"
                 resp = client.get(lookup_url, headers=headers)
+
+                if resp.status_code in (429, 503):
+                    retry_after = int(resp.headers.get("Retry-After", 60))
+                    return {
+                        "status": "rate_limited",
+                        "artist": clean_artist,
+                        "retry_after": retry_after,
+                        "message": f"Rate limited by Lidarr/MusicBrainz (HTTP {resp.status_code}). Backing off for {retry_after}s.",
+                    }
+
                 if resp.status_code != 200:
                     return {
                         "status": "error",
@@ -154,12 +172,12 @@ class LidarrClient:
                         "message": "Artist not found in Lidarr lookup",
                     }
 
-                # Select best matching candidate (first result)
                 candidate = results[0]
                 artist_id = candidate.get("id", 0)
                 artist_title = candidate.get("artistName", clean_artist)
+                was_new = False
 
-                # 2. If artist is not yet in library (id == 0 or missing from local DB)
+                # 2. If artist is not yet in library
                 if not artist_id:
                     root_folder = self.get_root_folder(client)
                     quality_id = self.get_quality_profile_id(client)
@@ -172,25 +190,27 @@ class LidarrClient:
                         "qualityProfileId": quality_id,
                         "metadataProfileId": metadata_id,
                         "addOptions": {
-                            "monitor": "all",
-                            "searchForMissingAlbums": should_search,
+                            "monitor": "none" if monitor_mode == "specific" else "all",
+                            "searchForMissingAlbums": False,
                         },
                     }
 
                     add_url = f"{self.base_url}/api/v1/artist"
                     add_resp = client.post(add_url, headers=headers, json=payload)
+                    if add_resp.status_code in (429, 503):
+                        retry_after = int(add_resp.headers.get("Retry-After", 60))
+                        return {
+                            "status": "rate_limited",
+                            "artist": artist_title,
+                            "retry_after": retry_after,
+                            "message": f"Rate limited during artist add (HTTP {add_resp.status_code}).",
+                        }
+
                     if add_resp.status_code in (200, 201):
                         added_data = add_resp.json()
                         artist_id = added_data.get("id", 0)
+                        was_new = True
                         logger.info("Added artist '%s' (ID %s) to Lidarr", artist_title, artist_id)
-                        return {
-                            "status": "added",
-                            "artist": artist_title,
-                            "album": album_name,
-                            "lidarr_id": artist_id,
-                            "searched": should_search,
-                            "message": f"Added '{artist_title}' to Lidarr with automated search",
-                        }
                     else:
                         return {
                             "status": "error",
@@ -198,45 +218,84 @@ class LidarrClient:
                             "message": f"Failed to add artist: HTTP {add_resp.status_code}",
                         }
 
-                # 3. Artist is already in Lidarr library
-                # If specific album was requested, try locating album and triggering search
-                album_id = None
-                clean_album = album_name.strip().lower()
-                if clean_album:
+                # 3. Locate requested albums and ensure they are monitored
+                matched_album_ids: list[int] = []
+                if artist_id and clean_albums:
                     try:
                         alb_url = f"{self.base_url}/api/v1/album?artistId={artist_id}"
                         alb_resp = client.get(alb_url, headers=headers)
+                        if alb_resp.status_code in (429, 503):
+                            return {
+                                "status": "rate_limited",
+                                "artist": artist_title,
+                                "retry_after": int(alb_resp.headers.get("Retry-After", 60)),
+                                "message": "Rate limited while fetching albums.",
+                            }
                         if alb_resp.status_code == 200:
                             albums = alb_resp.json()
-                            for alb in albums:
-                                if clean_album in (alb.get("title", "")).lower():
-                                    album_id = alb.get("id")
-                                    # Ensure album is monitored
-                                    if not alb.get("monitored"):
-                                        alb["monitored"] = True
-                                        client.put(f"{self.base_url}/api/v1/album/{album_id}", headers=headers, json=alb)
-                                    break
+                            for req_alb in clean_albums:
+                                req_lower = req_alb.lower()
+                                for alb in albums:
+                                    alb_title = (alb.get("title") or "").lower()
+                                    if req_lower in alb_title or alb_title in req_lower:
+                                        a_id = alb.get("id")
+                                        if a_id and a_id not in matched_album_ids:
+                                            matched_album_ids.append(a_id)
+                                            if not alb.get("monitored"):
+                                                alb["monitored"] = True
+                                                client.put(f"{self.base_url}/api/v1/album/{a_id}", headers=headers, json=alb)
+                                        break
                     except Exception as e:
                         logger.warning("Error inspecting Lidarr albums for artist %s: %s", artist_id, e)
 
-                # 4. Trigger search command if requested
+                # 4. Trigger decoupled search command if requested
+                searched = False
                 if should_search:
                     cmd_url = f"{self.base_url}/api/v1/command"
-                    if album_id:
-                        cmd_payload = {"name": "AlbumSearch", "albumIds": [album_id]}
-                    else:
+                    if matched_album_ids:
+                        cmd_payload = {"name": "AlbumSearch", "albumIds": matched_album_ids}
+                        cmd_resp = client.post(cmd_url, headers=headers, json=cmd_payload)
+                        searched = cmd_resp.status_code in (200, 201)
+                    elif was_new and monitor_mode != "specific":
                         cmd_payload = {"name": "ArtistSearch", "artistId": artist_id}
-                    client.post(cmd_url, headers=headers, json=cmd_payload)
+                        cmd_resp = client.post(cmd_url, headers=headers, json=cmd_payload)
+                        searched = cmd_resp.status_code in (200, 201)
 
                 return {
-                    "status": "already_monitored",
+                    "status": "success",
                     "artist": artist_title,
-                    "album": album_name,
-                    "lidarr_id": artist_id,
-                    "searched": should_search,
-                    "message": f"Artist '{artist_title}' is monitored in Lidarr (search queued)",
+                    "artist_id": artist_id,
+                    "added": was_new,
+                    "matched_album_ids": matched_album_ids,
+                    "searched": searched,
+                    "message": f"{'Added and monitored' if was_new else 'Monitored'} in Lidarr ({len(matched_album_ids)} album(s))",
                 }
 
         except Exception as e:
-            logger.error("Exception in Lidarr search_and_add_track: %s", e)
+            logger.error("Exception in Lidarr add_artist_and_albums: %s", e)
             return {"status": "error", "artist": clean_artist, "message": str(e)}
+
+    def search_and_add_track(
+        self,
+        artist_name: str,
+        album_name: str = "",
+        title: str = "",
+        auto_search: Optional[bool] = None,
+    ) -> dict[str, Any]:
+        """Finds artist/album in Lidarr, ensures it is monitored, and triggers search."""
+        res = self.add_artist_and_albums(
+            artist_name=artist_name,
+            album_names=[album_name] if album_name else [],
+            auto_search=auto_search,
+            monitor_mode="specific",
+        )
+        if res.get("status") == "success":
+            return {
+                "status": "added" if res.get("added") else "already_monitored",
+                "artist": res.get("artist", artist_name),
+                "album": album_name,
+                "lidarr_id": res.get("artist_id", 0),
+                "searched": res.get("searched", False),
+                "message": res.get("message", ""),
+            }
+        return res

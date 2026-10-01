@@ -93,40 +93,6 @@ class TestMissingFeeds:
         resp = client.get("/api/missing/rss", headers={"X-Api-Key": "secret-feed-token"})
         assert resp.status_code == 200
 
-    def test_lidarr_custom_list_deduplication(self, client, test_db):
-        test_db.upsert_playlist("pl_1", "List 1", service="spotify")
-        test_db.upsert_playlist("pl_2", "List 2", service="spotify")
-
-        # Duplicate track in both playlists
-        test_db.record_sync_result(
-            "pl_1",
-            status="partial",
-            missing_tracks=[
-                {"title": "Bohemian Rhapsody", "artist": "Queen", "album": "A Night at the Opera"},
-                {"title": "Radio Ga Ga", "artist": "Queen", "album": "The Works"},
-            ],
-        )
-        test_db.record_sync_result(
-            "pl_2",
-            status="partial",
-            missing_tracks=[
-                # Same artist and album duplicate
-                {"title": "Bohemian Rhapsody", "artist": "Queen", "album": "A Night at the Opera"},
-            ],
-        )
-
-        resp = client.get("/api/missing/lidarr?token=secret-feed-token")
-        assert resp.status_code == 200
-        data = resp.json()
-        assert isinstance(data, list)
-        # Should be deduplicated to 2 unique (artist, album/title) pairs
-        assert len(data) == 2
-        artists = [item["artist"] for item in data]
-        assert all(a == "Queen" for a in artists)
-        albums = {item["album"] for item in data}
-        assert "A Night at the Opera" in albums
-        assert "The Works" in albums
-
     def test_text_feed_generation(self, client, test_db):
         test_db.upsert_playlist("pl_1", "List 1", service="spotify")
         test_db.record_sync_result(
@@ -275,3 +241,69 @@ class TestWebhookAndSelfHealingSync:
         assert len(missing2) == 0
         pl = test_db.get_playlist("imp_12345")
         assert pl["sync_status"] == "success"
+
+
+class TestLidarrTrickleWorkerAndEndpoints:
+    """Tests for Lidarr trickle background worker, pacing, and queue endpoints."""
+
+    def test_queue_endpoints(self, client):
+        # 1. GET queue status
+        resp = client.get("/api/missing/lidarr/queue")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert "is_running" in data
+        assert "is_paused" in data
+        assert "remaining_items" in data
+
+        # 2. Pause when worker is running
+        from plex_playlist_sync.lidarr_queue import lidarr_worker
+        with lidarr_worker._lock:
+            lidarr_worker._is_running = True
+            lidarr_worker._total_items = 5
+            lidarr_worker._processed_items = 1
+
+        try:
+            resp_pause = client.post("/api/missing/lidarr/queue/pause")
+            assert resp_pause.status_code == 200
+            assert resp_pause.json()["is_paused"] is True
+
+            # 3. Resume
+            resp_resume = client.post("/api/missing/lidarr/queue/resume")
+            assert resp_resume.status_code == 200
+            assert resp_resume.json()["is_paused"] is False
+
+            # 4. Cancel
+            resp_cancel = client.post("/api/missing/lidarr/queue/cancel")
+            assert resp_cancel.status_code == 200
+        finally:
+            with lidarr_worker._lock:
+                lidarr_worker._is_running = False
+                lidarr_worker._total_items = 0
+                lidarr_worker._processed_items = 0
+                lidarr_worker._is_paused = False
+
+    @patch("plex_playlist_sync.lidarr_queue.lidarr_worker.start_trickle")
+    def test_lidarr_push_trickle_enqueues(self, mock_start, client, test_db):
+        mock_start.return_value = {
+            "status": "started",
+            "message": "Enqueued 2 tracks",
+            "queued_count": 2,
+        }
+        test_db.upsert_playlist("pl_trickle", "Synthwave", service="spotify")
+        test_db.record_sync_result(
+            "pl_trickle",
+            status="partial",
+            missing_tracks=[
+                {"title": "Track 1", "artist": "Artist A", "album": "Album 1"},
+                {"title": "Track 2", "artist": "Artist B", "album": "Album 2"},
+            ],
+        )
+
+        resp = client.post("/api/missing/lidarr/push", json={"trickle": True, "batch_size": 25})
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["trickle"] is True
+        assert data["queued_count"] == 2
+        assert mock_start.called
+
+

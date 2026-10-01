@@ -189,6 +189,60 @@ def main() -> int:
         )
         bg_thread.start()
 
+    # Start periodic Lidarr auto-trickle worker thread if configured
+    if config.has_lidarr and config.lidarr_auto_trickle:
+        from plex_playlist_sync.clients.lidarr import LidarrClient
+        from plex_playlist_sync.lidarr_queue import lidarr_worker
+
+        def background_lidarr_trickle_worker():
+            interval_sec = max(60, config.lidarr_auto_trickle_interval_minutes * 60)
+            logger.info(
+                "Lidarr auto-trickle scheduler started (interval: %d min, batch: %d, pacing: %.1fs)",
+                config.lidarr_auto_trickle_interval_minutes,
+                config.lidarr_trickle_batch_size,
+                config.lidarr_trickle_rate_seconds,
+            )
+            lidarr_cli = LidarrClient(
+                base_url=config.lidarr_url,
+                api_key=config.lidarr_api_key,
+                verify_ssl=config.plex_verify_ssl,
+                auto_search=config.lidarr_auto_search,
+                root_folder=config.lidarr_root_folder,
+                quality_profile_id=config.lidarr_quality_profile_id,
+                metadata_profile_id=config.lidarr_metadata_profile_id,
+            )
+            while not _shutdown_requested:
+                slept = 0
+                while slept < interval_sec and not _shutdown_requested:
+                    time.sleep(min(1, interval_sec - slept))
+                    slept += 1
+                if _shutdown_requested:
+                    break
+                try:
+                    if not lidarr_worker.is_running():
+                        all_missing = db.get_missing_tracks()
+                        unmonitored = [t for t in all_missing if t.get("lidarr_status") != "monitored"]
+                        if unmonitored:
+                            logger.info(
+                                "Auto-trickle: enqueuing %d unmonitored tracks into Lidarr",
+                                min(len(unmonitored), config.lidarr_trickle_batch_size),
+                            )
+                            lidarr_worker.start_trickle(
+                                items=unmonitored,
+                                client=lidarr_cli,
+                                db=db,
+                                delay_seconds=config.lidarr_trickle_rate_seconds,
+                                auto_search=config.lidarr_auto_search,
+                                batch_size=config.lidarr_trickle_batch_size,
+                            )
+                except Exception as e:
+                    logger.exception("Error in scheduled Lidarr auto-trickle: %s", e)
+
+        lidarr_bg_thread = threading.Thread(
+            target=background_lidarr_trickle_worker, daemon=True, name="ScheduledLidarrTrickleWorker"
+        )
+        lidarr_bg_thread.start()
+
     app = create_app(db=db, config=config)
 
     uvicorn_config = uvicorn.Config(

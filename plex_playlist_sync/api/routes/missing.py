@@ -22,6 +22,7 @@ from plex_playlist_sync.api.dependencies import (
 from plex_playlist_sync.clients.lidarr import LidarrClient
 from plex_playlist_sync.clients.plex import PlexClient
 from plex_playlist_sync.config import Config
+from plex_playlist_sync.lidarr_queue import lidarr_worker
 from plex_playlist_sync.storage import Database
 
 logger = logging.getLogger(__name__)
@@ -32,6 +33,9 @@ router = APIRouter()
 class LidarrPushRequest(BaseModel):
     track_ids: Optional[list[int]] = Field(default=None, description="Optional list of specific missing track IDs to push")
     auto_search: Optional[bool] = Field(default=None, description="Override auto_search setting")
+    batch_size: Optional[int] = Field(default=None, description="Maximum number of tracks to queue (e.g. 25, 50)")
+    trickle: bool = Field(default=False, description="Process asynchronously via paced background trickle worker")
+    delay_seconds: Optional[float] = Field(default=None, description="Delay pacing in seconds between lookups")
 
 
 class MatchOverrideRequest(BaseModel):
@@ -198,39 +202,6 @@ def feed_missing_rss(
     return Response(content=rss_xml, media_type="application/rss+xml; charset=utf-8")
 
 
-@router.get("/lidarr")
-def feed_missing_lidarr(
-    playlist_id: Optional[str] = Query(default=None, description="Optional playlist ID filter"),
-    token: Optional[str] = Query(default=None, description="Optional feed token or API key"),
-    user_context: Optional[dict[str, Any]] = Depends(verify_feed_access),
-    db: Database = Depends(get_db),
-) -> list[dict[str, Any]]:
-    """Returns a deduplicated JSON list formatted for Lidarr Custom Import Lists."""
-    all_tracks = db.get_missing_tracks(playlist_id=playlist_id)
-    filtered = _filter_missing_for_user(all_tracks, user_context, db)
-    playlists_map = {p["id"]: p["name"] for p in db.list_playlists()}
-
-    seen = set()
-    lidarr_items = []
-    for t in filtered:
-        key = (
-            (t.get("artist") or "").strip().lower(),
-            (t.get("album") or t.get("title") or "").strip().lower(),
-        )
-        if key in seen:
-            continue
-        seen.add(key)
-        p_name = playlists_map.get(t.get("playlist_id", ""), t.get("playlist_id", ""))
-        lidarr_items.append({
-            "artist": t.get("artist", "").strip(),
-            "album": t.get("album", "").strip(),
-            "title": t.get("title", "").strip(),
-            "playlist": p_name,
-            "foreignId": f"missing-{t.get('id', 0)}",
-        })
-
-    return lidarr_items
-
 
 @router.get("/text")
 def feed_missing_text(
@@ -283,7 +254,12 @@ def push_missing_to_lidarr(
     db: Database = Depends(get_db),
     lidarr_client: Optional[LidarrClient] = Depends(get_lidarr_client),
 ) -> dict[str, Any]:
-    """Pushes missing tracks directly into Lidarr to queue download and monitoring."""
+    """Pushes missing tracks directly into Lidarr to queue download and monitoring.
+
+    Supports:
+    - Background trickle mode (`trickle=True`) with delay pacing and rate-limit backoff.
+    - Synchronous push (`trickle=False`) for targeted or immediate single-item updates.
+    """
     if not config.has_lidarr or lidarr_client is None:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -296,8 +272,41 @@ def push_missing_to_lidarr(
     target_ids = set(req.track_ids) if (req and req.track_ids is not None) else None
     if target_ids is not None:
         filtered = [t for t in filtered if t.get("id") in target_ids]
+    else:
+        # If pushing all without explicit IDs, prioritize unmonitored tracks
+        unmonitored = [t for t in filtered if t.get("lidarr_status") != "monitored"]
+        if unmonitored:
+            filtered = unmonitored
 
-    # Deduplicate items by (artist, album)
+    batch_size = req.batch_size if (req and req.batch_size is not None) else None
+    if batch_size and batch_size > 0:
+        filtered = filtered[:batch_size]
+
+    should_search = req.auto_search if (req and req.auto_search is not None) else config.lidarr_auto_search
+    use_trickle = req.trickle if (req and req.trickle is not None) else False
+    delay = req.delay_seconds if (req and req.delay_seconds is not None) else config.lidarr_trickle_rate_seconds
+
+    # Background trickle mode
+    if use_trickle:
+        queue_res = lidarr_worker.start_trickle(
+            items=filtered,
+            client=lidarr_client,
+            db=db,
+            delay_seconds=delay,
+            auto_search=should_search,
+            batch_size=batch_size,
+        )
+        return {
+            "status": "queued",
+            "trickle": True,
+            "queued_count": len(filtered),
+            "auto_search": should_search,
+            "delay_seconds": delay,
+            "message": queue_res.get("message", f"Queued {len(filtered)} tracks into Lidarr background worker"),
+            "queue_status": lidarr_worker.get_status(),
+        }
+
+    # Synchronous push (for backwards compatibility / single track requests)
     seen = set()
     deduped = []
     for t in filtered:
@@ -306,7 +315,6 @@ def push_missing_to_lidarr(
             seen.add(key)
             deduped.append(t)
 
-    should_search = req.auto_search if (req and req.auto_search is not None) else config.lidarr_auto_search
     results = []
     added_count = 0
     monitored_count = 0
@@ -323,14 +331,27 @@ def push_missing_to_lidarr(
             auto_search=should_search,
         )
         results.append(res)
+        track_id = item.get("id")
         if res.get("status") == "added":
             added_count += 1
+            if track_id:
+                db.update_missing_track_lidarr_status(track_id, "monitored")
         elif res.get("status") == "already_monitored":
             monitored_count += 1
+            if track_id:
+                db.update_missing_track_lidarr_status(track_id, "monitored")
+        elif res.get("status") == "not_found":
+            failed_count += 1
+            if track_id:
+                db.update_missing_track_lidarr_status(track_id, "not_found")
         else:
             failed_count += 1
+            if track_id:
+                db.update_missing_track_lidarr_status(track_id, "error")
 
     return {
+        "status": "completed",
+        "trickle": False,
         "total_requested": len(filtered),
         "deduplicated_items": len(deduped),
         "added": added_count,
@@ -338,6 +359,44 @@ def push_missing_to_lidarr(
         "failed": failed_count,
         "results": results,
     }
+
+
+@router.get("/lidarr/queue")
+def get_lidarr_queue_status(
+    _current_user: dict[str, Any] = Depends(get_current_user),
+) -> dict[str, Any]:
+    """Returns the live status of the Lidarr background trickle worker."""
+    return lidarr_worker.get_status()
+
+
+@router.post("/lidarr/queue/pause")
+def pause_lidarr_queue(
+    _current_user: dict[str, Any] = Depends(get_current_user),
+) -> dict[str, Any]:
+    """Pauses the Lidarr background trickle worker."""
+    res = lidarr_worker.pause()
+    status = lidarr_worker.get_status()
+    return {**status, "action_status": res.get("status"), "action_message": res.get("message")}
+
+
+@router.post("/lidarr/queue/resume")
+def resume_lidarr_queue(
+    _current_user: dict[str, Any] = Depends(get_current_user),
+) -> dict[str, Any]:
+    """Resumes the Lidarr background trickle worker."""
+    res = lidarr_worker.resume()
+    status = lidarr_worker.get_status()
+    return {**status, "action_status": res.get("status"), "action_message": res.get("message")}
+
+
+@router.post("/lidarr/queue/cancel")
+def cancel_lidarr_queue(
+    _current_user: dict[str, Any] = Depends(get_current_user),
+) -> dict[str, Any]:
+    """Cancels and stops the Lidarr background trickle worker."""
+    res = lidarr_worker.cancel()
+    status = lidarr_worker.get_status()
+    return {**status, "action_status": res.get("status"), "action_message": res.get("message")}
 
 
 @router.get("/search")
