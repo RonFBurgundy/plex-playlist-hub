@@ -1,29 +1,31 @@
 services:
-  playlistHub:
+  plex-playlist-hub:
     image: ghcr.io/ronfburgundy/plex-playlist-hub:latest
-    container_name: playlistHub
+    container_name: plex-playlist-hub
     restart: unless-stopped
     ports:
       - "5250:5250"
     volumes:
       - ./data:/data
     environment:
+      - PUID=1000
+      - PGID=1000
       - PORT=5250
-      - PLEX_URL=http://localhost:32400
+      - PLEX_URL=http://192.168.1.100:32400
       - PLEX_TOKEN=your_plex_token_here
+      - PLEX_MUSIC_SECTION=Music
       - PLEX_VERIFY_SSL=1
-      - SECONDS_TO_WAIT=86400
-      - RUN_ONCE=0
-      - APPEND_INSTEAD_OF_SYNC=0
+      - FEED_TOKEN=my_feed_secret_123
+      - SECONDS_TO_WAIT=14400
+      - SEARCH_SIMILARITY_THRESHOLD=0.9
       - APPEND_SERVICE_SUFFIX=1
       - ADD_PLAYLIST_POSTER=1
       - ADD_PLAYLIST_DESCRIPTION=1
-      - WRITE_MISSING_AS_CSV=1
-      - SEARCH_SIMILARITY_THRESHOLD=0.9
+      - WRITE_MISSING_AS_CSV=0
       - LOG_LEVEL=INFO
-      - SPOTIFY_CLIENT_ID=your_client_id
-      - SPOTIFY_CLIENT_SECRET=your_client_secret
-      - SPOTIFY_USER_ID=your_spotify_user
-      - SPOTIFY_PLAYLIST_ID=37i9dQZF1DXcBWIGoYBM5M
-      - DEEZER_USER_ID=9999999999
-      - DEEZER_PLAYLIST_ID=1313621735
+      # Spotify: leave blank for keyless web scraping!
+      - SPOTIFY_CLIENT_ID=
+      - SPOTIFY_CLIENT_SECRET=
+      # Lidarr (optional):
+      # - LIDARR_URL=http://192.168.1.100:8686
+      # - LIDARR_API_KEY=your_lidarr_api_key

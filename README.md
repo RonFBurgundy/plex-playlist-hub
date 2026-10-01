@@ -69,38 +69,53 @@ This project has been completely re-architected and rewritten from the ground up
 
 ---
 
-## Quick Start with Docker
+## Quick Start
 
-### Docker Compose (Recommended)
+### Unraid Deployment (Instant Template)
+
+Installing on Unraid takes less than 2 minutes. Open your Unraid Terminal (`>_` icon in the top right menu) and run:
+
+```bash
+curl -o /boot/config/plugins/dockerMan/templates-user/my-plex-playlist-hub.xml \
+  https://raw.githubusercontent.com/RonFBurgundy/plex-playlist-hub/main/unraid/plex-playlist-hub.xml
+```
+
+Then navigate to **Docker** &rarr; **Add Container** &rarr; select **my-plex-playlist-hub** from the **Template** dropdown, verify your Plex LAN IP address, and click **Apply**!
+
+> [!TIP]
+> *Read the complete, human-friendly [Unraid Installation Guide](docs/UNRAID_INSTALL_GUIDE.md) for step-by-step walkthroughs, token tips, and troubleshooting.*
+
+---
+
+### Docker Compose
 
 ```yaml
 services:
-  playlistHub:
+  plex-playlist-hub:
     image: ghcr.io/ronfburgundy/plex-playlist-hub:latest
-    container_name: playlistHub
+    container_name: plex-playlist-hub
     restart: unless-stopped
     ports:
       - "5250:5250"
     volumes:
       - ./data:/data
     environment:
+      - PUID=1000
+      - PGID=1000
       - PORT=5250
+      # Use your Plex server's local LAN IP (do NOT use localhost inside Docker bridge)
       - PLEX_URL=http://192.168.1.100:32400
       - PLEX_TOKEN=your_plex_token_here
+      - PLEX_MUSIC_SECTION=Music
       - PLEX_VERIFY_SSL=1
-      - SECONDS_TO_WAIT=86400
-      - RUN_ONCE=0
-      - APPEND_SERVICE_SUFFIX=1
-      - ADD_PLAYLIST_POSTER=1
-      - ADD_PLAYLIST_DESCRIPTION=1
-      - WRITE_MISSING_AS_CSV=0
-      - SPOTIFY_CLIENT_ID=your_spotify_client_id
-      - SPOTIFY_CLIENT_SECRET=your_spotify_client_secret
-      - SPOTIFY_USER_ID=your_spotify_user_id
-      # Optional Lidarr Integration & Automation
+      - SECONDS_TO_WAIT=14400 # 4 hours
+      - LOG_LEVEL=INFO
+      # Spotify: Leave blank to use the built-in KEYLESS web scraper!
+      - SPOTIFY_CLIENT_ID=
+      - SPOTIFY_CLIENT_SECRET=
+      # Optional: Lidarr integration & missing track feed security
       # - LIDARR_URL=http://192.168.1.100:8686
       # - LIDARR_API_KEY=your_lidarr_api_key
-      # - LIDARR_AUTO_SEARCH=1
       # - FEED_TOKEN=my-secure-token
 ```
 
@@ -109,7 +124,7 @@ Run with:
 docker compose up -d
 ```
 
-Access the hub in your browser at: `http://<your-server-ip>:5250`
+Access the web dashboard in your browser at: `http://<your-server-ip>:5250`
 
 ---
 

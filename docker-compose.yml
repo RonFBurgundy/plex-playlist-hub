@@ -1,38 +1,56 @@
 services:
-  playlistHub:
+  plex-playlist-hub:
     image: ghcr.io/ronfburgundy/plex-playlist-hub:latest
-    container_name: playlistHub
+    container_name: plex-playlist-hub
     restart: unless-stopped
     ports:
       - "5250:5250"
     volumes:
       - ./data:/data
     environment:
-      # Port & Host
+      # --- Permissions ---
+      - PUID=1000
+      - PGID=1000
+      - UMASK=022
+      - TZ=Etc/UTC
+
+      # --- WebUI & Port ---
       - PORT=5250
 
-      # Plex Settings (Required)
-      - PLEX_URL=http://localhost:32400
+      # --- Plex Media Server ---
+      # IMPORTANT: Do NOT use localhost (inside bridge containers, localhost refers to the container).
+      # Use your host server's local LAN IP: http://192.168.1.100:32400
+      - PLEX_URL=http://192.168.1.100:32400
       - PLEX_TOKEN=your_plex_token_here
+      - PLEX_MUSIC_SECTION=Music
       - PLEX_VERIFY_SSL=1
+      # Optional: Explicit machine identifier if not auto-detected
+      # - PLEX_MACHINE_IDENTIFIER=
 
-      # Sync Behaviors
-      - SECONDS_TO_WAIT=86400
-      - RUN_ONCE=0
-      - APPEND_INSTEAD_OF_SYNC=0
+      # --- Security & Session ---
+      # Optional: Random 32+ char string to sign session cookies (auto-generated if omitted)
+      # - SESSION_SECRET=
+      # Optional: Token for securing Lidarr RSS/JSON missing track feeds
+      # - FEED_TOKEN=
+
+      # --- Spotify (OPTIONAL) ---
+      # Leave SPOTIFY_CLIENT_ID and SPOTIFY_CLIENT_SECRET blank to use the built-in KEYLESS web scraper!
+      # - SPOTIFY_CLIENT_ID=
+      # - SPOTIFY_CLIENT_SECRET=
+
+      # --- Deezer (OPTIONAL) ---
+      # - DEEZER_USER_ID=
+      # - DEEZER_PLAYLIST_ID=
+
+      # --- Lidarr Integration (OPTIONAL) ---
+      # - LIDARR_URL=http://192.168.1.100:8686
+      # - LIDARR_API_KEY=your_lidarr_api_key
+
+      # --- Sync Engine & Scheduling ---
+      - SECONDS_TO_WAIT=14400 # 4 hours
+      - SEARCH_SIMILARITY_THRESHOLD=0.9
       - APPEND_SERVICE_SUFFIX=1
       - ADD_PLAYLIST_POSTER=1
       - ADD_PLAYLIST_DESCRIPTION=1
       - WRITE_MISSING_AS_CSV=0
-      - SEARCH_SIMILARITY_THRESHOLD=0.9
       - LOG_LEVEL=INFO
-
-      # Spotify Options
-      - SPOTIFY_CLIENT_ID=
-      - SPOTIFY_CLIENT_SECRET=
-      - SPOTIFY_USER_ID=
-      - SPOTIFY_PLAYLIST_ID=
-
-      # Deezer Options
-      - DEEZER_USER_ID=
-      - DEEZER_PLAYLIST_ID=
