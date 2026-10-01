@@ -49,7 +49,7 @@ document.addEventListener('alpine:init', () => {
     pushingTrackId: null,
 
     // Add Playlist Form State
-    addTab: 'link', // 'link' | 'paste' | 'helper'
+    addTab: 'link', // 'link' | 'featured' | 'smart' | 'm3u' | 'paste' | 'helper'
     addForm: {
       url_or_id: '',
       service: '',
@@ -65,6 +65,30 @@ document.addEventListener('alpine:init', () => {
     showParsedPreview: false,
     addLoading: false,
     addError: '',
+
+    // Featured Charts & Smart Mix State
+    featuredCharts: [],
+    smartMixPresets: [],
+    isLoadingFeatured: false,
+    isGeneratingMix: false,
+
+    // M3U Import State
+    m3uFile: null,
+    m3uContent: '',
+    m3uName: '',
+    m3uParsedCount: 0,
+    m3uImporting: false,
+
+    // Match Memory & Manual Search State
+    isMatchModalOpen: false,
+    isMatchMemoryDrawerOpen: false,
+    activeMissingTrack: null,
+    matchSearchQuery: '',
+    isSearchingPlex: false,
+    plexSearchResults: [],
+    matchOverrides: [],
+    isSavingMatch: false,
+    isDeletingMatchId: null,
 
     // Target User Updates Tracking
     targetUpdating: {},
@@ -409,11 +433,19 @@ document.addEventListener('alpine:init', () => {
         service: 'spotify',
         targets: [...initialTargets]
       };
+      this.m3uFile = null;
+      this.m3uContent = '';
+      this.m3uName = '';
+      this.m3uParsedCount = 0;
       this.parsedTracks = [];
       this.showParsedPreview = false;
       this.addError = '';
       this.addLoading = false;
       this.isAddModalOpen = true;
+
+      // Preload featured charts and smart mix presets
+      this.fetchFeaturedCharts();
+      this.fetchSmartMixPresets();
     },
 
     closeAddModal() {
@@ -480,7 +512,132 @@ document.addEventListener('alpine:init', () => {
       }
     },
 
-    // Paste & Direct Import Handling
+    // Featured Charts Presets
+    async fetchFeaturedCharts() {
+      if (this.featuredCharts.length > 0) return;
+      this.isLoadingFeatured = true;
+      try {
+        const data = await this.apiRequest('/api/playlists/featured');
+        this.featuredCharts = Array.isArray(data) ? data : [];
+      } catch (err) {
+        // Silently log or toast
+      } finally {
+        this.isLoadingFeatured = false;
+      }
+    },
+
+    async subscribeFeatured(chart) {
+      this.addLoading = true;
+      this.addError = '';
+      try {
+        const payload = {
+          url_or_id: chart.url_or_id,
+          service: chart.service,
+          targets: this.addForm.targets.length ? this.addForm.targets : (this.currentUser ? [String(this.currentUser.id)] : [])
+        };
+        const newPlaylist = await this.apiRequest('/api/playlists', {
+          method: 'POST',
+          body: payload
+        });
+        this.playlists.unshift(newPlaylist);
+        this.showToast(`Subscribed to chart "${newPlaylist.name}"!`, 'success');
+        this.closeAddModal();
+      } catch (err) {
+        this.addError = err.message || 'Failed to subscribe to chart';
+        this.showToast(this.addError, 'error');
+      } finally {
+        this.addLoading = false;
+      }
+    },
+
+    // Smart Mix Presets
+    async fetchSmartMixPresets() {
+      if (this.smartMixPresets.length > 0) return;
+      try {
+        const data = await this.apiRequest('/api/playlists/smart-mix/presets');
+        this.smartMixPresets = Array.isArray(data) ? data : [];
+      } catch (err) {
+        // Ignore
+      }
+    },
+
+    async createSmartMix(mixType, customName = '') {
+      this.isGeneratingMix = true;
+      this.addError = '';
+      try {
+        const payload = {
+          mix_type: mixType,
+          name: customName || null,
+          targets: this.addForm.targets.length ? this.addForm.targets : (this.currentUser ? [String(this.currentUser.id)] : [])
+        };
+        const res = await this.apiRequest('/api/playlists/smart-mix', {
+          method: 'POST',
+          body: payload
+        });
+        this.showToast(`Generated smart playlist "${res.name}" with ${res.matched_count} tracks!`, 'success');
+        this.closeAddModal();
+        await this.fetchPlaylists();
+      } catch (err) {
+        this.addError = err.message || 'Failed to generate smart mix. Ensure you have played music on Plexamp.';
+        this.showToast(this.addError, 'error');
+      } finally {
+        this.isGeneratingMix = false;
+      }
+    },
+
+    // M3U Drag-and-Drop & File Import
+    handleM3UFileSelect(event) {
+      const file = event.target.files?.[0];
+      if (!file) return;
+      this.m3uFile = file;
+
+      // Extract filename without .m3u / .m3u8 extension
+      const rawName = file.name.replace(/\.(m3u8?|txt)$/i, '');
+      this.m3uName = rawName || 'Imported M3U Playlist';
+
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        this.m3uContent = e.target.result || '';
+        const lines = this.m3uContent.split(/\r?\n/).filter(l => l.trim() && !l.trim().startsWith('#EXTM3U'));
+        const infLines = lines.filter(l => l.trim().startsWith('#EXTINF:'));
+        this.m3uParsedCount = infLines.length > 0 ? infLines.length : Math.max(1, lines.length);
+      };
+      reader.readAsText(file);
+    },
+
+    async submitM3UImport() {
+      if (!this.m3uContent || !this.m3uContent.trim()) {
+        this.addError = 'Please choose a valid .m3u or .m3u8 playlist file.';
+        return;
+      }
+      const name = (this.m3uName || '').trim() || 'Imported M3U Playlist';
+      this.m3uImporting = true;
+      this.addError = '';
+
+      try {
+        const payload = {
+          name: name,
+          content: this.m3uContent,
+          targets: this.addForm.targets.length ? this.addForm.targets : (this.currentUser ? [String(this.currentUser.id)] : [])
+        };
+        const res = await this.apiRequest('/api/playlists/import/m3u', {
+          method: 'POST',
+          body: payload
+        });
+        this.showToast(`Imported "${res.name}" (${res.matched_count}/${res.track_count} matched in Plex)`, 'success');
+        this.closeAddModal();
+        this.m3uFile = null;
+        this.m3uContent = '';
+        this.m3uName = '';
+        await this.fetchPlaylists();
+        await this.fetchMissingTracks();
+      } catch (err) {
+        this.addError = err.message || 'Failed to import M3U file.';
+        this.showToast(this.addError, 'error');
+      } finally {
+        this.m3uImporting = false;
+      }
+    },
     togglePasteFormTarget(userId) {
       const uid = String(userId);
       if (this.pasteForm.targets.includes(uid)) {
@@ -713,6 +870,37 @@ document.addEventListener('alpine:init', () => {
       }
     },
 
+    // Playlist Active / Paused Toggle
+    canTogglePlaylistActive(playlist) {
+      if (!this.currentUser) return false;
+      if (this.currentUser.is_admin) return true;
+      return String(playlist.creator_id) === String(this.currentUser.id);
+    },
+
+    async togglePlaylistActive(playlist) {
+      if (!this.canTogglePlaylistActive(playlist)) {
+        this.showToast('Only administrators or the playlist creator can change sync status', 'info');
+        return;
+      }
+      const currentVal = playlist.enabled !== false;
+      const newVal = !currentVal;
+      playlist.enabled = newVal;
+
+      try {
+        const res = await this.apiRequest(`/api/playlists/${encodeURIComponent(playlist.id)}/enabled`, {
+          method: 'PUT',
+          body: { enabled: newVal }
+        });
+        if (res && typeof res.enabled === 'boolean') {
+          playlist.enabled = res.enabled;
+        }
+        this.showToast(`Playlist "${playlist.name}" is now ${playlist.enabled ? 'Active' : 'Paused'}`, 'info');
+      } catch (err) {
+        playlist.enabled = currentVal;
+        this.showToast(`Failed to update playlist status: ${err.message}`, 'error');
+      }
+    },
+
     // Delete Playlist
     canDeletePlaylist(playlist) {
       if (!this.currentUser) return false;
@@ -791,6 +979,103 @@ document.addEventListener('alpine:init', () => {
     getPlaylistName(playlistId) {
       const found = this.playlists.find(p => String(p.id) === String(playlistId));
       return found ? found.name : playlistId;
+    },
+
+    // Match Memory & Manual Search
+    openManualMatchModal(track) {
+      this.activeMissingTrack = track;
+      this.matchSearchQuery = `${track.title || ''} ${track.artist || ''}`.trim();
+      this.plexSearchResults = [];
+      this.isMatchModalOpen = true;
+      if (this.matchSearchQuery) {
+        this.searchPlexTracks(this.matchSearchQuery);
+      }
+    },
+
+    closeManualMatchModal() {
+      this.isMatchModalOpen = false;
+      this.activeMissingTrack = null;
+      this.plexSearchResults = [];
+      this.matchSearchQuery = '';
+    },
+
+    async searchPlexTracks(query) {
+      const q = (query || this.matchSearchQuery || '').trim();
+      if (!q) return;
+      this.isSearchingPlex = true;
+      try {
+        const res = await this.apiRequest(`/api/missing/search?query=${encodeURIComponent(q)}&limit=15`);
+        this.plexSearchResults = Array.isArray(res) ? res : [];
+      } catch (err) {
+        this.showToast(`Plex library search failed: ${err.message}`, 'error');
+      } finally {
+        this.isSearchingPlex = false;
+      }
+    },
+
+    async linkMatchOverride(track, plexItem) {
+      this.isSavingMatch = true;
+      try {
+        const payload = {
+          source_title: track.title,
+          source_artist: track.artist,
+          plex_rating_key: String(plexItem.rating_key),
+          plex_title: plexItem.title,
+          plex_artist: plexItem.artist
+        };
+        await this.apiRequest('/api/missing/match', {
+          method: 'POST',
+          body: payload
+        });
+        this.showToast(`Linked "${track.title}" to "${plexItem.artist} - ${plexItem.title}" in Match Memory!`, 'success');
+
+        // Remove from missing tracks locally
+        this.missingTracks = this.missingTracks.filter(t =>
+          !(t.title.toLowerCase() === track.title.toLowerCase() && t.artist.toLowerCase() === track.artist.toLowerCase())
+        );
+        this.missingTracksCount = this.missingTracks.length;
+        this.closeManualMatchModal();
+
+        // Refresh matches list if drawer is open
+        if (this.isMatchMemoryDrawerOpen) {
+          this.fetchMatchOverrides();
+        }
+      } catch (err) {
+        this.showToast(`Failed to link match override: ${err.message}`, 'error');
+      } finally {
+        this.isSavingMatch = false;
+      }
+    },
+
+    toggleMatchMemoryDrawer() {
+      this.isMatchMemoryDrawerOpen = !this.isMatchMemoryDrawerOpen;
+      if (this.isMatchMemoryDrawerOpen) {
+        this.fetchMatchOverrides();
+      }
+    },
+
+    async fetchMatchOverrides() {
+      try {
+        const data = await this.apiRequest('/api/missing/matches');
+        this.matchOverrides = Array.isArray(data) ? data : [];
+      } catch (err) {
+        this.showToast(`Failed to load Match Memory: ${err.message}`, 'error');
+      }
+    },
+
+    async deleteMatchOverride(overrideId) {
+      this.isDeletingMatchId = overrideId;
+      try {
+        await this.apiRequest(`/api/missing/match/${overrideId}`, {
+          method: 'DELETE'
+        });
+        this.matchOverrides = this.matchOverrides.filter(m => m.id !== overrideId);
+        this.showToast('Removed Match Memory override', 'info');
+      } catch (err) {
+        this.showToast(`Failed to remove override: ${err.message}`, 'error');
+      } finally {
+        this.isDeletingMatchId = null;
+      }
     },
 
     // Lidarr & Feed Management

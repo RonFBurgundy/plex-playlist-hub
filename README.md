@@ -53,6 +53,19 @@ This project has been completely re-architected and rewritten from the ground up
   - Built-in retry backoff handling for Spotify API rate limits (HTTP 429) and gateway errors.
 - **Deezer Integration**:
   - Full sync for Deezer user profiles and numerical playlist IDs using modern HTTPX models.
+- **Match Memory & Manual Correction Picker**:
+  - Search your Plex music library directly from unmatched track rows and manually link songs.
+  - Automatically records pairings in **Match Memory** (`match_overrides`), permanently overriding fuzzy matching across all future sync cycles.
+  - View and delete stored overrides at any time from the web dashboard.
+- **Featured Charts Catalog**:
+  - 1-click subscription to popular curated music charts (Billboard Hot 100, Today's Top Hits, Viral 50, Rock Classics, Chill Hits, Deezer Top Worldwide) without searching or copying URLs.
+- **Local Smart Mixes**:
+  - Dynamically generate Plexamp-style smart playlists directly from your local Plex listening history (*Heavy Rotation*, *Forgotten Favorites*, *Deep Cuts*).
+- **Direct `.m3u` / `.m3u8` File Drag-and-Drop**:
+  - Drag and drop legacy playlist files from Winamp, iTunes, foobar2000, or exported audio players.
+  - Robust parser supporting extended `#EXTINF` metadata attributes, duration, and path normalization.
+- **Per-Playlist Active / Paused Toggles**:
+  - Pause auto-synchronization for individual playlists with one click without deleting them. Existing tracks remain static in Plexamp until re-enabled.
 - **Smart Track Matching**:
   - Multi-tier matching (exact title & artist fuzzy comparison).
   - Automated title sanitization for fallback searching (cleans remaster tags, deluxe edition brackets, and feature tags).

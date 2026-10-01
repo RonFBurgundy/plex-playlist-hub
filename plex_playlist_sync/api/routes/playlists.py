@@ -21,6 +21,7 @@ from plex_playlist_sync.clients.plex import PlexClient
 from plex_playlist_sync.clients.spotify import SpotifyClient
 from plex_playlist_sync.clients.spotify_scraper import SpotifyWebScraper
 from plex_playlist_sync.config import Config
+from plex_playlist_sync.m3u import parse_m3u
 from plex_playlist_sync.models import Playlist, Track
 from plex_playlist_sync.security import (
     extract_deezer_id,
@@ -59,6 +60,102 @@ class PlaylistDirectImportRequest(BaseModel):
 
 class PlaylistTargetsRequest(BaseModel):
     user_ids: list[str] = Field(..., description="List of target user IDs for this playlist")
+
+
+class PlaylistEnabledRequest(BaseModel):
+    enabled: bool = Field(..., description="True if playlist should be auto-synced; False if paused/static")
+
+
+class SmartMixRequest(BaseModel):
+    mix_type: str = Field(..., description="One of: 'heavy_rotation', 'forgotten_favorites', 'deep_cuts'")
+    name: Optional[str] = Field(default=None, max_length=200, description="Custom playlist name")
+    targets: Optional[list[str]] = Field(default=None, description="Optional target user IDs")
+
+
+class M3UImportRequest(BaseModel):
+    content: str = Field(..., min_length=1, description="Raw M3U/M3U8 file contents")
+    name: Optional[str] = Field(default="Imported M3U Playlist", max_length=200, description="Playlist title")
+    description: Optional[str] = Field(default="Imported from M3U playlist file", max_length=1000)
+    targets: Optional[list[str]] = Field(default=None, description="Optional target user IDs")
+
+
+FEATURED_CHARTS = [
+    {
+        "id": "chart-billboard-hot-100",
+        "name": "Billboard Hot 100",
+        "service": "spotify",
+        "url_or_id": "6UeSakyzhiEt4NB3UAd6NQ",
+        "description": "The weekly definitive list of the most popular songs in the United States across all genres.",
+        "poster_url": "https://image-cdn-ak.spotifycdn.com/image/ab67706c0000bebb8d0e513812822a1b9448a379",
+        "category": "Charts",
+    },
+    {
+        "id": "chart-todays-top-hits",
+        "name": "Today's Top Hits",
+        "service": "spotify",
+        "url_or_id": "37i9dQZF1DXcBWIGoYBM5M",
+        "description": "The hottest 50 tracks in the world right now, updated weekly.",
+        "poster_url": "https://i.scdn.co/image/ab67706f00000002161f30141f173c35b80a5a3a",
+        "category": "Charts",
+    },
+    {
+        "id": "chart-global-viral-50",
+        "name": "Viral 50 - Global",
+        "service": "spotify",
+        "url_or_id": "37i9dQZF1DX2L0iB23Enbq",
+        "description": "The most viral tracks across social media and streaming worldwide.",
+        "poster_url": "https://i.scdn.co/image/ab67706f00000002c98d697855e347ad68b209c1",
+        "category": "Trending",
+    },
+    {
+        "id": "chart-rock-classics",
+        "name": "Rock Classics",
+        "service": "spotify",
+        "url_or_id": "37i9dQZF1DWXRqgorJj26U",
+        "description": "Iconic rock anthems and timeless guitar legends through the decades.",
+        "poster_url": "https://i.scdn.co/image/ab67706f0000000278b4745cb9ce8ffe32da91f9",
+        "category": "Classics",
+    },
+    {
+        "id": "chart-chill-hits",
+        "name": "Chill Hits",
+        "service": "spotify",
+        "url_or_id": "37i9dQZF1DX4WYpdgoIcn6",
+        "description": "Kick back with the best relaxed pop, acoustic, and downtempo melodies.",
+        "poster_url": "https://i.scdn.co/image/ab67706f000000029bbd352b22bbec2412702581",
+        "category": "Mood",
+    },
+    {
+        "id": "chart-deezer-top-worldwide",
+        "name": "Deezer Top Worldwide",
+        "service": "deezer",
+        "url_or_id": "3155776842",
+        "description": "The top streamed music tracks globally on Deezer.",
+        "poster_url": "https://e-cdns-images.dzcdn.net/images/cover/9082ebca4314c1d76378e9b049d53c73/500x500-000000-80-0-0.jpg",
+        "category": "Charts",
+    },
+]
+
+SMART_MIX_PRESETS = [
+    {
+        "mix_type": "heavy_rotation",
+        "name": "Heavy Rotation",
+        "description": "Your most played tracks on Plexamp over recent weeks.",
+        "icon": "fire",
+    },
+    {
+        "mix_type": "forgotten_favorites",
+        "name": "Forgotten Favorites",
+        "description": "Loved and heavily played songs you haven't listened to in the last 6 months.",
+        "icon": "clock",
+    },
+    {
+        "mix_type": "deep_cuts",
+        "name": "Deep Cuts",
+        "description": "Rare and unplayed hidden gems from your favorite library artists.",
+        "icon": "sparkles",
+    },
+]
 
 
 @router.get("")
@@ -167,6 +264,79 @@ def create_playlist(
     return playlist
 
 
+@router.get("/featured")
+def list_featured_charts(
+    current_user: dict[str, Any] = Depends(get_current_user),
+) -> list[dict[str, Any]]:
+    """Returns curated popular charts for 1-click subscription."""
+    return FEATURED_CHARTS
+
+
+@router.get("/smart-mix/presets")
+def get_smart_mix_presets(
+    current_user: dict[str, Any] = Depends(get_current_user),
+) -> list[dict[str, Any]]:
+    """Returns available local Smart Mix recipes."""
+    return SMART_MIX_PRESETS
+
+
+@router.post("/smart-mix", status_code=status.HTTP_201_CREATED)
+def create_smart_mix(
+    req: SmartMixRequest,
+    current_user: dict[str, Any] = Depends(get_current_user),
+    db: Database = Depends(get_db),
+    config: Config = Depends(get_config),
+    plex_client: Optional[PlexClient] = Depends(get_plex_client),
+) -> dict[str, Any]:
+    """Generates a smart playlist in Plex from local listening history."""
+    if not plex_client:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Plex Media Server client is not configured",
+        )
+
+    valid_types = {p["mix_type"]: p for p in SMART_MIX_PRESETS}
+    if req.mix_type not in valid_types:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid mix_type '{req.mix_type}'. Must be one of: {list(valid_types.keys())}",
+        )
+
+    preset_info = valid_types[req.mix_type]
+    pl_name = sanitize_text(req.name or preset_info["name"])
+
+    tracks = plex_client.get_smart_mix_tracks(req.mix_type, limit=50)
+    if not tracks:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"No eligible tracks found in Plex library for '{preset_info['name']}'. Listen to more music in Plexamp to generate this mix!",
+        )
+
+    import_items = [
+        TrackImportItem(
+            title=t["title"],
+            artist=t["artist"],
+            album=t.get("album", ""),
+        )
+        for t in tracks
+    ]
+
+    import_req = PlaylistDirectImportRequest(
+        name=pl_name,
+        service="plex",
+        description=preset_info["description"],
+        tracks=import_items,
+        targets=req.targets,
+    )
+    return import_playlist_tracks(
+        req=import_req,
+        current_user=current_user,
+        db=db,
+        config=config,
+        plex_client=plex_client,
+    )
+
+
 @router.put("/{playlist_id}/targets")
 def update_playlist_targets(
     playlist_id: str,
@@ -217,6 +387,37 @@ def update_playlist_targets(
     return {
         "id": playlist_id,
         "targets": db.get_playlist_targets(playlist_id),
+    }
+
+
+@router.put("/{playlist_id}/enabled")
+def set_playlist_enabled(
+    playlist_id: str,
+    req: PlaylistEnabledRequest,
+    current_user: dict[str, Any] = Depends(get_current_user),
+    db: Database = Depends(get_db),
+) -> dict[str, Any]:
+    """Toggles playlist auto-sync state between Active (enabled) and Paused (disabled)."""
+    playlist = db.get_playlist(playlist_id)
+    if not playlist:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Playlist not found",
+        )
+
+    is_admin = bool(current_user.get("is_admin"))
+    is_creator = playlist.get("creator_id") == str(current_user["id"])
+    if not (is_admin or is_creator):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Forbidden: Only administrators or the creator can change the playlist sync status",
+        )
+
+    db.set_playlist_enabled(playlist_id, req.enabled)
+    updated = db.get_playlist(playlist_id)
+    return {
+        "id": playlist_id,
+        "enabled": bool(updated.get("enabled", True)) if updated else req.enabled,
     }
 
 
@@ -356,3 +557,46 @@ def import_playlist_tracks(
         "targets": targets,
         "status": "imported",
     }
+
+
+@router.post("/import/m3u", status_code=status.HTTP_201_CREATED)
+def import_m3u_playlist(
+    req: M3UImportRequest,
+    current_user: dict[str, Any] = Depends(get_current_user),
+    db: Database = Depends(get_db),
+    config: Config = Depends(get_config),
+    plex_client: Optional[PlexClient] = Depends(get_plex_client),
+) -> dict[str, Any]:
+    """Imports a playlist from raw M3U / M3U8 file contents."""
+    parsed_tracks = parse_m3u(req.content)
+    if not parsed_tracks:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Could not extract any valid tracks from the provided M3U content.",
+        )
+
+    import_items = [
+        TrackImportItem(
+            title=t["title"],
+            artist=t.get("artist", ""),
+            album=t.get("album", ""),
+        )
+        for t in parsed_tracks
+    ]
+
+    import_req = PlaylistDirectImportRequest(
+        name=req.name or "Imported M3U Playlist",
+        service="m3u",
+        description=req.description or "Imported from M3U playlist file",
+        tracks=import_items,
+        targets=req.targets,
+    )
+
+    return import_playlist_tracks(
+        req=import_req,
+        current_user=current_user,
+        db=db,
+        config=config,
+        plex_client=plex_client,
+    )
+

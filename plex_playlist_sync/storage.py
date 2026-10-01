@@ -87,6 +87,7 @@ class Database:
                 (1, self._migration_v1),
                 (2, self._migration_v2),
                 (3, self._migration_v3),
+                (4, self._migration_v4),
             ]
 
             for version, migration_fn in migrations:
@@ -183,6 +184,26 @@ class Database:
             """
             ALTER TABLE playlists ADD COLUMN tracks_json TEXT
             """
+        )
+
+    def _migration_v4(self, cur: sqlite3.Cursor) -> None:
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS match_overrides (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                source_title TEXT NOT NULL,
+                source_artist TEXT NOT NULL,
+                plex_rating_key TEXT NOT NULL,
+                plex_title TEXT NOT NULL,
+                plex_artist TEXT NOT NULL,
+                created_by TEXT REFERENCES users(id),
+                created_at TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP),
+                UNIQUE(source_title, source_artist)
+            )
+            """
+        )
+        cur.execute(
+            "CREATE INDEX IF NOT EXISTS idx_match_overrides_lookup ON match_overrides(source_title, source_artist)"
         )
 
     # -------------------------------------------------------------------------
@@ -389,6 +410,17 @@ class Database:
             self.conn.commit()
             return cur.rowcount > 0
 
+    def set_playlist_enabled(self, playlist_id: str, enabled: bool) -> bool:
+        p_id = str(playlist_id)
+        enabled_val = 1 if enabled else 0
+        with self._lock:
+            cur = self.conn.execute(
+                "UPDATE playlists SET enabled = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                (enabled_val, p_id),
+            )
+            self.conn.commit()
+            return cur.rowcount > 0
+
     # -------------------------------------------------------------------------
     # Playlist Targets
     # -------------------------------------------------------------------------
@@ -551,6 +583,77 @@ class Database:
             cur = self.conn.execute(
                 "DELETE FROM sessions WHERE session_id = ?",
                 (str(session_id),),
+            )
+            self.conn.commit()
+            return cur.rowcount > 0
+
+    # -------------------------------------------------------------------------
+    # Match Overrides (Match Memory)
+    # -------------------------------------------------------------------------
+
+    def add_match_override(
+        self,
+        source_title: str,
+        source_artist: str,
+        plex_rating_key: str,
+        plex_title: str,
+        plex_artist: str,
+        created_by: Optional[str] = None,
+    ) -> dict[str, Any]:
+        s_title = str(source_title).strip()
+        s_artist = str(source_artist).strip()
+        r_key = str(plex_rating_key).strip()
+        p_title = str(plex_title).strip()
+        p_artist = str(plex_artist).strip()
+        c_by = str(created_by) if created_by else None
+
+        with self._lock:
+            self.conn.execute(
+                """
+                INSERT INTO match_overrides (source_title, source_artist, plex_rating_key, plex_title, plex_artist, created_by, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                ON CONFLICT(source_title, source_artist) DO UPDATE SET
+                    plex_rating_key = excluded.plex_rating_key,
+                    plex_title = excluded.plex_title,
+                    plex_artist = excluded.plex_artist,
+                    created_by = excluded.created_by,
+                    created_at = CURRENT_TIMESTAMP
+                """,
+                (s_title, s_artist, r_key, p_title, p_artist, c_by),
+            )
+            self.conn.commit()
+            cur = self.conn.execute(
+                "SELECT id, source_title, source_artist, plex_rating_key, plex_title, plex_artist, created_by, created_at FROM match_overrides WHERE source_title = ? AND source_artist = ?",
+                (s_title, s_artist),
+            )
+            row = cur.fetchone()
+            return dict(row) if row else {}
+
+    def get_match_override(
+        self, source_title: str, source_artist: str
+    ) -> Optional[dict[str, Any]]:
+        s_title = str(source_title).strip()
+        s_artist = str(source_artist).strip()
+        with self._lock:
+            cur = self.conn.execute(
+                "SELECT id, source_title, source_artist, plex_rating_key, plex_title, plex_artist, created_by, created_at FROM match_overrides WHERE LOWER(source_title) = LOWER(?) AND LOWER(source_artist) = LOWER(?)",
+                (s_title, s_artist),
+            )
+            row = cur.fetchone()
+            return dict(row) if row else None
+
+    def list_match_overrides(self) -> list[dict[str, Any]]:
+        with self._lock:
+            cur = self.conn.execute(
+                "SELECT id, source_title, source_artist, plex_rating_key, plex_title, plex_artist, created_by, created_at FROM match_overrides ORDER BY created_at DESC"
+            )
+            return [dict(r) for r in cur.fetchall()]
+
+    def delete_match_override(self, override_id: int) -> bool:
+        with self._lock:
+            cur = self.conn.execute(
+                "DELETE FROM match_overrides WHERE id = ?",
+                (int(override_id),),
             )
             self.conn.commit()
             return cur.rowcount > 0

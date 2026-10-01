@@ -16,9 +16,11 @@ from plex_playlist_sync.api.dependencies import (
     get_current_user,
     get_db,
     get_lidarr_client,
+    get_plex_client,
     verify_feed_access,
 )
 from plex_playlist_sync.clients.lidarr import LidarrClient
+from plex_playlist_sync.clients.plex import PlexClient
 from plex_playlist_sync.config import Config
 from plex_playlist_sync.storage import Database
 
@@ -30,6 +32,14 @@ router = APIRouter()
 class LidarrPushRequest(BaseModel):
     track_ids: Optional[list[int]] = Field(default=None, description="Optional list of specific missing track IDs to push")
     auto_search: Optional[bool] = Field(default=None, description="Override auto_search setting")
+
+
+class MatchOverrideRequest(BaseModel):
+    source_title: str = Field(..., min_length=1, max_length=500, description="Title of the track from source playlist")
+    source_artist: str = Field(..., min_length=1, max_length=500, description="Artist of the track from source playlist")
+    plex_rating_key: str = Field(..., min_length=1, max_length=100, description="Plex ratingKey of matched library track")
+    plex_title: str = Field(..., min_length=1, max_length=500, description="Title of matched track in Plex")
+    plex_artist: str = Field(..., min_length=1, max_length=500, description="Artist of matched track in Plex")
 
 
 def _sanitize_csv_cell(value: Any) -> str:
@@ -328,3 +338,71 @@ def push_missing_to_lidarr(
         "failed": failed_count,
         "results": results,
     }
+
+
+@router.get("/search")
+def search_plex_tracks(
+    query: str = Query(..., min_length=1, description="Query string to search Plex library tracks"),
+    limit: int = Query(default=15, ge=1, le=50),
+    current_user: dict[str, Any] = Depends(get_current_user),
+    plex_client: Optional[PlexClient] = Depends(get_plex_client),
+) -> list[dict[str, Any]]:
+    """Searches the Plex library for tracks to enable manual matching and correction."""
+    if not plex_client:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Plex Media Server client is not configured",
+        )
+    return plex_client.search_library_tracks(query, limit=limit)
+
+
+@router.post("/match", status_code=status.HTTP_201_CREATED)
+def create_match_override(
+    req: MatchOverrideRequest,
+    current_user: dict[str, Any] = Depends(get_current_user),
+    db: Database = Depends(get_db),
+) -> dict[str, Any]:
+    """Records a manual match override (Match Memory) and removes corresponding missing tracks."""
+    override = db.add_match_override(
+        source_title=req.source_title,
+        source_artist=req.source_artist,
+        plex_rating_key=req.plex_rating_key,
+        plex_title=req.plex_title,
+        plex_artist=req.plex_artist,
+        created_by=str(current_user["id"]),
+    )
+    # Remove from missing_tracks where title and artist match
+    with db._lock:
+        db.conn.execute(
+            "DELETE FROM missing_tracks WHERE LOWER(title) = LOWER(?) AND LOWER(artist) = LOWER(?)",
+            (req.source_title.strip(), req.source_artist.strip()),
+        )
+        db.conn.commit()
+
+    return {"status": "matched", "override": override}
+
+
+@router.get("/matches")
+def list_match_overrides(
+    current_user: dict[str, Any] = Depends(get_current_user),
+    db: Database = Depends(get_db),
+) -> list[dict[str, Any]]:
+    """Lists all stored Match Memory overrides."""
+    return db.list_match_overrides()
+
+
+@router.delete("/match/{override_id}")
+def delete_match_override(
+    override_id: int,
+    current_user: dict[str, Any] = Depends(get_current_user),
+    db: Database = Depends(get_db),
+) -> dict[str, Any]:
+    """Deletes a Match Memory override."""
+    success = db.delete_match_override(override_id)
+    if not success:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Match override not found",
+        )
+    return {"status": "deleted", "id": override_id}
+

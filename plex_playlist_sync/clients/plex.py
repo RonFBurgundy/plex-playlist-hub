@@ -143,8 +143,23 @@ class PlexClient:
 
         return home_users
 
-    def match_track(self, track: Track, threshold: float = 0.9) -> Optional[object]:
-        """Search Plex library for a matching track using fuzzy title, artist, and album comparison."""
+    def match_track(
+        self, track: Track, threshold: float = 0.9, db: Optional[Any] = None
+    ) -> Optional[object]:
+        """Search Plex library for a matching track using match overrides or fuzzy title, artist, and album comparison."""
+        # 1. Match Memory override check
+        if db is not None:
+            try:
+                override = db.get_match_override(track.title, track.artist)
+                if override and override.get("plex_rating_key"):
+                    target_key = int(override["plex_rating_key"])
+                    fetched = self.server.fetchItem(target_key)
+                    if fetched:
+                        logger.debug("Applied match memory override for '%s - %s'", track.artist, track.title)
+                        return fetched
+            except Exception as e:
+                logger.debug("Failed match override fetch for '%s': %s", track.title, e)
+
         candidates = []
         try:
             candidates = self.server.search(track.title, mediatype="track", limit=10)
@@ -192,14 +207,14 @@ class PlexClient:
         return None
 
     def match_playlist_tracks(
-        self, tracks: List[Track], threshold: float = 0.9
+        self, tracks: List[Track], threshold: float = 0.9, db: Optional[Any] = None
     ) -> Tuple[List[object], List[Track]]:
         """Match a list of tracks against the Plex library."""
         available_tracks = []
         missing_tracks = []
 
         for track in tracks:
-            match = self.match_track(track, threshold=threshold)
+            match = self.match_track(track, threshold=threshold, db=db)
             if match is not None:
                 available_tracks.append(match)
             else:
@@ -380,6 +395,7 @@ class PlexClient:
         write_missing_as_csv: bool = False,
         data_dir: str = "/data",
         threshold: float = 0.9,
+        db: Optional[Any] = None,
     ) -> List[SyncResult]:
         """Synchronize a playlist across multiple Plex user profiles.
 
@@ -403,7 +419,7 @@ class PlexClient:
             target_usernames,
         )
 
-        matched, missing = self.match_playlist_tracks(playlist.tracks, threshold=threshold)
+        matched, missing = self.match_playlist_tracks(playlist.tracks, threshold=threshold, db=db)
 
         if not matched:
             logger.warning(
@@ -489,3 +505,136 @@ class PlexClient:
                 )
 
         return results
+
+    def search_library_tracks(self, query: str, limit: int = 20) -> list[dict[str, Any]]:
+        """Search tracks in Plex music library for manual matching."""
+        if not query or not query.strip():
+            return []
+        clean_query = query.strip()
+        try:
+            results = self.server.search(clean_query, mediatype="track", limit=limit)
+            tracks_out = []
+            for item in results:
+                artist_name = ""
+                try:
+                    cand_artist = item.artist()
+                    if cand_artist:
+                        artist_name = getattr(cand_artist, "title", "")
+                except Exception:
+                    artist_name = getattr(item, "grandparentTitle", "") or getattr(item, "originalTitle", "")
+
+                album_name = ""
+                try:
+                    cand_album = item.album()
+                    if cand_album:
+                        album_name = getattr(cand_album, "title", "")
+                except Exception:
+                    album_name = getattr(item, "parentTitle", "")
+
+                tracks_out.append(
+                    {
+                        "rating_key": str(getattr(item, "ratingKey", "")),
+                        "title": getattr(item, "title", "Unknown"),
+                        "artist": artist_name or "Unknown Artist",
+                        "album": album_name or "",
+                        "duration": getattr(item, "duration", 0),
+                        "thumb": getattr(item, "thumb", ""),
+                    }
+                )
+            return tracks_out
+        except Exception as e:
+            logger.error("Error searching Plex library tracks for '%s': %s", clean_query, e)
+            return []
+
+    def get_smart_mix_tracks(self, mix_type: str, limit: int = 50) -> list[dict[str, Any]]:
+        """Extract smart mix track recommendations based on local Plex library statistics.
+
+        Supported mix types:
+        - 'heavy_rotation': Top played tracks
+        - 'forgotten_favorites': High-rated / frequently-played tracks not listened to in 6+ months
+        - 'deep_cuts': Unplayed tracks from your top artists
+        """
+        try:
+            sections = getattr(self.server.library, "sections", lambda: [])()
+            music_sections = [s for s in sections if getattr(s, "type", "") == "artist"]
+            if music_sections:
+                music_section = music_sections[0]
+            else:
+                music_section = self.server.library.section("Music")
+        except Exception as e:
+            logger.warning("Could not access music library section: %s", e)
+            return []
+
+        out: list[dict[str, Any]] = []
+
+        try:
+            if mix_type == "heavy_rotation":
+                tracks = music_section.searchTracks(sort="viewCount:desc", limit=limit)
+                for t in tracks:
+                    if getattr(t, "viewCount", 0) and getattr(t, "viewCount", 0) > 0:
+                        out.append(self._format_track_item(t))
+
+            elif mix_type == "forgotten_favorites":
+                import datetime
+
+                cutoff = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=180)
+                tracks = music_section.searchTracks(sort="lastViewedAt:asc", limit=limit * 3)
+                for t in tracks:
+                    last_played = getattr(t, "lastViewedAt", None)
+                    views = getattr(t, "viewCount", 0) or 0
+                    rating = getattr(t, "userRating", 0.0) or 0.0
+                    if (views >= 3 or rating >= 7.0) and (
+                        last_played is None or last_played.replace(tzinfo=datetime.timezone.utc) < cutoff
+                    ):
+                        out.append(self._format_track_item(t))
+                        if len(out) >= limit:
+                            break
+
+            elif mix_type == "deep_cuts":
+                artists = music_section.search(mediatype="artist", sort="viewCount:desc", limit=15)
+                for a in artists:
+                    try:
+                        unplayed = a.tracks(filters={"viewCount": 0})
+                        for ut in unplayed[:4]:
+                            out.append(self._format_track_item(ut))
+                            if len(out) >= limit:
+                                break
+                    except Exception:
+                        continue
+                    if len(out) >= limit:
+                        break
+
+            else:
+                logger.warning("Unknown smart mix type: %s", mix_type)
+        except Exception as e:
+            logger.error("Error generating smart mix '%s': %s", mix_type, e)
+
+        return out
+
+    def _format_track_item(self, t: Any) -> dict[str, Any]:
+        artist_name = getattr(t, "grandparentTitle", "") or getattr(t, "originalTitle", "")
+        if not artist_name:
+            try:
+                a = t.artist()
+                if a:
+                    artist_name = getattr(a, "title", "")
+            except Exception:
+                pass
+
+        album_name = getattr(t, "parentTitle", "")
+        if not album_name:
+            try:
+                al = t.album()
+                if al:
+                    album_name = getattr(al, "title", "")
+            except Exception:
+                pass
+
+        return {
+            "rating_key": str(getattr(t, "ratingKey", "")),
+            "title": getattr(t, "title", "Unknown"),
+            "artist": artist_name or "Unknown Artist",
+            "album": album_name or "",
+            "view_count": getattr(t, "viewCount", 0) or 0,
+            "last_viewed_at": str(getattr(t, "lastViewedAt", "")) if getattr(t, "lastViewedAt", None) else None,
+        }
