@@ -1,0 +1,216 @@
+/* Plex Playlist Hub - Dark Mode Aesthetics (Plex / Seerr Theme) */
+
+:root {
+  --plex-amber: #e5a00d;
+  --plex-amber-hover: #cc8f0c;
+  --plex-amber-glow: rgba(229, 160, 13, 0.25);
+  --surface-bg: #020617;
+  --surface-card: #0f172a;
+  --surface-card-hover: #1e293b;
+  --surface-border: #334155;
+}
+
+/* Base resets & typography */
+body {
+  font-family: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+  background-color: var(--surface-bg);
+  color: #f8fafc;
+  overflow-x: hidden;
+}
+
+/* Custom Dark Scrollbars */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: #090d16;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #232d3f;
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #394867;
+}
+
+/* Glassmorphism styling */
+.glass-panel {
+  background: rgba(15, 23, 42, 0.82);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid rgba(51, 65, 85, 0.5);
+}
+
+.glass-nav {
+  background: rgba(2, 6, 23, 0.88);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border-bottom: 1px solid rgba(30, 41, 59, 0.8);
+}
+
+.glass-modal {
+  background: rgba(15, 23, 42, 0.95);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border: 1px solid rgba(71, 85, 105, 0.4);
+}
+
+/* Plex Amber Accents */
+.text-plex-amber {
+  color: var(--plex-amber);
+}
+
+.bg-plex-amber {
+  background-color: var(--plex-amber);
+}
+
+.bg-plex-amber:hover {
+  background-color: var(--plex-amber-hover);
+}
+
+.border-plex-amber {
+  border-color: var(--plex-amber);
+}
+
+.ring-plex-amber:focus {
+  outline: none;
+  ring: 2px;
+  box-shadow: 0 0 0 2px rgba(229, 160, 13, 0.5);
+}
+
+.shadow-plex-amber {
+  box-shadow: 0 4px 20px -2px var(--plex-amber-glow);
+}
+
+/* Glowing Status Dots */
+.status-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  display: inline-block;
+  position: relative;
+}
+
+.status-dot.idle {
+  background-color: #10b981;
+  box-shadow: 0 0 8px #10b981;
+}
+
+.status-dot.syncing {
+  background-color: var(--plex-amber);
+  box-shadow: 0 0 10px var(--plex-amber);
+  animation: pulse-glow 1.5s infinite ease-in-out;
+}
+
+.status-dot.error {
+  background-color: #f43f5e;
+  box-shadow: 0 0 8px #f43f5e;
+}
+
+.status-dot.offline {
+  background-color: #64748b;
+  box-shadow: none;
+}
+
+@keyframes pulse-glow {
+  0%, 100% {
+    opacity: 1;
+    transform: scale(1);
+    box-shadow: 0 0 8px var(--plex-amber);
+  }
+  50% {
+    opacity: 0.6;
+    transform: scale(1.15);
+    box-shadow: 0 0 16px var(--plex-amber);
+  }
+}
+
+/* Terminal Drawer */
+.terminal-console {
+  font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  background-color: #030712;
+  color: #e2e8f0;
+  border-top: 1px solid #1e293b;
+}
+
+.terminal-line {
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.log-info {
+  color: #34d399;
+}
+
+.log-warning {
+  color: #fbbf24;
+}
+
+.log-error {
+  color: #f87171;
+}
+
+.log-debug {
+  color: #94a3b8;
+}
+
+.log-timestamp {
+  color: #64748b;
+}
+
+/* Interactive Target Checkbox Pills */
+.target-pill {
+  transition: all 0.15s ease-in-out;
+  user-select: none;
+}
+
+.target-pill.active {
+  background-color: rgba(229, 160, 13, 0.18);
+  border-color: rgba(229, 160, 13, 0.6);
+  color: #fbbf24;
+}
+
+.target-pill.inactive {
+  background-color: rgba(30, 41, 59, 0.7);
+  border-color: rgba(51, 65, 85, 0.6);
+  color: #94a3b8;
+}
+
+.target-pill.inactive:hover:not(.disabled) {
+  border-color: rgba(100, 116, 139, 0.8);
+  color: #cbd5e1;
+}
+
+.target-pill.disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* Plex PIN Code Box */
+.pin-code-digit {
+  font-family: 'JetBrains Mono', monospace;
+  font-weight: 700;
+  color: var(--plex-amber);
+  background: #090d16;
+  border: 1px solid rgba(229, 160, 13, 0.35);
+  box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.5);
+  border-radius: 8px;
+  padding: 0.75rem 1.25rem;
+  letter-spacing: 0.25em;
+}
+
+/* Card hover animation */
+.playlist-card {
+  transition: transform 0.2s cubic-bezier(0.16, 1, 0.3, 1), box-shadow 0.2s cubic-bezier(0.16, 1, 0.3, 1), border-color 0.2s ease;
+}
+
+.playlist-card:hover {
+  transform: translateY(-2px);
+  border-color: rgba(229, 160, 13, 0.3);
+  box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.5), 0 0 15px -3px var(--plex-amber-glow);
+}

@@ -2,10 +2,13 @@
 
 import logging
 import os
+from pathlib import Path
 from typing import Optional
 
 from fastapi import APIRouter, FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
+from starlette.staticfiles import StaticFiles
 
 from plex_playlist_sync.api.routes import auth, missing, playlists, sync, users
 from plex_playlist_sync.config import Config
@@ -39,7 +42,15 @@ def create_app(
         response: Response = await call_next(request)
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["X-Frame-Options"] = "DENY"
-        response.headers["Content-Security-Policy"] = "default-src 'self'; frame-ancestors 'none'"
+        response.headers["Content-Security-Policy"] = (
+            "default-src 'self'; script-src 'self' 'unsafe-eval' 'unsafe-inline' "
+            "https://cdn.tailwindcss.com https://unpkg.com https://cdn.jsdelivr.net; "
+            "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
+            "font-src 'self' https://fonts.gstatic.com; "
+            "img-src 'self' data: https:; "
+            "connect-src 'self'; "
+            "frame-ancestors 'none'"
+        )
         response.headers["X-XSS-Protection"] = "1; mode=block"
         response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
         response.headers["Permissions-Policy"] = "geolocation=(), microphone=(), camera=()"
@@ -78,6 +89,16 @@ def create_app(
         return {"status": "ok"}
 
     app.include_router(api_router)
+
+    # 4. Mount Static Directory & Serve Root
+    static_dir = Path(__file__).resolve().parent.parent / "static"
+    static_dir.mkdir(parents=True, exist_ok=True)
+    app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
+
+    @app.get("/", response_class=FileResponse, include_in_schema=False)
+    def serve_index() -> FileResponse:
+        index_file = static_dir / "index.html"
+        return FileResponse(str(index_file), media_type="text/html")
 
     return app
 

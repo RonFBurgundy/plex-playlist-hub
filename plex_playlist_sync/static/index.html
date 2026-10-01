@@ -1,0 +1,942 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Plex Playlist Hub</title>
+
+  <!-- Typography: Inter & JetBrains Mono -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+
+  <!-- Tailwind CSS via CDN -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          colors: {
+            plex: {
+              DEFAULT: '#e5a00d',
+              amber: '#e5a00d',
+              hover: '#cc8f0c',
+              dark: '#b37d0a',
+              glow: 'rgba(229, 160, 13, 0.25)'
+            }
+          },
+          fontFamily: {
+            sans: ['Inter', 'sans-serif'],
+            mono: ['"JetBrains Mono"', 'monospace']
+          }
+        }
+      }
+    }
+  </script>
+
+  <!-- Custom Plex/Seerr Styles -->
+  <link rel="stylesheet" href="/static/style.css">
+
+  <!-- Alpine.js Application Controller -->
+  <script src="/static/app.js"></script>
+  <!-- Alpine.js Library -->
+  <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
+</head>
+<body class="bg-slate-950 text-slate-100 min-h-screen flex flex-col font-sans selection:bg-[#e5a00d] selection:text-slate-950" x-data="plexHubApp()">
+
+  <!-- ================= TOP NAVIGATION BAR ================= -->
+  <header class="sticky top-0 z-40 glass-nav border-b border-slate-800">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
+      
+      <!-- Brand & Status -->
+      <div class="flex items-center space-x-4">
+        <div class="flex items-center space-x-3 cursor-pointer" @click="searchQuery = ''; serviceFilter = 'all'">
+          <!-- Hub Logo Icon -->
+          <div class="w-10 h-10 rounded-xl bg-gradient-to-br from-amber-500 to-amber-600 flex items-center justify-center shadow-lg shadow-amber-500/20">
+            <svg class="w-6 h-6 text-slate-950" fill="currentColor" viewBox="0 0 24 24">
+              <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 14.5v-9l6 4.5-6 4.5z"/>
+            </svg>
+          </div>
+          <div>
+            <div class="flex items-center space-x-2">
+              <h1 class="text-lg font-bold tracking-tight text-white">Plex Playlist Hub</h1>
+              <span class="text-[10px] uppercase tracking-wider font-bold bg-[#e5a00d]/20 text-[#e5a00d] px-2 py-0.5 rounded-full border border-[#e5a00d]/40">v1.0</span>
+            </div>
+            <p class="text-xs text-slate-400 hidden sm:block">Automated Multi-User Music Sync</p>
+          </div>
+        </div>
+
+        <!-- Live Sync Status Badge -->
+        <div class="hidden md:flex items-center space-x-2 px-3 py-1 rounded-full bg-slate-900 border border-slate-800 text-xs text-slate-300">
+          <span :class="syncStatus.is_syncing ? 'status-dot syncing' : 'status-dot idle'"></span>
+          <span x-text="syncStatus.is_syncing ? 'Syncing...' : 'Idle'"></span>
+          <span class="text-slate-600">|</span>
+          <span class="text-slate-400 text-[11px]" x-text="'Last: ' + formatRelativeTime(syncStatus.last_run_at)"></span>
+        </div>
+      </div>
+
+      <!-- Action Buttons & User Menu -->
+      <div class="flex items-center space-x-3">
+        <template x-if="isAuthenticated">
+          <div class="flex items-center space-x-2.5">
+            <!-- Sync Now Button -->
+            <button @click="triggerSync()" 
+                    :disabled="syncStatus.is_syncing" 
+                    title="Trigger Immediate Sync Cycle"
+                    class="flex items-center space-x-1.5 px-3 py-1.5 text-xs font-medium rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 transition disabled:opacity-50 disabled:cursor-not-allowed">
+              <svg class="w-3.5 h-3.5" :class="syncStatus.is_syncing ? 'animate-spin text-[#e5a00d]' : ''" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path>
+              </svg>
+              <span class="hidden sm:inline" x-text="syncStatus.is_syncing ? 'Syncing...' : 'Sync Now'"></span>
+            </button>
+
+            <!-- Logs / Terminal Drawer Toggle -->
+            <button @click="toggleTerminal()" 
+                    title="Toggle Live Log Terminal"
+                    class="flex items-center space-x-1.5 px-3 py-1.5 text-xs font-medium rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 transition relative">
+              <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"></path>
+              </svg>
+              <span class="hidden sm:inline">Logs</span>
+              <span v-if="sseConnected" class="w-2 h-2 rounded-full bg-emerald-500 absolute -top-1 -right-1" title="Connected to SSE log stream"></span>
+            </button>
+
+            <!-- Add Playlist Button -->
+            <button @click="openAddModal()" 
+                    class="flex items-center space-x-1.5 px-3.5 py-1.5 text-xs font-semibold rounded-lg bg-[#e5a00d] hover:bg-[#cc8f0c] text-slate-950 transition shadow-md shadow-[#e5a00d]/15">
+              <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"></path>
+              </svg>
+              <span>Add Playlist</span>
+            </button>
+
+            <!-- User Avatar & Logout Dropdown -->
+            <div class="flex items-center pl-2 border-l border-slate-800 space-x-2">
+              <div class="w-8 h-8 rounded-full bg-slate-800 border border-slate-700 flex items-center justify-center font-bold text-xs text-[#e5a00d]"
+                   :title="currentUser?.username">
+                <span x-text="currentUser?.username ? currentUser.username.charAt(0).toUpperCase() : 'U'"></span>
+              </div>
+              <div class="hidden lg:block text-left text-xs">
+                <div class="font-medium text-slate-200" x-text="currentUser?.username"></div>
+                <div class="text-[10px] text-slate-400 capitalize" x-text="currentUser?.is_admin ? 'Admin' : 'Plex User'"></div>
+              </div>
+              <button @click="logout()" 
+                      title="Log Out"
+                      class="p-1.5 rounded-lg text-slate-400 hover:text-rose-400 hover:bg-slate-800 transition">
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1"></path>
+                </svg>
+              </button>
+            </div>
+          </div>
+        </template>
+
+        <template x-if="!isAuthenticated && !isLoading">
+          <button @click="startPinFlow()" 
+                  class="flex items-center space-x-2 px-4 py-2 text-xs font-semibold rounded-lg bg-[#e5a00d] hover:bg-[#cc8f0c] text-slate-950 transition shadow-lg shadow-[#e5a00d]/20">
+            <svg class="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
+              <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 14.5v-9l6 4.5-6 4.5z"/>
+            </svg>
+            <span>Sign In with Plex</span>
+          </button>
+        </template>
+      </div>
+
+    </div>
+  </header>
+
+  <!-- ================= MAIN DASHBOARD BODY ================= -->
+  <main class="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-8">
+    
+    <!-- UNAUTHENTICATED HERO PROMPT -->
+    <template x-if="!isAuthenticated && !isLoading">
+      <div class="glass-panel rounded-2xl p-8 sm:p-12 text-center max-w-2xl mx-auto space-y-6 shadow-2xl border border-slate-800">
+        <div class="w-16 h-16 rounded-2xl bg-[#e5a00d]/10 border border-[#e5a00d]/30 text-[#e5a00d] flex items-center justify-center mx-auto shadow-inner">
+          <svg class="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3"></path>
+          </svg>
+        </div>
+        <div class="space-y-2">
+          <h2 class="text-2xl sm:text-3xl font-bold tracking-tight text-white">Sign In to Plex Playlist Hub</h2>
+          <p class="text-slate-400 text-sm max-w-md mx-auto">
+            Authorize with your Plex account to synchronize your favorite Spotify and Deezer playlists with your Plex Media Server and Home users.
+          </p>
+        </div>
+
+        <!-- PIN Box -->
+        <template x-if="pin">
+          <div class="bg-slate-950/80 rounded-xl p-6 border border-slate-800/80 space-y-4 max-w-md mx-auto">
+            <div class="text-xs uppercase tracking-wider text-slate-400 font-semibold">Your Plex Verification Code</div>
+            <div class="pin-code-digit text-3xl font-mono text-[#e5a00d] select-all" x-text="pin.code"></div>
+            
+            <div class="pt-2">
+              <a :href="pin.auth_url" 
+                 target="_blank" 
+                 rel="noopener noreferrer"
+                 class="inline-flex items-center justify-center space-x-2 w-full px-5 py-3 rounded-lg bg-[#e5a00d] hover:bg-[#cc8f0c] text-slate-950 font-bold text-sm transition shadow-lg shadow-[#e5a00d]/20">
+                <span>Authorize at plex.tv</span>
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"></path>
+                </svg>
+              </a>
+            </div>
+
+            <!-- Polling Radar Indicator -->
+            <div class="flex items-center justify-center space-x-2 text-xs text-slate-400 pt-2">
+              <span class="status-dot syncing"></span>
+              <span>Waiting for approval on plex.tv...</span>
+            </div>
+          </div>
+        </template>
+
+        <template x-if="pinError">
+          <div class="p-4 rounded-xl bg-rose-500/10 border border-rose-500/30 text-rose-400 text-xs max-w-md mx-auto flex items-start space-x-3">
+            <svg class="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"></path>
+            </svg>
+            <div class="text-left" x-text="pinError"></div>
+          </div>
+        </template>
+      </div>
+    </template>
+
+    <!-- AUTHENTICATED DASHBOARD CONTENT -->
+    <template x-if="isAuthenticated">
+      <div class="space-y-8">
+        
+        <!-- 1. Top Summary Stat Cards Grid -->
+        <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+          
+          <!-- Stat 1: Total Playlists -->
+          <div class="glass-panel rounded-xl p-5 border border-slate-800 flex items-center justify-between">
+            <div class="space-y-1">
+              <span class="text-xs uppercase tracking-wider font-semibold text-slate-400">Total Playlists</span>
+              <div class="text-2xl font-bold text-white" x-text="playlists.length"></div>
+              <span class="text-xs text-slate-500">Tracked for sync</span>
+            </div>
+            <div class="w-12 h-12 rounded-xl bg-amber-500/10 border border-amber-500/20 text-[#e5a00d] flex items-center justify-center">
+              <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3"></path>
+              </svg>
+            </div>
+          </div>
+
+          <!-- Stat 2: Target Users -->
+          <div class="glass-panel rounded-xl p-5 border border-slate-800 flex items-center justify-between">
+            <div class="space-y-1">
+              <div class="flex items-center space-x-1.5">
+                <span class="text-xs uppercase tracking-wider font-semibold text-slate-400">Discovered Users</span>
+                <button v-if="currentUser?.is_admin" 
+                        @click="refreshUsers()" 
+                        title="Refresh Users from Plex Server"
+                        class="text-slate-500 hover:text-[#e5a00d] transition">
+                  <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path>
+                  </svg>
+                </button>
+              </div>
+              <div class="text-2xl font-bold text-white" x-text="users.length"></div>
+              <span class="text-xs text-slate-500">Plex Home members</span>
+            </div>
+            <div class="w-12 h-12 rounded-xl bg-blue-500/10 border border-blue-500/20 text-blue-400 flex items-center justify-center">
+              <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z"></path>
+              </svg>
+            </div>
+          </div>
+
+          <!-- Stat 3: Matched Tracks -->
+          <div class="glass-panel rounded-xl p-5 border border-slate-800 flex items-center justify-between">
+            <div class="space-y-1">
+              <span class="text-xs uppercase tracking-wider font-semibold text-slate-400">Matched Tracks</span>
+              <div class="text-2xl font-bold text-emerald-400" x-text="syncStatus.last_run_stats?.total_matched || 0"></div>
+              <span class="text-xs text-slate-500">In Plex Music Library</span>
+            </div>
+            <div class="w-12 h-12 rounded-xl bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 flex items-center justify-center">
+              <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+              </svg>
+            </div>
+          </div>
+
+          <!-- Stat 4: Missing Tracks (Clickable shortcut) -->
+          <div @click="openMissingModal()" 
+               class="glass-panel rounded-xl p-5 border border-slate-800 flex items-center justify-between cursor-pointer hover:border-amber-500/40 transition group">
+            <div class="space-y-1">
+              <div class="flex items-center space-x-1.5">
+                <span class="text-xs uppercase tracking-wider font-semibold text-slate-400 group-hover:text-amber-400 transition">Missing Tracks</span>
+                <span class="text-[10px] text-slate-500 bg-slate-800 px-1.5 py-0.5 rounded">View</span>
+              </div>
+              <div class="text-2xl font-bold" 
+                   :class="(missingTracksCount || syncStatus.last_run_stats?.total_missing) > 0 ? 'text-amber-400' : 'text-slate-300'"
+                   x-text="missingTracksCount || syncStatus.last_run_stats?.total_missing || 0"></div>
+              <span class="text-xs text-slate-500 group-hover:text-slate-400 transition">Click to view & export</span>
+            </div>
+            <div class="w-12 h-12 rounded-xl bg-amber-500/10 border border-amber-500/20 text-amber-400 flex items-center justify-center group-hover:scale-105 transition">
+              <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"></path>
+              </svg>
+            </div>
+          </div>
+
+        </div>
+
+        <!-- 2. Controls & Filter Bar -->
+        <div class="glass-panel rounded-xl p-4 border border-slate-800 flex flex-col md:flex-row md:items-center justify-between gap-4">
+          <!-- Search & Filter -->
+          <div class="flex flex-1 flex-col sm:flex-row items-stretch sm:items-center space-y-2 sm:space-y-0 sm:space-x-3">
+            <!-- Search Input -->
+            <div class="relative flex-1">
+              <svg class="w-4 h-4 text-slate-400 absolute left-3 top-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"></path>
+              </svg>
+              <input type="text" 
+                     x-model="searchQuery" 
+                     placeholder="Filter playlists by title, service, or ID..." 
+                     class="w-full pl-9 pr-4 py-2 bg-slate-900 border border-slate-700/80 rounded-lg text-xs text-slate-200 placeholder-slate-500 focus:outline-none focus:border-[#e5a00d] transition">
+            </div>
+
+            <!-- Service Filter Tabs -->
+            <div class="flex items-center bg-slate-900 p-1 rounded-lg border border-slate-700/80 space-x-1">
+              <button @click="serviceFilter = 'all'" 
+                      :class="serviceFilter === 'all' ? 'bg-[#e5a00d] text-slate-950 font-bold' : 'text-slate-400 hover:text-white'"
+                      class="px-3 py-1 text-xs rounded-md transition">All</button>
+              <button @click="serviceFilter = 'spotify'" 
+                      :class="serviceFilter === 'spotify' ? 'bg-[#1DB954] text-slate-950 font-bold' : 'text-slate-400 hover:text-white'"
+                      class="px-3 py-1 text-xs rounded-md transition">Spotify</button>
+              <button @click="serviceFilter = 'deezer'" 
+                      :class="serviceFilter === 'deezer' ? 'bg-indigo-500 text-white font-bold' : 'text-slate-400 hover:text-white'"
+                      class="px-3 py-1 text-xs rounded-md transition">Deezer</button>
+            </div>
+          </div>
+
+          <!-- View Mode Toggle -->
+          <div class="flex items-center space-x-2 self-end md:self-auto">
+            <span class="text-xs text-slate-400">View:</span>
+            <div class="flex items-center bg-slate-900 p-1 rounded-lg border border-slate-700/80 space-x-1">
+              <button @click="viewMode = 'grid'" 
+                      :class="viewMode === 'grid' ? 'bg-slate-700 text-white' : 'text-slate-400 hover:text-white'"
+                      title="Grid View"
+                      class="p-1.5 rounded-md transition">
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2V6zM14 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2V6zM4 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2v-2zM14 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2v-2z"></path>
+                </svg>
+              </button>
+              <button @click="viewMode = 'table'" 
+                      :class="viewMode === 'table' ? 'bg-slate-700 text-white' : 'text-slate-400 hover:text-white'"
+                      title="Table View"
+                      class="p-1.5 rounded-md transition">
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 10h16M4 14h16M4 18h16"></path>
+                </svg>
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <!-- 3. Main Playlists Content Area -->
+        <template x-if="filteredPlaylists.length === 0">
+          <div class="glass-panel rounded-2xl p-12 text-center max-w-lg mx-auto space-y-4 border border-slate-800">
+            <div class="w-12 h-12 rounded-xl bg-slate-800 text-slate-500 flex items-center justify-center mx-auto">
+              <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3"></path>
+              </svg>
+            </div>
+            <div class="space-y-1">
+              <h3 class="text-base font-semibold text-white">No playlists found</h3>
+              <p class="text-xs text-slate-400">
+                <span x-show="searchQuery">No playlists match your current filter.</span>
+                <span x-show="!searchQuery">Get started by importing your first playlist.</span>
+              </p>
+            </div>
+            <button @click="openAddModal()" 
+                    class="inline-flex items-center space-x-1.5 px-4 py-2 text-xs font-semibold rounded-lg bg-[#e5a00d] hover:bg-[#cc8f0c] text-slate-950 transition">
+              <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"></path>
+              </svg>
+              <span>Add Your First Playlist</span>
+            </button>
+          </div>
+        </template>
+
+        <!-- GRID VIEW -->
+        <template x-if="viewMode === 'grid' && filteredPlaylists.length > 0">
+          <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+            <template x-for="playlist in filteredPlaylists" :key="playlist.id">
+              <div class="playlist-card glass-panel rounded-xl border border-slate-800 overflow-hidden flex flex-col justify-between">
+                
+                <!-- Card Header with Cover Art -->
+                <div class="p-5 space-y-4">
+                  <div class="flex items-start space-x-4">
+                    <!-- Artwork Thumbnail -->
+                    <div class="w-20 h-20 rounded-lg overflow-hidden bg-slate-800 flex-shrink-0 relative shadow-md border border-slate-700/60">
+                      <img :src="playlist.poster_url || '/static/placeholder.svg'" 
+                           :alt="playlist.name" 
+                           class="w-full h-full object-cover"
+                           onerror="this.onerror=null; this.src='data:image/svg+xml;utf8,<svg xmlns=\'http://www.w3.org/2000/svg\' width=\'100\' height=\'100\' viewBox=\'0 0 24 24\' fill=\'%23e5a00d\'><rect width=\'24\' height=\'24\' fill=\'%230f172a\'/><path d=\'M12 3v10.55c-.59-.34-1.27-.55-2-.55-2.21 0-4 1.79-4 4s1.79 4 4 4 4-1.79 4-4V7h4V3h-6z\'/></svg>'">
+                      
+                      <!-- Service Badge Corner -->
+                      <span class="absolute top-1 right-1 px-1.5 py-0.5 rounded text-[9px] font-bold uppercase"
+                            :class="playlist.service === 'spotify' ? 'bg-[#1DB954] text-slate-950' : 'bg-indigo-500 text-white'"
+                            x-text="playlist.service || 'Spotify'"></span>
+                    </div>
+
+                    <!-- Details -->
+                    <div class="flex-1 min-w-0 space-y-1">
+                      <h4 class="text-sm font-semibold text-white truncate" :title="playlist.name" x-text="playlist.name"></h4>
+                      <p class="text-xs text-slate-400 line-clamp-2" :title="playlist.description" x-text="playlist.description || 'No description provided.'"></p>
+                      
+                      <!-- Status & Last Sync -->
+                      <div class="pt-1 flex items-center space-x-2 text-[11px]">
+                        <span class="inline-flex items-center space-x-1 px-2 py-0.5 rounded-full text-[10px]"
+                              :class="{
+                                'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20': playlist.sync_status === 'success',
+                                'bg-rose-500/10 text-rose-400 border border-rose-500/20': playlist.sync_status === 'failed' || playlist.sync_status === 'error',
+                                'bg-slate-800 text-slate-400 border border-slate-700': playlist.sync_status === 'never_synced' || playlist.sync_status === 'unconfigured'
+                              }">
+                          <span class="w-1.5 h-1.5 rounded-full" 
+                                :class="{
+                                  'bg-emerald-400': playlist.sync_status === 'success',
+                                  'bg-rose-400': playlist.sync_status === 'failed' || playlist.sync_status === 'error',
+                                  'bg-slate-500': playlist.sync_status === 'never_synced' || playlist.sync_status === 'unconfigured'
+                                }"></span>
+                          <span class="capitalize" x-text="(playlist.sync_status || 'Never synced').replace('_', ' ')"></span>
+                        </span>
+                        <span class="text-slate-500" x-text="formatRelativeTime(playlist.last_synced_at)"></span>
+                      </div>
+                    </div>
+                  </div>
+
+                  <!-- Per-User Target Checkbox Pills -->
+                  <div class="space-y-2 pt-2 border-t border-slate-800/80">
+                    <div class="flex items-center justify-between text-[11px] text-slate-400">
+                      <span class="font-medium">Sync Targets:</span>
+                      <span class="text-[10px] text-slate-500" x-text="(playlist.targets || []).length + ' users'"></span>
+                    </div>
+
+                    <div class="flex flex-wrap gap-1.5">
+                      <template x-for="user in users" :key="user.id">
+                        <button type="button"
+                                @click="toggleUserTarget(playlist, user.id)"
+                                :disabled="!canToggleTarget(user.id)"
+                                :title="canToggleTarget(user.id) ? 'Toggle sync for ' + user.username : 'Only admin can toggle other users'"
+                                :class="{
+                                  'target-pill active': (playlist.targets || []).map(String).includes(String(user.id)),
+                                  'target-pill inactive': !(playlist.targets || []).map(String).includes(String(user.id)),
+                                  'disabled': !canToggleTarget(user.id)
+                                }"
+                                class="px-2.5 py-1 rounded-full text-xs border flex items-center space-x-1 transition">
+                          <!-- Checkmark icon -->
+                          <svg v-if="(playlist.targets || []).map(String).includes(String(user.id))" 
+                               class="w-3 h-3 text-[#e5a00d]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M5 13l4 4L19 7"></path>
+                          </svg>
+                          <span x-text="user.username"></span>
+                        </button>
+                      </template>
+                    </div>
+                  </div>
+                </div>
+
+                <!-- Card Footer Actions -->
+                <div class="p-3 bg-slate-950/40 border-t border-slate-800/80 flex items-center justify-between">
+                  <button @click="openMissingModal(playlist.id)" 
+                          class="inline-flex items-center space-x-1 text-xs text-slate-400 hover:text-amber-400 transition">
+                    <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                    </svg>
+                    <span>View Missing</span>
+                  </button>
+
+                  <template x-if="canDeletePlaylist(playlist)">
+                    <button @click="deletePlaylist(playlist)" 
+                            title="Delete Playlist"
+                            class="p-1 rounded text-slate-500 hover:text-rose-400 hover:bg-slate-800 transition">
+                      <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path>
+                      </svg>
+                    </button>
+                  </template>
+                </div>
+
+              </div>
+            </template>
+          </div>
+        </template>
+
+        <!-- TABLE VIEW -->
+        <template x-if="viewMode === 'table' && filteredPlaylists.length > 0">
+          <div class="glass-panel rounded-xl border border-slate-800 overflow-x-auto">
+            <table class="w-full text-left text-xs">
+              <thead class="bg-slate-900/80 border-b border-slate-800 text-slate-400 uppercase tracking-wider text-[11px]">
+                <tr>
+                  <th class="py-3 px-4">Playlist</th>
+                  <th class="py-3 px-4">Service</th>
+                  <th class="py-3 px-4">Sync Targets</th>
+                  <th class="py-3 px-4">Status</th>
+                  <th class="py-3 px-4">Last Synced</th>
+                  <th class="py-3 px-4 text-right">Actions</th>
+                </tr>
+              </thead>
+              <tbody class="divide-y divide-slate-800/60">
+                <template x-for="playlist in filteredPlaylists" :key="playlist.id">
+                  <tr class="hover:bg-slate-900/40 transition">
+                    <!-- Title & Poster -->
+                    <td class="py-3 px-4">
+                      <div class="flex items-center space-x-3">
+                        <div class="w-10 h-10 rounded overflow-hidden bg-slate-800 flex-shrink-0 border border-slate-700">
+                          <img :src="playlist.poster_url || '/static/placeholder.svg'" 
+                               :alt="playlist.name" 
+                               class="w-full h-full object-cover"
+                               onerror="this.onerror=null; this.src='data:image/svg+xml;utf8,<svg xmlns=\'http://www.w3.org/2000/svg\' width=\'100\' height=\'100\' viewBox=\'0 0 24 24\' fill=\'%23e5a00d\'><rect width=\'24\' height=\'24\' fill=\'%230f172a\'/><path d=\'M12 3v10.55c-.59-.34-1.27-.55-2-.55-2.21 0-4 1.79-4 4s1.79 4 4 4 4-1.79 4-4V7h4V3h-6z\'/></svg>'">
+                        </div>
+                        <div>
+                          <div class="font-medium text-white truncate max-w-xs" :title="playlist.name" x-text="playlist.name"></div>
+                          <div class="text-[11px] text-slate-500 font-mono" x-text="playlist.id"></div>
+                        </div>
+                      </div>
+                    </td>
+
+                    <!-- Service Badge -->
+                    <td class="py-3 px-4">
+                      <span class="px-2 py-0.5 rounded text-[10px] font-bold uppercase"
+                            :class="playlist.service === 'spotify' ? 'bg-[#1DB954] text-slate-950' : 'bg-indigo-500 text-white'"
+                            x-text="playlist.service || 'Spotify'"></span>
+                    </td>
+
+                    <!-- Target User Pills -->
+                    <td class="py-3 px-4">
+                      <div class="flex flex-wrap gap-1">
+                        <template x-for="user in users" :key="user.id">
+                          <button type="button"
+                                  @click="toggleUserTarget(playlist, user.id)"
+                                  :disabled="!canToggleTarget(user.id)"
+                                  :class="{
+                                    'target-pill active': (playlist.targets || []).map(String).includes(String(user.id)),
+                                    'target-pill inactive': !(playlist.targets || []).map(String).includes(String(user.id)),
+                                    'disabled': !canToggleTarget(user.id)
+                                  }"
+                                  class="px-2 py-0.5 rounded-full text-[10px] border flex items-center space-x-1">
+                            <span x-text="user.username"></span>
+                          </button>
+                        </template>
+                      </div>
+                    </td>
+
+                    <!-- Status -->
+                    <td class="py-3 px-4">
+                      <span class="inline-flex items-center space-x-1 px-2 py-0.5 rounded-full text-[10px]"
+                            :class="{
+                              'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20': playlist.sync_status === 'success',
+                              'bg-rose-500/10 text-rose-400 border border-rose-500/20': playlist.sync_status === 'failed' || playlist.sync_status === 'error',
+                              'bg-slate-800 text-slate-400 border border-slate-700': playlist.sync_status === 'never_synced' || playlist.sync_status === 'unconfigured'
+                            }">
+                        <span class="capitalize" x-text="(playlist.sync_status || 'Never synced').replace('_', ' ')"></span>
+                      </span>
+                    </td>
+
+                    <!-- Last Synced -->
+                    <td class="py-3 px-4 text-slate-400" x-text="formatRelativeTime(playlist.last_synced_at)"></td>
+
+                    <!-- Actions -->
+                    <td class="py-3 px-4 text-right">
+                      <div class="flex items-center justify-end space-x-2">
+                        <button @click="openMissingModal(playlist.id)" 
+                                title="View Missing Tracks"
+                                class="p-1 rounded text-slate-400 hover:text-amber-400 transition">
+                          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                          </svg>
+                        </button>
+                        <template x-if="canDeletePlaylist(playlist)">
+                          <button @click="deletePlaylist(playlist)" 
+                                  title="Delete Playlist"
+                                  class="p-1 rounded text-slate-400 hover:text-rose-400 transition">
+                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path>
+                            </svg>
+                          </button>
+                        </template>
+                      </div>
+                    </td>
+                  </tr>
+                </template>
+              </tbody>
+            </table>
+          </div>
+        </template>
+
+      </div>
+    </template>
+  </main>
+
+  <!-- ================= ADD PLAYLIST MODAL ================= -->
+  <div x-show="isAddModalOpen" 
+       x-transition.opacity.duration.200ms
+       class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-sm"
+       style="display: none;">
+    <div @click.away="closeAddModal()" 
+         class="glass-modal rounded-2xl w-full max-w-lg p-6 space-y-6 shadow-2xl border border-slate-700/80">
+      
+      <!-- Modal Header -->
+      <div class="flex items-center justify-between border-b border-slate-800 pb-4">
+        <div>
+          <h3 class="text-lg font-bold text-white">Add Playlist</h3>
+          <p class="text-xs text-slate-400">Import a Spotify or Deezer playlist into your hub</p>
+        </div>
+        <button @click="closeAddModal()" class="p-1 rounded text-slate-400 hover:text-white transition">
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
+          </svg>
+        </button>
+      </div>
+
+      <!-- Modal Form -->
+      <form @submit.prevent="submitAddPlaylist()" class="space-y-4">
+        
+        <!-- Input: URL or ID -->
+        <div class="space-y-1.5">
+          <label class="block text-xs font-semibold uppercase tracking-wider text-slate-300">
+            Playlist URL or ID <span class="text-[#e5a00d]">*</span>
+          </label>
+          <div class="relative">
+            <input type="text" 
+                   x-model="addForm.url_or_id" 
+                   required
+                   placeholder="e.g. https://open.spotify.com/playlist/37i9dQZF1DXcBWIGoYBM5M"
+                   class="w-full px-3.5 py-2.5 bg-slate-900 border border-slate-700 rounded-lg text-xs text-slate-100 placeholder-slate-500 focus:outline-none focus:border-[#e5a00d] transition">
+          </div>
+          <!-- Auto-detection Badge -->
+          <div class="flex items-center justify-between text-[11px] pt-1">
+            <span class="text-slate-400">Formats: Spotify / Deezer web URLs, URIs, or IDs.</span>
+            <span v-if="detectedServiceHint()" 
+                  class="font-semibold text-[#e5a00d]" 
+                  x-text="detectedServiceHint()"></span>
+          </div>
+        </div>
+
+        <!-- Service Hint Dropdown (Optional override) -->
+        <div class="space-y-1.5">
+          <label class="block text-xs font-semibold uppercase tracking-wider text-slate-300">
+            Service (Optional Hint)
+          </label>
+          <select x-model="addForm.service" 
+                  class="w-full px-3.5 py-2 bg-slate-900 border border-slate-700 rounded-lg text-xs text-slate-200 focus:outline-none focus:border-[#e5a00d] transition">
+            <option value="">Auto-detect from URL</option>
+            <option value="spotify">Spotify</option>
+            <option value="deezer">Deezer</option>
+          </select>
+        </div>
+
+        <!-- Initial Target Checkboxes -->
+        <div class="space-y-2 pt-2 border-t border-slate-800">
+          <div class="flex items-center justify-between">
+            <label class="block text-xs font-semibold uppercase tracking-wider text-slate-300">
+              Assign to Plex Home Users
+            </label>
+            <div class="space-x-2 text-[11px]">
+              <button type="button" @click="selectAllAddTargets()" class="text-[#e5a00d] hover:underline">Select All</button>
+              <span class="text-slate-600">|</span>
+              <button type="button" @click="clearAllAddTargets()" class="text-slate-400 hover:underline">Clear</button>
+            </div>
+          </div>
+
+          <div class="grid grid-cols-2 gap-2 max-h-36 overflow-y-auto p-1 bg-slate-950/40 rounded-lg border border-slate-800/80">
+            <template x-for="user in users" :key="user.id">
+              <label class="flex items-center space-x-2 p-2 rounded hover:bg-slate-800/50 cursor-pointer text-xs">
+                <input type="checkbox" 
+                       :value="String(user.id)" 
+                       :checked="addForm.targets.includes(String(user.id))"
+                       @change="toggleAddFormTarget(user.id)"
+                       class="rounded border-slate-700 bg-slate-900 text-[#e5a00d] focus:ring-[#e5a00d]">
+                <span class="text-slate-200" x-text="user.username"></span>
+              </label>
+            </template>
+          </div>
+        </div>
+
+        <!-- Error Feedback -->
+        <template x-if="addError">
+          <div class="p-3 rounded-lg bg-rose-500/10 border border-rose-500/30 text-rose-400 text-xs" x-text="addError"></div>
+        </template>
+
+        <!-- Submit Button -->
+        <div class="flex items-center justify-end space-x-3 pt-4 border-t border-slate-800">
+          <button type="button" @click="closeAddModal()" class="px-4 py-2 text-xs font-medium text-slate-300 hover:text-white transition">Cancel</button>
+          <button type="submit" 
+                  :disabled="addLoading" 
+                  class="flex items-center space-x-2 px-5 py-2 text-xs font-bold rounded-lg bg-[#e5a00d] hover:bg-[#cc8f0c] text-slate-950 transition shadow-md shadow-[#e5a00d]/15 disabled:opacity-50">
+            <svg v-if="addLoading" class="animate-spin w-4 h-4 text-slate-950" fill="none" viewBox="0 0 24 24">
+              <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+              <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z"></path>
+            </svg>
+            <span x-text="addLoading ? 'Adding...' : 'Add Playlist'"></span>
+          </button>
+        </div>
+
+      </form>
+    </div>
+  </div>
+
+  <!-- ================= MISSING TRACKS MODAL / DRAWER ================= -->
+  <div x-show="isMissingModalOpen" 
+       x-transition.opacity.duration.200ms
+       class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-sm"
+       style="display: none;">
+    <div @click.away="closeMissingModal()" 
+         class="glass-modal rounded-2xl w-full max-w-4xl max-h-[85vh] p-6 flex flex-col shadow-2xl border border-slate-700/80 space-y-4">
+      
+      <!-- Modal Header -->
+      <div class="flex items-center justify-between border-b border-slate-800 pb-3 flex-shrink-0">
+        <div>
+          <div class="flex items-center space-x-2">
+            <h3 class="text-lg font-bold text-white">Unmatched Tracks</h3>
+            <span class="text-xs bg-amber-500/20 text-[#e5a00d] px-2 py-0.5 rounded-full font-bold border border-amber-500/40"
+                  x-text="filteredMissingTracks.length + ' tracks'"></span>
+          </div>
+          <p class="text-xs text-slate-400">Tracks not currently matched in your local Plex Music Library</p>
+        </div>
+        <div class="flex items-center space-x-2">
+          <!-- Export Safe CSV -->
+          <button @click="exportMissingCsv()" 
+                  class="flex items-center space-x-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 transition">
+            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"></path>
+            </svg>
+            <span>Export Safe CSV</span>
+          </button>
+          <button @click="closeMissingModal()" class="p-1 rounded text-slate-400 hover:text-white transition">
+            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
+            </svg>
+          </button>
+        </div>
+      </div>
+
+      <!-- Filter Bar -->
+      <div class="flex items-center space-x-3 flex-shrink-0">
+        <div class="relative flex-1">
+          <svg class="w-4 h-4 text-slate-400 absolute left-3 top-2.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"></path>
+          </svg>
+          <input type="text" 
+                 x-model="missingSearch" 
+                 placeholder="Search by title, artist, or album..." 
+                 class="w-full pl-9 pr-4 py-2 bg-slate-900 border border-slate-700/80 rounded-lg text-xs text-slate-200 placeholder-slate-500 focus:outline-none focus:border-[#e5a00d] transition">
+        </div>
+
+        <select x-model="selectedMissingPlaylistId" 
+                @change="fetchMissingTracks(selectedMissingPlaylistId)"
+                class="px-3 py-2 bg-slate-900 border border-slate-700/80 rounded-lg text-xs text-slate-200 focus:outline-none focus:border-[#e5a00d] transition">
+          <option value="">All Playlists</option>
+          <template x-for="p in playlists" :key="p.id">
+            <option :value="p.id" x-text="p.name"></option>
+          </template>
+        </select>
+      </div>
+
+      <!-- Tracks Table -->
+      <div class="flex-1 overflow-y-auto border border-slate-800 rounded-xl bg-slate-950/60">
+        <template x-if="filteredMissingTracks.length === 0">
+          <div class="p-8 text-center text-slate-400 space-y-2">
+            <svg class="w-8 h-8 text-emerald-400 mx-auto" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+            </svg>
+            <div class="font-medium text-white text-sm">No missing tracks!</div>
+            <p class="text-xs text-slate-500">Every track from your synchronized playlists is present in Plex.</p>
+          </div>
+        </template>
+
+        <template x-if="filteredMissingTracks.length > 0">
+          <table class="w-full text-left text-xs">
+            <thead class="sticky top-0 bg-slate-900/90 border-b border-slate-800 text-slate-400 uppercase tracking-wider text-[11px]">
+              <tr>
+                <th class="py-2.5 px-4">Title</th>
+                <th class="py-2.5 px-4">Artist</th>
+                <th class="py-2.5 px-4">Album</th>
+                <th class="py-2.5 px-4">Playlist</th>
+                <th class="py-2.5 px-4 text-right">Search</th>
+              </tr>
+            </thead>
+            <tbody class="divide-y divide-slate-800/40">
+              <template x-for="track in filteredMissingTracks" :key="track.id || track.title">
+                <tr class="hover:bg-slate-900/30 transition">
+                  <td class="py-2.5 px-4 font-medium text-white" x-text="track.title"></td>
+                  <td class="py-2.5 px-4 text-slate-300" x-text="track.artist"></td>
+                  <td class="py-2.5 px-4 text-slate-400" x-text="track.album || '—'"></td>
+                  <td class="py-2.5 px-4 text-slate-400" x-text="getPlaylistName(track.playlist_id)"></td>
+                  <td class="py-2.5 px-4 text-right">
+                    <a :href="getTrackSearchUrl(track)" 
+                       target="_blank" 
+                       rel="noopener noreferrer"
+                       title="Search track on music streaming service"
+                       class="inline-flex items-center space-x-1 text-[11px] text-[#e5a00d] hover:underline">
+                      <span>Search</span>
+                      <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"></path>
+                      </svg>
+                    </a>
+                  </td>
+                </tr>
+              </template>
+            </tbody>
+          </table>
+        </template>
+      </div>
+
+      <!-- Security / Formula Injection Alert Note -->
+      <div class="text-[11px] text-slate-500 flex items-center space-x-1.5 flex-shrink-0">
+        <svg class="w-3.5 h-3.5 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z"></path>
+        </svg>
+        <span>CSV export is hardened with formula injection protection (single-quote prefixing on leading =, +, -, @).</span>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- ================= LIVE SYNC SSE TERMINAL DRAWER ================= -->
+  <div x-show="isTerminalOpen" 
+       x-transition:enter="transition ease-out duration-200"
+       x-transition:enter-start="transform translate-y-full"
+       x-transition:enter-end="transform translate-y-0"
+       x-transition:leave="transition ease-in duration-150"
+       x-transition:leave-start="transform translate-y-0"
+       x-transition:leave-end="transform translate-y-full"
+       class="fixed bottom-0 inset-x-0 z-40 terminal-console shadow-2xl flex flex-col"
+       :class="isTerminalExpanded ? 'h-96' : 'h-64'"
+       style="display: none;">
+    
+    <!-- Terminal Header Bar -->
+    <div class="h-10 bg-slate-900 border-b border-slate-800 px-4 flex items-center justify-between flex-shrink-0 select-none">
+      <div class="flex items-center space-x-3">
+        <!-- Terminal Prompt Icon -->
+        <span class="text-xs font-mono text-[#e5a00d] font-bold">&gt;_</span>
+        <span class="text-xs font-bold text-slate-200">Sync Engine Live Console</span>
+        
+        <!-- SSE Stream Status -->
+        <div class="flex items-center space-x-1.5 px-2 py-0.5 rounded-full bg-slate-950 border border-slate-800 text-[10px]">
+          <span :class="sseConnected ? 'w-1.5 h-1.5 rounded-full bg-emerald-400' : 'w-1.5 h-1.5 rounded-full bg-rose-400'"></span>
+          <span class="text-slate-400" x-text="sseConnected ? 'Connected (SSE)' : 'Reconnecting...'"></span>
+        </div>
+      </div>
+
+      <!-- Controls -->
+      <div class="flex items-center space-x-2">
+        <!-- Sync Now Button -->
+        <button @click="triggerSync()" 
+                :disabled="syncStatus.is_syncing" 
+                class="px-2.5 py-1 text-[11px] font-semibold rounded bg-[#e5a00d] hover:bg-[#cc8f0c] text-slate-950 transition disabled:opacity-50">
+          <span x-text="syncStatus.is_syncing ? 'Syncing...' : 'Sync Now'"></span>
+        </button>
+
+        <!-- Auto-Scroll Toggle -->
+        <button @click="autoScrollLogs = !autoScrollLogs" 
+                :class="autoScrollLogs ? 'text-emerald-400 bg-emerald-500/10' : 'text-slate-500 bg-slate-800'"
+                title="Toggle Auto-Scroll"
+                class="px-2 py-0.5 rounded text-[10px] font-mono transition">
+          Auto-scroll: <span x-text="autoScrollLogs ? 'ON' : 'OFF'"></span>
+        </button>
+
+        <!-- Clear Logs -->
+        <button @click="clearLogs()" 
+                title="Clear console output"
+                class="p-1 rounded text-slate-400 hover:text-slate-200 transition">
+          <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path>
+          </svg>
+        </button>
+
+        <!-- Expand / Shrink Height -->
+        <button @click="isTerminalExpanded = !isTerminalExpanded" 
+                title="Expand / Shrink Height"
+                class="p-1 rounded text-slate-400 hover:text-slate-200 transition">
+          <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 0l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5l-5-5m5 5v-4m0 4h-4"></path>
+          </svg>
+        </button>
+
+        <!-- Close Drawer -->
+        <button @click="isTerminalOpen = false" 
+                title="Close Drawer"
+                class="p-1 rounded text-slate-400 hover:text-white transition">
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
+          </svg>
+        </button>
+      </div>
+    </div>
+
+    <!-- Terminal Log Stream Body -->
+    <div id="terminal-content" class="flex-1 p-3 overflow-y-auto space-y-1 font-mono text-xs leading-relaxed">
+      <template x-if="logs.length === 0">
+        <div class="text-slate-600 italic">Listening for live sync logs from /api/sync/stream...</div>
+      </template>
+
+      <template x-for="log in logs" :key="log.id">
+        <div class="terminal-line flex items-start space-x-2">
+          <span class="log-timestamp flex-shrink-0 text-[10px]" x-text="log.timestamp"></span>
+          <span class="flex-shrink-0 text-[10px] uppercase font-bold px-1 rounded"
+                :class="{
+                  'bg-emerald-500/20 text-emerald-400': log.level === 'info',
+                  'bg-amber-500/20 text-amber-400': log.level === 'warning',
+                  'bg-rose-500/20 text-rose-400': log.level === 'error',
+                  'bg-slate-800 text-slate-400': log.level === 'debug'
+                }"
+                x-text="'[' + log.level + ']'"></span>
+          <span class="flex-1" 
+                :class="{
+                  'text-slate-200': log.level === 'info',
+                  'text-amber-200': log.level === 'warning',
+                  'text-rose-300': log.level === 'error',
+                  'text-slate-400': log.level === 'debug'
+                }"
+                x-text="log.message"></span>
+        </div>
+      </template>
+    </div>
+
+  </div>
+
+  <!-- ================= FLOATING TOAST CONTAINER ================= -->
+  <div class="fixed bottom-4 right-4 z-50 space-y-2 max-w-sm w-full pointer-events-none">
+    <template x-for="toast in toasts" :key="toast.id">
+      <div class="pointer-events-auto p-4 rounded-xl shadow-2xl border text-xs flex items-start space-x-3 transition transform"
+           :class="{
+             'bg-slate-900/95 border-emerald-500/40 text-emerald-300': toast.type === 'success',
+             'bg-slate-900/95 border-rose-500/40 text-rose-300': toast.type === 'error',
+             'bg-slate-900/95 border-amber-500/40 text-amber-300': toast.type === 'info'
+           }">
+        <!-- Icon -->
+        <svg v-if="toast.type === 'success'" class="w-4 h-4 text-emerald-400 flex-shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path>
+        </svg>
+        <svg v-if="toast.type === 'error'" class="w-4 h-4 text-rose-400 flex-shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
+        </svg>
+        <svg v-if="toast.type === 'info'" class="w-4 h-4 text-amber-400 flex-shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+        </svg>
+
+        <div class="flex-1" x-text="toast.message"></div>
+
+        <button @click="dismissToast(toast.id)" class="text-slate-500 hover:text-white transition">
+          <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
+          </svg>
+        </button>
+      </div>
+    </template>
+  </div>
+
+  <!-- SVG Fallback Placeholder Image -->
+  <template id="fallback-svg">
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="#e5a00d">
+      <rect width="24" height="24" fill="#0f172a"/>
+      <path d="M12 3v10.55c-.59-.34-1.27-.55-2-.55-2.21 0-4 1.79-4 4s1.79 4 4 4 4-1.79 4-4V7h4V3h-6z"/>
+    </svg>
+  </template>
+
+</body>
+</html>
