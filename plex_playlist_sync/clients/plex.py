@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import List, Optional, Tuple
 
 import requests
+import urllib.parse
 import urllib3
 from plexapi.exceptions import BadRequest, NotFound
 from plexapi.server import PlexServer
@@ -56,6 +57,90 @@ class PlexClient:
         except Exception as e:
             logger.error("Failed to connect to Plex Server at %s: %s", base_url, e)
             raise
+
+    @property
+    def machine_identifier(self) -> str:
+        """Return the unique machine identifier of the Plex Media Server."""
+        return str(getattr(self.server, "machineIdentifier", "") or "")
+
+    def get_home_users(self) -> List[dict]:
+        """Retrieve all Plex Home and managed users including the admin user.
+
+        Queries self.server.myPlexAccount().users and includes the admin user
+        (self.server.myPlexAccount().username). Handles non-PlexPass or non-PlexHome
+        configurations gracefully.
+
+        Returns:
+            List of dicts: [{'id': ..., 'username': ..., 'email': ..., 'thumb': ..., 'is_admin': ...}, ...]
+        """
+        home_users: List[dict] = []
+        try:
+            account = self.server.myPlexAccount()
+        except Exception as e:
+            logger.warning("Could not access myPlexAccount (non-PlexPass or offline): %s", e)
+            admin_name = str(getattr(self.server, "friendlyName", "Admin") or "Admin")
+            return [
+                {
+                    "id": "admin",
+                    "username": admin_name,
+                    "email": "",
+                    "thumb": "",
+                    "is_admin": True,
+                }
+            ]
+
+        # Admin user
+        admin_username = str(getattr(account, "username", "") or "Admin")
+        admin_id = str(getattr(account, "id", "") or "admin")
+        admin_email = str(getattr(account, "email", "") or "")
+        admin_thumb = str(getattr(account, "thumb", "") or "")
+        home_users.append(
+            {
+                "id": admin_id,
+                "username": admin_username,
+                "email": admin_email,
+                "thumb": admin_thumb,
+                "is_admin": True,
+            }
+        )
+
+        # Home / managed users
+        try:
+            users_attr = getattr(account, "users", None)
+            if callable(users_attr):
+                users_list = users_attr()
+            elif isinstance(users_attr, (list, tuple)):
+                users_list = list(users_attr)
+            else:
+                users_list = []
+
+            for u in users_list:
+                u_name = (
+                    getattr(u, "username", None)
+                    or getattr(u, "title", None)
+                    or getattr(u, "name", "")
+                )
+                if not u_name:
+                    continue
+                # Skip duplicate admin entry if present in users
+                if str(u_name).lower() == admin_username.lower():
+                    continue
+                u_id = str(getattr(u, "id", "") or u_name)
+                u_email = str(getattr(u, "email", "") or "")
+                u_thumb = str(getattr(u, "thumb", "") or "")
+                home_users.append(
+                    {
+                        "id": u_id,
+                        "username": str(u_name),
+                        "email": u_email,
+                        "thumb": u_thumb,
+                        "is_admin": False,
+                    }
+                )
+        except Exception as e:
+            logger.warning("Could not retrieve home users from myPlexAccount: %s", e)
+
+        return home_users
 
     def match_track(self, track: Track, threshold: float = 0.9) -> Optional[object]:
         """Search Plex library for a matching track using fuzzy title, artist, and album comparison."""
@@ -130,10 +215,15 @@ class PlexClient:
         append: bool = False,
         add_description: bool = True,
         add_poster: bool = True,
+        server: Optional[object] = None,
+        admin_server: Optional[object] = None,
     ) -> object:
         """Create or update a playlist on Plex with given tracks and metadata."""
+        srv = server if server is not None else self.server
+        admin = admin_server if admin_server is not None else self.server
+
         try:
-            plex_playlist = self.server.playlist(name)
+            plex_playlist = srv.playlist(name)
             logger.info("Found existing Plex playlist '%s'", name)
             if not append:
                 plex_playlist.removeItems(plex_playlist.items())
@@ -141,8 +231,8 @@ class PlexClient:
             logger.info("Updated tracks for playlist '%s'", name)
         except NotFound:
             logger.info("Creating new Plex playlist '%s'", name)
-            self.server.createPlaylist(title=name, items=tracks)
-            plex_playlist = self.server.playlist(name)
+            srv.createPlaylist(title=name, items=tracks)
+            plex_playlist = srv.playlist(name)
 
         if add_description and description:
             try:
@@ -158,7 +248,27 @@ class PlexClient:
                 plex_playlist.uploadPoster(url=poster_url)
                 logger.debug("Updated poster for playlist '%s'", name)
             except Exception as e:
-                logger.warning("Failed to upload poster for '%s': %s", name, e)
+                logger.warning(
+                    "Failed to upload poster for '%s' via user session: %s. Attempting admin fallback...",
+                    name,
+                    e,
+                )
+                # Injects poster using admin server session if user upload fails
+                # (bypassing managed user 401 permission bug via admin /library/metadata/<ratingKey>/posters?url=...)
+                rating_key = getattr(plex_playlist, "ratingKey", None)
+                if rating_key and admin is not None:
+                    try:
+                        encoded_url = urllib.parse.quote_plus(poster_url)
+                        key = f"/library/metadata/{rating_key}/posters?url={encoded_url}"
+                        post_method = getattr(getattr(admin, "_session", requests), "post", requests.post)
+                        admin.query(key, method=post_method)
+                        logger.info("Successfully injected poster for playlist '%s' via admin session", name)
+                    except Exception as admin_err:
+                        logger.warning(
+                            "Failed to inject poster for '%s' via admin fallback: %s",
+                            name,
+                            admin_err,
+                        )
 
         return plex_playlist
 
@@ -251,3 +361,123 @@ class PlexClient:
                 success=False,
                 error=str(e),
             )
+
+    def sync_playlist_to_users(
+        self,
+        playlist: Playlist,
+        target_usernames: List[str],
+        append: bool = False,
+        add_description: bool = True,
+        add_poster: bool = True,
+        write_missing_as_csv: bool = False,
+        data_dir: str = "/data",
+        threshold: float = 0.9,
+    ) -> List[SyncResult]:
+        """Synchronize a playlist across multiple Plex user profiles.
+
+        Matches tracks once against the server library.
+        For each target user:
+          - If admin username, syncs to admin.
+          - If managed/home user, uses user_server = self.server.switchUser(username)
+            and creates/updates playlist in that profile.
+          - Injects poster using admin server session if user upload fails (bypassing
+            managed user 401 permission bug via admin /library/metadata/<ratingKey>/posters?url=...).
+        """
+        if not target_usernames:
+            logger.info("No target users specified for playlist '%s'", playlist.name)
+            return []
+
+        logger.info(
+            "Syncing playlist '%s' (%d tracks) to %d user(s): %s",
+            playlist.name,
+            len(playlist.tracks),
+            len(target_usernames),
+            target_usernames,
+        )
+
+        matched, missing = self.match_playlist_tracks(playlist.tracks, threshold=threshold)
+
+        if not matched:
+            logger.warning(
+                "No tracks in playlist '%s' could be matched in Plex library",
+                playlist.name,
+            )
+            if write_missing_as_csv and missing:
+                self.write_missing_csv(missing, playlist.name, data_dir=data_dir)
+
+            return [
+                SyncResult(
+                    playlist_name=playlist.name,
+                    total_tracks=len(playlist.tracks),
+                    matched_tracks=0,
+                    missing_tracks=len(missing),
+                    success=False,
+                    error="Zero tracks matched in Plex library",
+                )
+                for _ in target_usernames
+            ]
+
+        if write_missing_as_csv:
+            if missing:
+                self.write_missing_csv(missing, playlist.name, data_dir=data_dir)
+            else:
+                self.delete_missing_csv(playlist.name, data_dir=data_dir)
+
+        admin_username = ""
+        try:
+            account = self.server.myPlexAccount()
+            admin_username = str(getattr(account, "username", "") or "")
+        except Exception as e:
+            logger.debug("Could not determine admin username from myPlexAccount: %s", e)
+
+        results: List[SyncResult] = []
+        for username in target_usernames:
+            is_admin = False
+            if admin_username and username.lower() == admin_username.lower():
+                is_admin = True
+            elif not admin_username and username.lower() in (
+                "admin",
+                str(getattr(self.server, "friendlyName", "") or "").lower(),
+            ):
+                is_admin = True
+
+            try:
+                if is_admin:
+                    user_server = self.server
+                else:
+                    user_server = self.server.switchUser(username)
+
+                self.update_or_create_playlist(
+                    name=playlist.name,
+                    tracks=matched,
+                    description=playlist.description,
+                    poster_url=playlist.poster,
+                    append=append,
+                    add_description=add_description,
+                    add_poster=add_poster,
+                    server=user_server,
+                    admin_server=self.server,
+                )
+                results.append(
+                    SyncResult(
+                        playlist_name=playlist.name,
+                        total_tracks=len(playlist.tracks),
+                        matched_tracks=len(matched),
+                        missing_tracks=len(missing),
+                        success=True,
+                    )
+                )
+            except Exception as e:
+                logger.error("Failed to sync playlist '%s' to user '%s': %s", playlist.name, username, e)
+                results.append(
+                    SyncResult(
+                        playlist_name=playlist.name,
+                        total_tracks=len(playlist.tracks),
+                        matched_tracks=len(matched),
+                        missing_tracks=len(missing),
+                        success=False,
+                        error=f"User {username}: {e}",
+                    )
+                )
+
+        return results
