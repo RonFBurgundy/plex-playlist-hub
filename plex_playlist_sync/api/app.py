@@ -56,25 +56,26 @@ def create_app(
         response.headers["Permissions-Policy"] = "geolocation=(), microphone=(), camera=()"
         return response
 
-    # 2. CORS Middleware
-    cors_origins_env = os.getenv("CORS_ORIGINS", "*").strip()
-    if cors_origins_env == "*":
-        app.add_middleware(
-            CORSMiddleware,
-            allow_origin_regex=r"^https?://.*$",
-            allow_credentials=True,
-            allow_methods=["*"],
-            allow_headers=["*"],
-        )
-    else:
-        origins = [o.strip() for o in cors_origins_env.split(",") if o.strip()]
-        app.add_middleware(
-            CORSMiddleware,
-            allow_origins=origins,
-            allow_credentials=True,
-            allow_methods=["*"],
-            allow_headers=["*"],
-        )
+    cors_origins_env = os.getenv("CORS_ORIGINS", "http://localhost:3000,http://127.0.0.1:3000,http://localhost:5250,http://127.0.0.1:5250").strip()
+    if cors_origins_env:
+        if cors_origins_env == "*":
+            # Wildcard origin cannot be used with credentials
+            app.add_middleware(
+                CORSMiddleware,
+                allow_origins=["*"],
+                allow_credentials=False,
+                allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+                allow_headers=["*"],
+            )
+        else:
+            origins = [o.strip() for o in cors_origins_env.split(",") if o.strip()]
+            app.add_middleware(
+                CORSMiddleware,
+                allow_origins=origins,
+                allow_credentials=True,
+                allow_methods=["*"],
+                allow_headers=["*"],
+            )
 
     # 3. Mount Routers under /api
     api_router = APIRouter(prefix="/api")

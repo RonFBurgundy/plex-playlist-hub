@@ -222,4 +222,4 @@ def verify_feed_access(
         except Exception:
             pass
 
-    return {"id": "lan_reader", "username": "lan_reader", "is_admin": True}
+    return {"id": "lan_reader", "username": "lan_reader", "is_admin": False}

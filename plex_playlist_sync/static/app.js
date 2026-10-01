@@ -8,7 +8,7 @@ document.addEventListener('alpine:init', () => {
     // Auth State
     isAuthenticated: false,
     currentUser: null,
-    authToken: localStorage.getItem('plex_hub_token') || '',
+    authToken: '',
     isLoading: true,
 
     // PIN Flow State
@@ -169,7 +169,6 @@ document.addEventListener('alpine:init', () => {
       this.isAuthenticated = false;
       this.currentUser = null;
       this.authToken = '';
-      localStorage.removeItem('plex_hub_token');
       this.closeSSE();
       this.startPinFlow();
     },
@@ -210,6 +209,7 @@ document.addEventListener('alpine:init', () => {
             body: JSON.stringify({ pin_id: this.pin.id })
           });
 
+          if (res.status === 200) {
             if (this.plexPopup && !this.plexPopup.closed) {
               try {
                 this.plexPopup.close();
@@ -219,10 +219,6 @@ document.addEventListener('alpine:init', () => {
             clearInterval(this.pinPollingTimer);
             this.pinPollingTimer = null;
             const data = await res.json();
-            if (data.token) {
-              this.authToken = data.token;
-              localStorage.setItem('plex_hub_token', data.token);
-            }
             this.currentUser = data.user;
             this.isAuthenticated = true;
             this.pin = null;

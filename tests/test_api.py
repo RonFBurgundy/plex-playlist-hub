@@ -519,6 +519,25 @@ class TestPlaylistsEndpoints:
         assert "admin-1" in targets_out
         assert "user-bob" in targets_out
 
+    def test_update_playlist_targets_regular_user_cannot_access_private_playlist(
+        self, app_and_client, seeded_users, test_db, secret_key
+    ):
+        # Bob creates a private playlist
+        test_db.upsert_playlist("p_bob", "Bob Private Playlist", creator_id="user-bob")
+        test_db.set_playlist_targets("p_bob", ["user-bob"])
+
+        _, client = app_and_client
+        alice_auth = create_auth_headers_or_cookies(test_db, seeded_users["alice"], secret_key)
+
+        # Alice attempts to add herself to Bob's private playlist (IDOR attempt)
+        resp = client.put(
+            "/api/playlists/p_bob/targets",
+            json={"user_ids": ["user-alice"]},
+            cookies=alice_auth["cookies"],
+        )
+        assert resp.status_code == 403
+        assert "Forbidden" in resp.json()["detail"]
+
     def test_delete_playlist_boundaries(
         self, app_and_client, seeded_users, test_db, secret_key
     ):

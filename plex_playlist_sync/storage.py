@@ -18,7 +18,7 @@ class Database:
             self.db_path: Union[str, Path] = ":memory:"
         else:
             self.db_path = Path(db_path)
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()
         self._conn: Optional[sqlite3.Connection] = None
         self._ensure_connection()
         self._migrate()
@@ -219,27 +219,29 @@ class Database:
         return user
 
     def get_user(self, user_id: str) -> Optional[dict[str, Any]]:
-        cur = self.conn.execute(
-            "SELECT id, username, email, is_admin, created_at, updated_at FROM users WHERE id = ?",
-            (str(user_id),),
-        )
-        row = cur.fetchone()
-        if not row:
-            return None
-        d = dict(row)
-        d["is_admin"] = bool(d["is_admin"])
-        return d
-
-    def list_users(self) -> list[dict[str, Any]]:
-        cur = self.conn.execute(
-            "SELECT id, username, email, is_admin, created_at, updated_at FROM users ORDER BY username ASC"
-        )
-        results = []
-        for row in cur.fetchall():
+        with self._lock:
+            cur = self.conn.execute(
+                "SELECT id, username, email, is_admin, created_at, updated_at FROM users WHERE id = ?",
+                (str(user_id),),
+            )
+            row = cur.fetchone()
+            if not row:
+                return None
             d = dict(row)
             d["is_admin"] = bool(d["is_admin"])
-            results.append(d)
-        return results
+            return d
+
+    def list_users(self) -> list[dict[str, Any]]:
+        with self._lock:
+            cur = self.conn.execute(
+                "SELECT id, username, email, is_admin, created_at, updated_at FROM users ORDER BY username ASC"
+            )
+            results = []
+            for row in cur.fetchall():
+                d = dict(row)
+                d["is_admin"] = bool(d["is_admin"])
+                results.append(d)
+            return results
 
     def delete_user(self, user_id: str) -> bool:
         with self._lock:
@@ -302,79 +304,81 @@ class Database:
         return playlist
 
     def get_playlist(self, playlist_id: str) -> Optional[dict[str, Any]]:
-        cur = self.conn.execute(
-            """
-            SELECT id, name, service, description, poster_url, enabled, creator_id, tracks_json,
-                   last_synced_at, sync_status, created_at, updated_at
-            FROM playlists
-            WHERE id = ?
-            """,
-            (str(playlist_id),),
-        )
-        row = cur.fetchone()
-        if not row:
-            return None
-        d = dict(row)
-        d["enabled"] = bool(d["enabled"])
-        return d
+        with self._lock:
+            cur = self.conn.execute(
+                """
+                SELECT id, name, service, description, poster_url, enabled, creator_id, tracks_json,
+                       last_synced_at, sync_status, created_at, updated_at
+                FROM playlists
+                WHERE id = ?
+                """,
+                (str(playlist_id),),
+            )
+            row = cur.fetchone()
+            if not row:
+                return None
+            d = dict(row)
+            d["enabled"] = bool(d["enabled"])
+            return d
 
     def list_playlists(
         self,
         user_id: Optional[str] = None,
         enabled_only: bool = False,
     ) -> list[dict[str, Any]]:
-        if user_id is not None:
-            if enabled_only:
-                cur = self.conn.execute(
-                    """
-                    SELECT DISTINCT p.id, p.name, p.service, p.description, p.poster_url, p.enabled, p.creator_id, p.tracks_json,
-                           p.last_synced_at, p.sync_status, p.created_at, p.updated_at
-                    FROM playlists p
-                    LEFT JOIN playlist_targets pt ON p.id = pt.playlist_id
-                    WHERE (pt.user_id = ? OR p.creator_id = ?) AND p.enabled = 1
-                    ORDER BY p.name ASC
-                    """,
-                    (str(user_id), str(user_id)),
-                )
+        with self._lock:
+            if user_id is not None:
+                if enabled_only:
+                    cur = self.conn.execute(
+                        """
+                        SELECT DISTINCT p.id, p.name, p.service, p.description, p.poster_url, p.enabled, p.creator_id, p.tracks_json,
+                               p.last_synced_at, p.sync_status, p.created_at, p.updated_at
+                        FROM playlists p
+                        LEFT JOIN playlist_targets pt ON p.id = pt.playlist_id
+                        WHERE (pt.user_id = ? OR p.creator_id = ?) AND p.enabled = 1
+                        ORDER BY p.name ASC
+                        """,
+                        (str(user_id), str(user_id)),
+                    )
+                else:
+                    cur = self.conn.execute(
+                        """
+                        SELECT DISTINCT p.id, p.name, p.service, p.description, p.poster_url, p.enabled, p.creator_id, p.tracks_json,
+                               p.last_synced_at, p.sync_status, p.created_at, p.updated_at
+                        FROM playlists p
+                        LEFT JOIN playlist_targets pt ON p.id = pt.playlist_id
+                        WHERE (pt.user_id = ? OR p.creator_id = ?)
+                        ORDER BY p.name ASC
+                        """,
+                        (str(user_id), str(user_id)),
+                    )
             else:
-                cur = self.conn.execute(
-                    """
-                    SELECT DISTINCT p.id, p.name, p.service, p.description, p.poster_url, p.enabled, p.creator_id, p.tracks_json,
-                           p.last_synced_at, p.sync_status, p.created_at, p.updated_at
-                    FROM playlists p
-                    LEFT JOIN playlist_targets pt ON p.id = pt.playlist_id
-                    WHERE (pt.user_id = ? OR p.creator_id = ?)
-                    ORDER BY p.name ASC
-                    """,
-                    (str(user_id), str(user_id)),
-                )
-        else:
-            if enabled_only:
-                cur = self.conn.execute(
-                    """
-                    SELECT id, name, service, description, poster_url, enabled, creator_id, tracks_json,
-                           last_synced_at, sync_status, created_at, updated_at
-                    FROM playlists
-                    WHERE enabled = 1
-                    ORDER BY name ASC
-                    """
-                )
-            else:
-                cur = self.conn.execute(
-                    """
-                    SELECT id, name, service, description, poster_url, enabled, creator_id, tracks_json,
-                           last_synced_at, sync_status, created_at, updated_at
-                    FROM playlists
-                    ORDER BY name ASC
-                    """
-                )
+                if enabled_only:
+                    cur = self.conn.execute(
+                        """
+                        SELECT id, name, service, description, poster_url, enabled, creator_id, tracks_json,
+                               last_synced_at, sync_status, created_at, updated_at
+                        FROM playlists
+                        WHERE enabled = 1
+                        ORDER BY name ASC
+                        """
+                    )
+                else:
+                    cur = self.conn.execute(
+                        """
+                        SELECT id, name, service, description, poster_url, enabled, creator_id, tracks_json,
+                               last_synced_at, sync_status, created_at, updated_at
+                        FROM playlists
+                        ORDER BY name ASC
+                        """
+                    )
 
-        results = []
-        for row in cur.fetchall():
-            d = dict(row)
-            d["enabled"] = bool(d["enabled"])
-            results.append(d)
-        return results
+            results = []
+            for row in cur.fetchall():
+                d = dict(row)
+                d["enabled"] = bool(d["enabled"])
+                results.append(d)
+            return results
 
     def delete_playlist(self, playlist_id: str) -> bool:
         with self._lock:
@@ -405,11 +409,12 @@ class Database:
             self.conn.commit()
 
     def get_playlist_targets(self, playlist_id: str) -> list[str]:
-        cur = self.conn.execute(
-            "SELECT user_id FROM playlist_targets WHERE playlist_id = ? ORDER BY user_id ASC",
-            (str(playlist_id),),
-        )
-        return [row["user_id"] for row in cur.fetchall()]
+        with self._lock:
+            cur = self.conn.execute(
+                "SELECT user_id FROM playlist_targets WHERE playlist_id = ? ORDER BY user_id ASC",
+                (str(playlist_id),),
+            )
+            return [row["user_id"] for row in cur.fetchall()]
 
     # -------------------------------------------------------------------------
     # Sync Results & Missing Tracks
@@ -461,25 +466,26 @@ class Database:
     def get_missing_tracks(
         self, playlist_id: Optional[str] = None
     ) -> list[dict[str, Any]]:
-        if playlist_id is not None:
-            cur = self.conn.execute(
-                """
-                SELECT id, playlist_id, title, artist, album, url, created_at
-                FROM missing_tracks
-                WHERE playlist_id = ?
-                ORDER BY id ASC
-                """,
-                (str(playlist_id),),
-            )
-        else:
-            cur = self.conn.execute(
-                """
-                SELECT id, playlist_id, title, artist, album, url, created_at
-                FROM missing_tracks
-                ORDER BY id ASC
-                """
-            )
-        return [dict(row) for row in cur.fetchall()]
+        with self._lock:
+            if playlist_id is not None:
+                cur = self.conn.execute(
+                    """
+                    SELECT id, playlist_id, title, artist, album, url, created_at
+                    FROM missing_tracks
+                    WHERE playlist_id = ?
+                    ORDER BY id ASC
+                    """,
+                    (str(playlist_id),),
+                )
+            else:
+                cur = self.conn.execute(
+                    """
+                    SELECT id, playlist_id, title, artist, album, url, created_at
+                    FROM missing_tracks
+                    ORDER BY id ASC
+                    """
+                )
+            return [dict(row) for row in cur.fetchall()]
 
     # -------------------------------------------------------------------------
     # Sessions
@@ -521,23 +527,24 @@ class Database:
         return session
 
     def get_session(self, session_id: str) -> Optional[dict[str, Any]]:
-        cur = self.conn.execute(
-            """
-            SELECT session_id, user_id, data, expires_at, created_at
-            FROM sessions
-            WHERE session_id = ?
-            """,
-            (str(session_id),),
-        )
-        row = cur.fetchone()
-        if not row:
-            return None
-        d = dict(row)
-        try:
-            d["data"] = json.loads(d["data"])
-        except (ValueError, TypeError):
-            d["data"] = {}
-        return d
+        with self._lock:
+            cur = self.conn.execute(
+                """
+                SELECT session_id, user_id, data, expires_at, created_at
+                FROM sessions
+                WHERE session_id = ?
+                """,
+                (str(session_id),),
+            )
+            row = cur.fetchone()
+            if not row:
+                return None
+            d = dict(row)
+            try:
+                d["data"] = json.loads(d["data"])
+            except (ValueError, TypeError):
+                d["data"] = {}
+            return d
 
     def delete_session(self, session_id: str) -> bool:
         with self._lock:

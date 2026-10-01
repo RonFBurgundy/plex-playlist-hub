@@ -4,6 +4,7 @@ import asyncio
 from datetime import datetime, timezone
 import json
 import logging
+import threading
 from typing import Any, Optional
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, status
@@ -16,7 +17,9 @@ from plex_playlist_sync.api.dependencies import (
     get_deezer_client,
     get_plex_client,
     get_spotify_client,
+    require_admin,
 )
+from plex_playlist_sync.auth import get_or_create_secret_key, verify_session_token
 from plex_playlist_sync.clients.deezer import DeezerClient
 from plex_playlist_sync.clients.plex import PlexClient
 from plex_playlist_sync.clients.spotify import SpotifyClient
@@ -30,27 +33,39 @@ router = APIRouter()
 
 
 class BroadcastLogHandler(logging.Handler):
-    """Logging handler that broadcasts formatted log records to active asyncio queues."""
+    """Logging handler that thread-safely broadcasts formatted log records to active asyncio queues."""
 
     def __init__(self) -> None:
         super().__init__()
-        self.listeners: list[asyncio.Queue] = []
+        self._lock = threading.Lock()
+        self.listeners: list[tuple[asyncio.AbstractEventLoop, asyncio.Queue]] = []
 
     def emit(self, record: logging.LogRecord) -> None:
         msg = self.format(record)
-        for q in list(self.listeners):
+        with self._lock:
+            active_listeners = list(self.listeners)
+
+        for loop, q in active_listeners:
             try:
-                q.put_nowait(msg)
-            except (asyncio.QueueFull, Exception):
+                if loop.is_running():
+                    loop.call_soon_threadsafe(self._safe_put, q, msg)
+            except Exception:
                 pass
 
-    def add_listener(self, q: asyncio.Queue) -> None:
-        if q not in self.listeners:
-            self.listeners.append(q)
+    @staticmethod
+    def _safe_put(q: asyncio.Queue, msg: str) -> None:
+        try:
+            q.put_nowait(msg)
+        except (asyncio.QueueFull, Exception):
+            pass
+
+    def add_listener(self, loop: asyncio.AbstractEventLoop, q: asyncio.Queue) -> None:
+        with self._lock:
+            self.listeners.append((loop, q))
 
     def remove_listener(self, q: asyncio.Queue) -> None:
-        if q in self.listeners:
-            self.listeners.remove(q)
+        with self._lock:
+            self.listeners = [item for item in self.listeners if item[1] is not q]
 
 
 class SyncState:
@@ -247,13 +262,14 @@ def get_sync_status(
 async def stream_sync_logs(
     request: Request,
     limit: Optional[int] = None,
-    _current_user: dict[str, Any] = Depends(get_current_user),
+    _admin: dict[str, Any] = Depends(require_admin),
 ) -> StreamingResponse:
-    """Server-Sent Events (SSE) streaming live log lines."""
+    """Server-Sent Events (SSE) streaming live log lines (administrators only)."""
 
     async def event_generator():
+        loop = asyncio.get_running_loop()
         q: asyncio.Queue = asyncio.Queue(maxsize=200)
-        sync_state.log_handler.add_listener(q)
+        sync_state.log_handler.add_listener(loop, q)
         count = 0
         try:
             yield "data: Connected to live sync log stream\n\n"
@@ -300,17 +316,36 @@ async def handle_sync_webhook(
 
     When Lidarr completes a track download/import or Plex completes a library scan,
     they can ping this endpoint to trigger immediate playlist sync and re-evaluation.
+    Requires FEED_TOKEN if configured, or a valid admin session.
     """
+    provided = (
+        token
+        or request.headers.get("X-Api-Key")
+        or request.headers.get("Authorization", "").replace("Bearer ", "").strip()
+    )
     if config.feed_token:
-        provided = (
-            token
-            or request.headers.get("X-Api-Key")
-            or request.headers.get("Authorization", "").replace("Bearer ", "").strip()
-        )
         if provided != config.feed_token:
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Invalid webhook token",
+            )
+    else:
+        # FEED_TOKEN is not set; require an explicit admin session token
+        cookie_token = request.cookies.get("session_token")
+        sess_token = cookie_token or (provided if provided else None)
+        is_admin_session = False
+        if sess_token:
+            try:
+                secret_key = get_or_create_secret_key(data_dir=config.data_dir)
+                payload = verify_session_token(sess_token, secret_key)
+                if payload and payload.get("is_admin") and db.get_session(sess_token):
+                    is_admin_session = True
+            except Exception:
+                pass
+        if not is_admin_session:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="FEED_TOKEN must be configured or admin authentication provided to trigger webhooks",
             )
 
     body_preview = ""

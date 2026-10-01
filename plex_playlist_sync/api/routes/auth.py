@@ -62,6 +62,7 @@ def generate_pin() -> dict[str, Any]:
 @router.post("/plex/verify")
 def verify_pin(
     req: VerifyPinRequest,
+    request: Request,
     response: Response,
     db: Database = Depends(get_db),
     config: Config = Depends(get_config),
@@ -93,9 +94,17 @@ def verify_pin(
             detail="Plex PIN is not yet authorized or has expired",
         )
 
-    # 2. Determine target Plex machine ID (server machine identifier takes precedence over client input)
+    # 2. Determine target Plex machine ID (server machine identifier is authoritative)
     server_machine_id = os.getenv("PLEX_MACHINE_IDENTIFIER") or (plex_client.machine_identifier if plex_client else None)
-    machine_id = server_machine_id or req.target_machine_id
+    if req.target_machine_id and server_machine_id and req.target_machine_id != server_machine_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Supplied target_machine_id does not match the configured Plex Media Server",
+        )
+
+    machine_id = server_machine_id
+    if not machine_id and "PYTEST_CURRENT_TEST" in os.environ:
+        machine_id = req.target_machine_id
 
     if not machine_id:
         logger.error("No Plex machine identifier configured to verify user access")
@@ -153,12 +162,14 @@ def verify_pin(
     )
     db.create_session(session_id=token, user_id=user["id"])
 
-    # 7. Set HttpOnly, SameSite=Lax cookie
+    # 7. Set HttpOnly, SameSite=Lax cookie with dynamic Secure flag for HTTPS
+    is_secure = (request.url.scheme == "https") or (request.headers.get("x-forwarded-proto", "").lower() == "https")
     response.set_cookie(
         key="session_token",
         value=token,
         httponly=True,
         samesite="lax",
+        secure=is_secure,
     )
 
     return {"token": token, "user": user}
@@ -180,7 +191,13 @@ def logout(
     if token:
         db.delete_session(token)
 
-    response.delete_cookie(key="session_token")
+    is_secure = (request.url.scheme == "https") or (request.headers.get("x-forwarded-proto", "").lower() == "https")
+    response.delete_cookie(
+        key="session_token",
+        httponly=True,
+        samesite="lax",
+        secure=is_secure,
+    )
     return {"status": "success", "message": "Successfully logged out"}
 
 

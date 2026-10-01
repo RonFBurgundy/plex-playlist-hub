@@ -129,11 +129,13 @@ def main() -> int:
         try:
             home_users = plex_client.get_home_users()
             for u in home_users:
+                uname = u.get("username") or u.get("name") or "Unknown"
+                admin_flag = bool(u.get("is_admin", u.get("admin", False)))
                 db.upsert_user(
-                    user_id=u["id"],
-                    username=u["name"],
+                    user_id=str(u["id"]),
+                    username=str(uname),
                     email=u.get("email"),
-                    is_admin=u.get("admin", False),
+                    is_admin=admin_flag,
                 )
             logger.info("Successfully discovered %d Plex Home users", len(home_users))
         except Exception as e:

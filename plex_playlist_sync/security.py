@@ -156,3 +156,75 @@ def mask_secret(secret: Optional[str], visible_chars: int = 4) -> str:
     if len(secret) <= visible_chars:
         return mask_char * len(secret)
     return (mask_char * (len(secret) - visible_chars)) + secret[-visible_chars:]
+
+
+_ALLOWED_IMAGE_HOSTS = {
+    "i.scdn.co",
+    "mosaic.scdn.co",
+    "image-cdn-ak.spotifycdn.com",
+    "image-cdn-fa.spotifycdn.com",
+    "blend-playlist-covers.spotifycdn.com",
+    "wrapped-images.spotifycdn.com",
+    "e-cdns-images.dzcdn.net",
+    "cdns-images.dzcdn.net",
+}
+
+_ALLOWED_IMAGE_SUFFIXES = (
+    ".scdn.co",
+    ".spotifycdn.com",
+    ".dzcdn.net",
+)
+
+
+def is_safe_image_url(url: Optional[str]) -> bool:
+    """Validates that an image URL is strictly HTTPS and originates from a trusted CDN or public domain.
+
+    Rejects private, loopback, link-local, or cloud metadata IP addresses to prevent SSRF.
+    """
+    import ipaddress
+
+    if not isinstance(url, str):
+        return False
+    val = url.strip()
+    if not val:
+        return False
+
+    try:
+        parsed = urllib.parse.urlparse(val)
+    except ValueError:
+        return False
+
+    if parsed.scheme != "https":
+        return False
+
+    if not parsed.hostname or parsed.username or parsed.password or parsed.port not in (None, 443):
+        return False
+
+    hostname = parsed.hostname.lower()
+
+    # Reject localhost or internal domain names (.local, .internal, .lan, etc.)
+    if hostname in ("localhost", "127.0.0.1", "::1") or hostname.endswith((".local", ".internal", ".lan", ".home")):
+        return False
+
+    # Check if hostname is an IP address
+    try:
+        ip = ipaddress.ip_address(hostname)
+        if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved or ip.is_multicast:
+            return False
+        return True
+    except ValueError:
+        # Not a raw IP, it's a domain name
+        pass
+
+    if hostname in _ALLOWED_IMAGE_HOSTS:
+        return True
+
+    for suffix in _ALLOWED_IMAGE_SUFFIXES:
+        if hostname.endswith(suffix):
+            return True
+
+    if "." in hostname and not hostname.startswith(".") and not hostname.endswith("."):
+        return True
+
+    return False
+

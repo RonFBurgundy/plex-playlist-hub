@@ -3,7 +3,7 @@ import logging
 import re
 from difflib import SequenceMatcher
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import Any, List, Optional, Tuple
 
 import requests
 import urllib.parse
@@ -12,6 +12,7 @@ from plexapi.exceptions import BadRequest, NotFound
 from plexapi.server import PlexServer
 
 from ..models import Playlist, SyncResult, Track
+from ..security import is_safe_image_url
 
 logger = logging.getLogger(__name__)
 
@@ -243,7 +244,7 @@ class PlexClient:
             except Exception as e:
                 logger.warning("Failed to update summary for '%s': %s", name, e)
 
-        if add_poster and poster_url:
+        if add_poster and poster_url and is_safe_image_url(poster_url):
             try:
                 plex_playlist.uploadPoster(url=poster_url)
                 logger.debug("Updated poster for playlist '%s'", name)
@@ -273,18 +274,25 @@ class PlexClient:
         return plex_playlist
 
     def write_missing_csv(self, missing_tracks: List[Track], playlist_name: str, data_dir: str = "/data") -> None:
-        """Write missing tracks to CSV file in data directory."""
+        """Write missing tracks to CSV file in data directory with formula injection defense."""
         try:
             folder = Path(data_dir)
             folder.mkdir(parents=True, exist_ok=True)
             # Sanitize playlist name for filesystem
             safe_name = re.sub(r'[\\/*?:"<>|]', "_", playlist_name)
             target = folder / f"{safe_name}.csv"
+
+            def _clean(val: Any) -> str:
+                s = str(val if val is not None else "")
+                if s.startswith(("=", "+", "-", "@", "\t", "\r")):
+                    return f"'{s}"
+                return s
+
             with open(target, "w", newline="", encoding="utf-8") as f:
                 writer = csv.writer(f)
                 writer.writerow(["title", "artist", "album", "url"])
                 for t in missing_tracks:
-                    writer.writerow([t.title, t.artist, t.album, t.url])
+                    writer.writerow([_clean(t.title), _clean(t.artist), _clean(t.album), _clean(t.url)])
             logger.info("Wrote %d missing track(s) to %s", len(missing_tracks), target)
         except Exception as e:
             logger.warning("Failed to write missing tracks CSV for '%s': %s", playlist_name, e)

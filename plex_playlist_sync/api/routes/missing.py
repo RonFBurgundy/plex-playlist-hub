@@ -48,9 +48,19 @@ def _filter_missing_for_user(
     user_context: Optional[dict[str, Any]],
     db: Database,
 ) -> list[dict[str, Any]]:
-    """Applies RBAC filtering: Admins and feed tokens see all; standard users see only their targeted playlists."""
-    if not user_context or bool(user_context.get("is_admin")):
+    """Applies RBAC filtering: Admins and feed tokens see all; standard users see only their targeted playlists;
+
+    LAN readers without a token see only public/shared playlists.
+    """
+    if not user_context:
+        return []
+    if bool(user_context.get("is_admin")):
         return all_tracks
+    if user_context.get("id") == "lan_reader":
+        all_playlists = db.list_playlists()
+        shared_ids = {p["id"] for p in all_playlists if not p.get("creator_id") or p.get("creator_id") in ("admin", "admin_1")}
+        return [t for t in all_tracks if t.get("playlist_id") in shared_ids]
+
     user_playlists = {p["id"] for p in db.list_playlists(user_id=str(user_context["id"]))}
     return [t for t in all_tracks if t.get("playlist_id") in user_playlists]
 
@@ -142,8 +152,11 @@ def feed_missing_rss(
         pl_name_esc = escape(p_name)
         guid = f"plex-playlist-hub-missing-{t.get('id', 0)}"
 
+        def _clean_cdata(val: Any) -> str:
+            return str(val or "").replace("]]>", "]]&gt;")
+
         desc = (
-            f"<![CDATA[Track: {track_title}<br/>Artist: {artist}<br/>Album: {album}<br/>Playlist: {pl_name_esc}]]>"
+            f"<![CDATA[Track: {_clean_cdata(track_title)}<br/>Artist: {_clean_cdata(artist)}<br/>Album: {_clean_cdata(album)}<br/>Playlist: {_clean_cdata(pl_name_esc)}]]>"
         )
 
         item = f"""    <item>

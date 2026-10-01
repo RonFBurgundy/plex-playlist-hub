@@ -25,6 +25,7 @@ from plex_playlist_sync.models import Playlist, Track
 from plex_playlist_sync.security import (
     extract_deezer_id,
     extract_spotify_id,
+    is_safe_image_url,
     sanitize_text,
 )
 from plex_playlist_sync.storage import Database
@@ -52,7 +53,7 @@ class PlaylistDirectImportRequest(BaseModel):
     service: Optional[str] = Field(default="spotify", description="Service tag: spotify, deezer, or custom")
     description: Optional[str] = Field(default="", max_length=1000, description="Playlist description")
     poster_url: Optional[str] = Field(default="", description="Cover artwork URL")
-    tracks: list[TrackImportItem] = Field(..., min_length=1, description="List of tracks to import")
+    tracks: list[TrackImportItem] = Field(..., min_length=1, max_length=2000, description="List of tracks to import")
     targets: Optional[list[str]] = Field(default=None, description="Optional target user IDs")
 
 
@@ -181,12 +182,31 @@ def update_playlist_targets(
             detail="Playlist not found",
         )
 
-    if current_user.get("is_admin"):
+    existing_targets = set(db.get_playlist_targets(playlist_id))
+    uid = str(current_user["id"])
+    is_admin = bool(current_user.get("is_admin"))
+    is_creator = playlist.get("creator_id") == uid
+    is_already_targeted = uid in existing_targets
+
+    # Access control:
+    # 1. Admins and the creator can always modify targets.
+    # 2. For private playlists owned by another regular user, outside regular users cannot opt in (IDOR).
+    # 3. For public/server playlists (creator is None or admin), any user can opt themselves in or out.
+    if not is_admin and not is_creator:
+        creator_id = playlist.get("creator_id")
+        if creator_id:
+            creator_user = db.get_user(creator_id)
+            is_creator_admin = bool(creator_user and creator_user.get("is_admin"))
+            if not is_creator_admin and not is_already_targeted:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="Forbidden: You do not have permission to access or modify targets for this private playlist",
+                )
+
+    if is_admin:
         new_targets = req.user_ids
     else:
         # Regular users can only toggle themselves
-        uid = str(current_user["id"])
-        existing_targets = set(db.get_playlist_targets(playlist_id))
         if uid in req.user_ids:
             existing_targets.add(uid)
         else:
@@ -239,7 +259,8 @@ def import_playlist_tracks(
     clean_name = sanitize_text(req.name)
     clean_desc = sanitize_text(req.description or "")
     poster_url = req.poster_url.strip() if req.poster_url else ""
-    if poster_url and not (poster_url.startswith("http://") or poster_url.startswith("https://")):
+    if poster_url and not is_safe_image_url(poster_url):
+        logger.warning("Rejected unsafe or SSRF-prone poster URL: %s", poster_url)
         poster_url = ""
 
     # Generate stable unique ID based on creator and name hash
