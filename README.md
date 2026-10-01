@@ -40,6 +40,7 @@ This project has been completely re-architected and rewritten from the ground up
   - Non-technical Plex Home users can import their private playlists, personal mixes, and *Liked Songs*.
   - **1-Click Browser Bookmarklet Helper**: Drag the bookmarklet into your browser, click it on Spotify Web Player, and transfer playlists directly into Plexamp with one click.
   - **Clipboard & Text Parsing**: Paste track lists, table rows, or `Artist - Title` lines with automatic format recognition.
+  - *Read the full [Spotify Import & Keyless Sync Guide](docs/SPOTIFY_IMPORT_GUIDE.md) for step-by-step instructions.*
 - **Spotify Integration**:
   - Automatic dynamic pagination across all user-owned and followed playlists (no 50-item limit).
   - Explicit playlist syncing via Spotify URLs, Spotify URIs, or IDs.
