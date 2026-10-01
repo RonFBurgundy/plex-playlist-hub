@@ -1,12 +1,16 @@
 services:
-  playlistSync:
-    image: ghcr.io/ronfburgundy/plex-playlist-sync:latest
-    container_name: playlistSync
+  playlistHub:
+    image: ghcr.io/ronfburgundy/plex-playlist-hub:latest
+    container_name: playlistHub
     restart: unless-stopped
+    ports:
+      - "5250:5250"
     volumes:
-      # Optional: only needed if WRITE_MISSING_AS_CSV=1
       - ./data:/data
     environment:
+      # Port & Host
+      - PORT=5250
+
       # Plex Settings (Required)
       - PLEX_URL=http://localhost:32400
       - PLEX_TOKEN=your_plex_token_here
@@ -23,12 +27,12 @@ services:
       - SEARCH_SIMILARITY_THRESHOLD=0.9
       - LOG_LEVEL=INFO
 
-      # Spotify Options (Option 1)
+      # Spotify Options
       - SPOTIFY_CLIENT_ID=
       - SPOTIFY_CLIENT_SECRET=
       - SPOTIFY_USER_ID=
       - SPOTIFY_PLAYLIST_ID=
 
-      # Deezer Options (Option 2)
+      # Deezer Options
       - DEEZER_USER_ID=
       - DEEZER_PLAYLIST_ID=

@@ -1,11 +1,14 @@
 services:
-  playlistSync:
-    image: ghcr.io/ronfburgundy/plex-playlist-sync:latest
-    container_name: playlistSync
+  playlistHub:
+    image: ghcr.io/ronfburgundy/plex-playlist-hub:latest
+    container_name: playlistHub
     restart: unless-stopped
+    ports:
+      - "5250:5250"
     volumes:
       - ./data:/data
     environment:
+      - PORT=5250
       - PLEX_URL=http://localhost:32400
       - PLEX_TOKEN=your_plex_token_here
       - PLEX_VERIFY_SSL=1
@@ -20,7 +23,7 @@ services:
       - LOG_LEVEL=INFO
       - SPOTIFY_CLIENT_ID=your_client_id
       - SPOTIFY_CLIENT_SECRET=your_client_secret
-      - SPOTIFY_USER_ID=your_spotify_username
+      - SPOTIFY_USER_ID=your_spotify_user
       - SPOTIFY_PLAYLIST_ID=37i9dQZF1DXcBWIGoYBM5M
       - DEEZER_USER_ID=9999999999
       - DEEZER_PLAYLIST_ID=1313621735
