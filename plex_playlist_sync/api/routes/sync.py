@@ -2,10 +2,11 @@
 
 import asyncio
 from datetime import datetime, timezone
+import json
 import logging
 from typing import Any, Optional
 
-from fastapi import APIRouter, BackgroundTasks, Depends, Request, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, status
 from fastapi.responses import StreamingResponse
 
 from plex_playlist_sync.api.dependencies import (
@@ -114,7 +115,21 @@ class SyncState:
                 tracks: list[Track] = []
                 service = pl.get("service", "spotify")
                 try:
-                    if service == "spotify" and spotify_client:
+                    if pl_id.startswith("imp_") or pl.get("tracks_json"):
+                        raw_tracks_json = pl.get("tracks_json")
+                        if raw_tracks_json:
+                            t_dicts = json.loads(raw_tracks_json)
+                            tracks = [
+                                Track(
+                                    title=t.get("title", ""),
+                                    artist=t.get("artist", ""),
+                                    album=t.get("album", ""),
+                                    url=t.get("url", ""),
+                                )
+                                for t in t_dicts
+                                if t.get("title")
+                            ]
+                    elif service == "spotify" and spotify_client:
                         tracks = spotify_client.get_playlist_tracks(pl_id)
                     elif service == "deezer" and deezer_client:
                         tracks = deezer_client.get_playlist_tracks(pl_id)
@@ -268,3 +283,55 @@ async def stream_sync_logs(
             "X-Accel-Buffering": "no",
         },
     )
+
+
+@router.post("/webhook")
+async def handle_sync_webhook(
+    background_tasks: BackgroundTasks,
+    request: Request,
+    token: Optional[str] = None,
+    db: Database = Depends(get_db),
+    config: Config = Depends(get_config),
+    plex_client: Optional[PlexClient] = Depends(get_plex_client),
+    spotify_client: Optional[SpotifyClient] = Depends(get_spotify_client),
+    deezer_client: Optional[DeezerClient] = Depends(get_deezer_client),
+) -> dict[str, Any]:
+    """Webhook endpoint for Lidarr, Plex, or external automation triggers.
+
+    When Lidarr completes a track download/import or Plex completes a library scan,
+    they can ping this endpoint to trigger immediate playlist sync and re-evaluation.
+    """
+    if config.feed_token:
+        provided = (
+            token
+            or request.headers.get("X-Api-Key")
+            or request.headers.get("Authorization", "").replace("Bearer ", "").strip()
+        )
+        if provided != config.feed_token:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid webhook token",
+            )
+
+    body_preview = ""
+    try:
+        raw_body = await request.body()
+        if raw_body:
+            body_preview = raw_body[:200].decode("utf-8", errors="ignore")
+    except Exception:
+        pass
+
+    logger.info("Sync webhook received (triggering background sync): %s", body_preview)
+
+    if sync_state.is_syncing:
+        return {"status": "already_running", "message": "Synchronization is already in progress"}
+
+    background_tasks.add_task(
+        sync_state.execute_sync,
+        db=db,
+        config=config,
+        plex_client=plex_client,
+        spotify_client=spotify_client,
+        deezer_client=deezer_client,
+    )
+    return {"status": "triggered", "message": "Background synchronization triggered via webhook"}

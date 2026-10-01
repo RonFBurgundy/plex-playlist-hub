@@ -897,6 +897,28 @@
           <p class="text-xs text-slate-400">Tracks not currently matched in your local Plex Music Library</p>
         </div>
         <div class="flex items-center space-x-2">
+          <!-- Lidarr & Feeds Toggle -->
+          <button @click="toggleLidarrDrawer()"
+                  :class="isLidarrDrawerOpen ? 'bg-indigo-600/30 text-indigo-300 border-indigo-500/50' : 'bg-slate-800 hover:bg-slate-700 text-slate-200 border-slate-700'"
+                  class="flex items-center space-x-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg border transition">
+            <svg class="w-3.5 h-3.5 text-indigo-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path>
+            </svg>
+            <span>Lidarr & Feeds</span>
+          </button>
+
+          <!-- Push All to Lidarr (if configured) -->
+          <template x-if="lidarrConfig && lidarrConfig.configured">
+            <button @click="pushAllToLidarr()"
+                    :disabled="isPushingLidarr || filteredMissingTracks.length === 0"
+                    class="flex items-center space-x-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white transition disabled:opacity-50">
+              <svg class="w-3.5 h-3.5" :class="isPushingLidarr ? 'animate-spin' : ''" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path>
+              </svg>
+              <span x-text="isPushingLidarr ? 'Pushing...' : 'Push All to Lidarr'"></span>
+            </button>
+          </template>
+
           <!-- Export Safe CSV -->
           <button @click="exportMissingCsv()" 
                   class="flex items-center space-x-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 transition">
@@ -910,6 +932,87 @@
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
             </svg>
           </button>
+        </div>
+      </div>
+
+      <!-- Lidarr & Feeds Collapsible Drawer -->
+      <div x-show="isLidarrDrawerOpen" 
+           x-transition
+           class="bg-slate-900/90 border border-indigo-500/30 rounded-xl p-4 space-y-3 flex-shrink-0 text-xs">
+        <div class="flex items-center justify-between">
+          <div class="flex items-center space-x-2">
+            <span class="font-bold text-indigo-300 flex items-center space-x-1.5">
+              <svg class="w-4 h-4 text-indigo-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path>
+              </svg>
+              <span>Automated Missing Music Feeds & Lidarr Integration</span>
+            </span>
+            <template x-if="lidarrConfig && lidarrConfig.configured">
+              <span class="px-2 py-0.5 rounded-full text-[10px] font-medium bg-emerald-500/20 text-emerald-300 border border-emerald-500/40">Direct API Connected</span>
+            </template>
+            <template x-if="!lidarrConfig || !lidarrConfig.configured">
+              <span class="px-2 py-0.5 rounded-full text-[10px] font-medium bg-slate-800 text-slate-400 border border-slate-700">Feed Mode</span>
+            </template>
+          </div>
+          <a href="https://github.com/RonFBurgundy/plex-playlist-hub/blob/main/docs/LIDARR_AND_AUTOMATION_GUIDE.md" 
+             target="_blank" 
+             rel="noopener noreferrer" 
+             class="text-indigo-400 hover:underline flex items-center space-x-1 text-[11px]">
+            <span>Setup Guide</span>
+            <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"></path>
+            </svg>
+          </a>
+        </div>
+        
+        <p class="text-slate-400 text-[11px]">
+          Connect Lidarr or RSS clients to monitor and download missing tracks. When Lidarr downloads and Plex indexes a track, the Hub's self-healing loop automatically adds it to your playlists and clears it from missing!
+        </p>
+
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-3 pt-1">
+          <!-- Lidarr Custom List URL -->
+          <div class="bg-slate-950 p-2.5 rounded-lg border border-slate-800 space-y-1">
+            <div class="flex items-center justify-between text-slate-300 font-semibold text-[11px]">
+              <span>Lidarr Custom Import List (JSON)</span>
+              <button @click="copyToClipboard(getLidarrListUrl(), 'Lidarr Import List URL')"
+                      class="text-indigo-400 hover:text-indigo-300 text-[11px] font-mono">Copy</button>
+            </div>
+            <div class="text-[10px] font-mono text-slate-400 truncate bg-slate-900 px-2 py-1 rounded" x-text="getLidarrListUrl()"></div>
+            <div class="text-[10px] text-slate-500">Lidarr -> Settings -> Import Lists -> Custom List</div>
+          </div>
+
+          <!-- RSS 2.0 Feed URL -->
+          <div class="bg-slate-950 p-2.5 rounded-lg border border-slate-800 space-y-1">
+            <div class="flex items-center justify-between text-slate-300 font-semibold text-[11px]">
+              <span>RSS 2.0 Music Feed</span>
+              <button @click="copyToClipboard(getRssFeedUrl(), 'RSS Feed URL')"
+                      class="text-indigo-400 hover:text-indigo-300 text-[11px] font-mono">Copy</button>
+            </div>
+            <div class="text-[10px] font-mono text-slate-400 truncate bg-slate-900 px-2 py-1 rounded" x-text="getRssFeedUrl()"></div>
+            <div class="text-[10px] text-slate-500">Universal RSS feed with artist & album per item</div>
+          </div>
+
+          <!-- Plain Text List URL -->
+          <div class="bg-slate-950 p-2.5 rounded-lg border border-slate-800 space-y-1">
+            <div class="flex items-center justify-between text-slate-300 font-semibold text-[11px]">
+              <span>Plain Text Feed (Artist - Title)</span>
+              <button @click="copyToClipboard(getTextFeedUrl(), 'Plain Text Feed URL')"
+                      class="text-indigo-400 hover:text-indigo-300 text-[11px] font-mono">Copy</button>
+            </div>
+            <div class="text-[10px] font-mono text-slate-400 truncate bg-slate-900 px-2 py-1 rounded" x-text="getTextFeedUrl()"></div>
+            <div class="text-[10px] text-slate-500">Simple one-track-per-line list for scripts and downstream tools</div>
+          </div>
+
+          <!-- Webhook URL -->
+          <div class="bg-slate-950 p-2.5 rounded-lg border border-slate-800 space-y-1">
+            <div class="flex items-center justify-between text-slate-300 font-semibold text-[11px]">
+              <span>Self-Healing Webhook Trigger</span>
+              <button @click="copyToClipboard(getWebhookUrl(), 'Webhook URL')"
+                      class="text-indigo-400 hover:text-indigo-300 text-[11px] font-mono">Copy</button>
+            </div>
+            <div class="text-[10px] font-mono text-slate-400 truncate bg-slate-900 px-2 py-1 rounded" x-text="getWebhookUrl()"></div>
+            <div class="text-[10px] text-slate-500">Lidarr -> Settings -> Connect -> Webhook (On Download / On Upgrade)</div>
+          </div>
         </div>
       </div>
 
@@ -955,7 +1058,7 @@
                 <th class="py-2.5 px-4">Artist</th>
                 <th class="py-2.5 px-4">Album</th>
                 <th class="py-2.5 px-4">Playlist</th>
-                <th class="py-2.5 px-4 text-right">Search</th>
+                <th class="py-2.5 px-4 text-right">Actions</th>
               </tr>
             </thead>
             <tbody class="divide-y divide-slate-800/40">
@@ -965,7 +1068,15 @@
                   <td class="py-2.5 px-4 text-slate-300" x-text="track.artist"></td>
                   <td class="py-2.5 px-4 text-slate-400" x-text="track.album || '—'"></td>
                   <td class="py-2.5 px-4 text-slate-400" x-text="getPlaylistName(track.playlist_id)"></td>
-                  <td class="py-2.5 px-4 text-right">
+                  <td class="py-2.5 px-4 text-right space-x-2">
+                    <template x-if="lidarrConfig && lidarrConfig.configured">
+                      <button @click="pushTrackToLidarr(track.id)"
+                              :disabled="pushingTrackId === track.id"
+                              title="Queue artist & album in Lidarr"
+                              class="inline-flex items-center space-x-1 text-[11px] text-emerald-400 hover:text-emerald-300 font-semibold disabled:opacity-50">
+                        <span x-text="pushingTrackId === track.id ? 'Queueing...' : '+ Lidarr'"></span>
+                      </button>
+                    </template>
                     <a :href="getTrackSearchUrl(track)" 
                        target="_blank" 
                        rel="noopener noreferrer"

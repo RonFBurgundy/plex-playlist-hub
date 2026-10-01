@@ -87,6 +87,12 @@ class TestFrontendDashboard:
         assert "Send to Plexamp" in html
         assert "Import to Plexamp" in html
 
+        # Lidarr & Automated Missing Feeds
+        assert "Lidarr & Feeds" in html
+        assert "Automated Missing Music Feeds" in html
+        assert "pushAllToLidarr" in html
+        assert "pushTrackToLidarr" in html
+
 
 class TestStaticAssets:
     """Validates that JavaScript, CSS, and asset files are served correctly."""
@@ -105,6 +111,12 @@ class TestStaticAssets:
         assert "pasteFromClipboard" in resp.text
         assert "getBookmarkletHref" in resp.text
         assert "checkHashImport" in resp.text
+        assert "fetchLidarrStatus" in resp.text
+        assert "pushAllToLidarr" in resp.text
+        assert "pushTrackToLidarr" in resp.text
+        assert "getRssFeedUrl" in resp.text
+        assert "getLidarrListUrl" in resp.text
+        assert "getWebhookUrl" in resp.text
 
     def test_static_style_css_served(self, client):
         resp = client.get("/static/style.css")

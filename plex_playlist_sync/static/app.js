@@ -42,6 +42,12 @@ document.addEventListener('alpine:init', () => {
     selectedMissingPlaylistId: '',
     missingSearch: '',
 
+    // Lidarr & Automated Feeds State
+    lidarrConfig: { configured: false, url: null, auto_search: false, status: null },
+    isLidarrDrawerOpen: false,
+    isPushingLidarr: false,
+    pushingTrackId: null,
+
     // Add Playlist Form State
     addTab: 'link', // 'link' | 'paste' | 'helper'
     addForm: {
@@ -253,7 +259,8 @@ document.addEventListener('alpine:init', () => {
         this.fetchPlaylists(),
         this.fetchUsers(),
         this.fetchSyncStatus(),
-        this.fetchMissingTracks()
+        this.fetchMissingTracks(),
+        this.fetchLidarrStatus()
       ]);
     },
 
@@ -764,6 +771,111 @@ document.addEventListener('alpine:init', () => {
     getPlaylistName(playlistId) {
       const found = this.playlists.find(p => String(p.id) === String(playlistId));
       return found ? found.name : playlistId;
+    },
+
+    // Lidarr & Feed Management
+    async fetchLidarrStatus() {
+      try {
+        const data = await this.apiRequest('/api/missing/lidarr/status');
+        if (data) {
+          this.lidarrConfig = data;
+        }
+      } catch (err) {
+        // Silently handle if lidarr status fails to load
+      }
+    },
+
+    toggleLidarrDrawer() {
+      this.isLidarrDrawerOpen = !this.isLidarrDrawerOpen;
+    },
+
+    getRssFeedUrl() {
+      const base = window.location.origin;
+      return this.selectedMissingPlaylistId 
+        ? `${base}/api/missing/rss?playlist_id=${encodeURIComponent(this.selectedMissingPlaylistId)}`
+        : `${base}/api/missing/rss`;
+    },
+
+    getLidarrListUrl() {
+      const base = window.location.origin;
+      return this.selectedMissingPlaylistId 
+        ? `${base}/api/missing/lidarr?playlist_id=${encodeURIComponent(this.selectedMissingPlaylistId)}`
+        : `${base}/api/missing/lidarr`;
+    },
+
+    getTextFeedUrl() {
+      const base = window.location.origin;
+      return this.selectedMissingPlaylistId 
+        ? `${base}/api/missing/text?playlist_id=${encodeURIComponent(this.selectedMissingPlaylistId)}`
+        : `${base}/api/missing/text`;
+    },
+
+    getWebhookUrl() {
+      return `${window.location.origin}/api/sync/webhook`;
+    },
+
+    async copyToClipboard(text, label = 'URL') {
+      try {
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          await navigator.clipboard.writeText(text);
+        } else {
+          const ta = document.createElement('textarea');
+          ta.value = text;
+          document.body.appendChild(ta);
+          ta.select();
+          document.execCommand('copy');
+          document.body.removeChild(ta);
+        }
+        this.showToast(`Copied ${label} to clipboard!`, 'success');
+      } catch (err) {
+        this.showToast(`Failed to copy to clipboard: ${err.message}`, 'error');
+      }
+    },
+
+    async pushAllToLidarr() {
+      if (this.isPushingLidarr) return;
+      this.isPushingLidarr = true;
+      try {
+        const payload = {
+          playlist_id: this.selectedMissingPlaylistId || null,
+          auto_search: true
+        };
+        const res = await this.apiRequest('/api/missing/lidarr/push', {
+          method: 'POST',
+          body: payload
+        });
+        this.showToast(`Lidarr Push: ${res.added_to_lidarr} added, ${res.already_monitored} existing, ${res.failed} failed`, 'success');
+      } catch (err) {
+        this.showToast(`Lidarr push failed: ${err.message}`, 'error');
+      } finally {
+        this.isPushingLidarr = false;
+      }
+    },
+
+    async pushTrackToLidarr(trackId) {
+      if (this.pushingTrackId) return;
+      this.pushingTrackId = trackId;
+      try {
+        const payload = {
+          track_ids: [trackId],
+          auto_search: true
+        };
+        const res = await this.apiRequest('/api/missing/lidarr/push', {
+          method: 'POST',
+          body: payload
+        });
+        if (res.added_to_lidarr > 0) {
+          this.showToast('Queued in Lidarr successfully', 'success');
+        } else if (res.already_monitored > 0) {
+          this.showToast('Already monitored in Lidarr', 'info');
+        } else {
+          this.showToast('Failed to queue in Lidarr', 'error');
+        }
+      } catch (err) {
+        this.showToast(`Lidarr queue failed: ${err.message}`, 'error');
+      } finally {
+        this.pushingTrackId = null;
+      }
     },
 
     // Live Sync SSE Terminal

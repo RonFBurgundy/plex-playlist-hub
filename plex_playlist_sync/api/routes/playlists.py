@@ -1,6 +1,7 @@
 """Playlist management routes with SSRF protection, targeting, and direct track imports."""
 
 import hashlib
+import json
 import logging
 from typing import Any, Optional, Union
 
@@ -245,6 +246,13 @@ def import_playlist_tracks(
     hash_seed = f"{current_user['id']}_{clean_name}_{len(req.tracks)}"
     import_id = f"imp_{hashlib.sha256(hash_seed.encode()).hexdigest()[:12]}"
 
+    tracks_data = [
+        {"title": t.title, "artist": t.artist or "", "album": t.album or ""}
+        for t in req.tracks
+        if t.title.strip()
+    ]
+    tracks_json_str = json.dumps(tracks_data)
+
     db.upsert_playlist(
         playlist_id=import_id,
         name=clean_name,
@@ -252,6 +260,7 @@ def import_playlist_tracks(
         description=clean_desc,
         poster_url=poster_url,
         creator_id=str(current_user["id"]),
+        tracks_json=tracks_json_str,
     )
 
     # Determine targets: Admins can target anyone, regular users strictly target themselves

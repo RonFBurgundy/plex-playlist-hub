@@ -65,6 +65,14 @@ class Config:
     host: str = "0.0.0.0"
     headless: bool = False
 
+    lidarr_url: Optional[str] = None
+    lidarr_api_key: Optional[str] = None
+    lidarr_auto_search: bool = True
+    lidarr_root_folder: Optional[str] = None
+    lidarr_quality_profile_id: Optional[int] = None
+    lidarr_metadata_profile_id: Optional[int] = None
+    feed_token: Optional[str] = None
+
     @classmethod
     def from_env(cls) -> "Config":
         plex_url = os.getenv("PLEX_URL", "").strip()
@@ -133,6 +141,13 @@ class Config:
             port=port,
             host=host,
             headless=headless,
+            lidarr_url=os.getenv("LIDARR_URL") or None,
+            lidarr_api_key=os.getenv("LIDARR_API_KEY") or None,
+            lidarr_auto_search=_parse_bool(os.getenv("LIDARR_AUTO_SEARCH"), True),
+            lidarr_root_folder=os.getenv("LIDARR_ROOT_FOLDER") or None,
+            lidarr_quality_profile_id=int(os.getenv("LIDARR_QUALITY_PROFILE_ID")) if os.getenv("LIDARR_QUALITY_PROFILE_ID") and os.getenv("LIDARR_QUALITY_PROFILE_ID").isdigit() else None,
+            lidarr_metadata_profile_id=int(os.getenv("LIDARR_METADATA_PROFILE_ID")) if os.getenv("LIDARR_METADATA_PROFILE_ID") and os.getenv("LIDARR_METADATA_PROFILE_ID").isdigit() else None,
+            feed_token=os.getenv("FEED_TOKEN") or None,
         )
 
     @property
@@ -144,3 +159,7 @@ class Config:
     @property
     def has_deezer(self) -> bool:
         return bool(self.deezer_user_id or self.deezer_playlist_ids)
+
+    @property
+    def has_lidarr(self) -> bool:
+        return bool(self.lidarr_url and self.lidarr_api_key)

@@ -41,6 +41,12 @@ This project has been completely re-architected and rewritten from the ground up
   - **1-Click Browser Bookmarklet Helper**: Drag the bookmarklet into your browser, click it on Spotify Web Player, and transfer playlists directly into Plexamp with one click.
   - **Clipboard & Text Parsing**: Paste track lists, table rows, or `Artist - Title` lines with automatic format recognition.
   - *Read the full [Spotify Import & Keyless Sync Guide](docs/SPOTIFY_IMPORT_GUIDE.md) for step-by-step instructions.*
+- **Lidarr Integration & Self-Healing Missing Tracks**:
+  - Automatically track songs in synchronized or imported playlists that are missing from your local Plex Music Library.
+  - **Direct Lidarr Push**: Monitor artists and trigger album searches directly from the web dashboard.
+  - **Automated Feeds**: Expose missing tracks to Lidarr via Custom Import Lists (JSON), universal RSS 2.0 feeds, or plain text.
+  - **Self-Healing Webhook Loop**: When Lidarr downloads and Plex indexes a missing song, a webhook ping automatically injects the track into the user's Plexamp playlist and clears it from missing tracks!
+  - *Read the full [Lidarr Integration & Automation Guide](docs/LIDARR_AND_AUTOMATION_GUIDE.md) for step-by-step instructions.*
 - **Spotify Integration**:
   - Automatic dynamic pagination across all user-owned and followed playlists (no 50-item limit).
   - Explicit playlist syncing via Spotify URLs, Spotify URIs, or IDs.
@@ -91,6 +97,11 @@ services:
       - SPOTIFY_CLIENT_ID=your_spotify_client_id
       - SPOTIFY_CLIENT_SECRET=your_spotify_client_secret
       - SPOTIFY_USER_ID=your_spotify_user_id
+      # Optional Lidarr Integration & Automation
+      # - LIDARR_URL=http://192.168.1.100:8686
+      # - LIDARR_API_KEY=your_lidarr_api_key
+      # - LIDARR_AUTO_SEARCH=1
+      # - FEED_TOKEN=my-secure-token
 ```
 
 Run with:
@@ -125,6 +136,13 @@ Access the hub in your browser at: `http://<your-server-ip>:5250`
 | `SPOTIFY_PLAYLIST_ID` | *Optional* | Space- or comma-separated list of Spotify playlist IDs, URLs, or URIs |
 | `DEEZER_USER_ID` | *Optional* | Deezer numerical user ID |
 | `DEEZER_PLAYLIST_ID` | *Optional* | Space- or comma-separated list of Deezer playlist IDs |
+| `LIDARR_URL` | *Optional* | Base URL of Lidarr server (e.g. `http://192.168.1.100:8686`) |
+| `LIDARR_API_KEY` | *Optional* | Lidarr API Key |
+| `LIDARR_AUTO_SEARCH` | `1` | Automatically trigger interactive search when pushing to Lidarr |
+| `LIDARR_ROOT_FOLDER` | *Auto* | Custom Lidarr root folder path |
+| `LIDARR_QUALITY_PROFILE_ID` | *Auto* | Custom Lidarr quality profile ID |
+| `LIDARR_METADATA_PROFILE_ID` | *Auto* | Custom Lidarr metadata profile ID |
+| `FEED_TOKEN` | *Optional* | Secret token protecting RSS feeds, JSON lists, and webhooks |
 
 ---
 

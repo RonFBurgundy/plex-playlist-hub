@@ -10,6 +10,7 @@ from fastapi import Depends, HTTPException, Request, status
 
 from plex_playlist_sync.auth import get_or_create_secret_key, verify_session_token
 from plex_playlist_sync.clients.deezer import DeezerClient
+from plex_playlist_sync.clients.lidarr import LidarrClient
 from plex_playlist_sync.clients.plex import PlexClient
 from plex_playlist_sync.clients.spotify import SpotifyClient
 from plex_playlist_sync.clients.spotify_scraper import SpotifyWebScraper
@@ -160,3 +161,65 @@ def require_admin(current_user: dict[str, Any] = Depends(get_current_user)) -> d
             detail="Administrator access required",
         )
     return current_user
+
+
+def get_lidarr_client(config: Config = Depends(get_config)) -> Optional[LidarrClient]:
+    """Dependency providing LidarrClient if configured."""
+    if not config.has_lidarr:
+        return None
+    try:
+        return LidarrClient(
+            base_url=config.lidarr_url,  # type: ignore[arg-type]
+            api_key=config.lidarr_api_key,  # type: ignore[arg-type]
+            verify_ssl=config.plex_verify_ssl,
+            auto_search=config.lidarr_auto_search,
+            root_folder=config.lidarr_root_folder,
+            quality_profile_id=config.lidarr_quality_profile_id,
+            metadata_profile_id=config.lidarr_metadata_profile_id,
+        )
+    except Exception as e:
+        logger.error("Failed to initialize LidarrClient: %s", e)
+        return None
+
+
+def verify_feed_access(
+    request: Request,
+    token: Optional[str] = None,
+    db: Database = Depends(get_db),
+    config: Config = Depends(get_config),
+) -> Optional[dict[str, Any]]:
+    """Validates access for RSS / Lidarr feeds.
+
+    If FEED_TOKEN is configured in environment, token or header is enforced.
+    Otherwise, if session cookie / bearer token exists, uses user context.
+    If no FEED_TOKEN is configured and no session is provided, allows read-only feed.
+    """
+    if config.feed_token:
+        provided = (
+            token
+            or request.headers.get("X-Api-Key")
+            or request.headers.get("Authorization", "").replace("Bearer ", "").strip()
+        )
+        if provided != config.feed_token:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid feed token",
+            )
+        return {"id": "feed_token_user", "username": "feed_subscriber", "is_admin": True}
+
+    cookie_token = request.cookies.get("session_token")
+    auth_header = request.headers.get("Authorization", "")
+    sess_token = cookie_token or (auth_header[7:].strip() if auth_header.startswith("Bearer ") else None) or token
+
+    if sess_token:
+        try:
+            secret_key = get_or_create_secret_key(data_dir=config.data_dir)
+            payload = verify_session_token(sess_token, secret_key)
+            if payload and db.get_session(sess_token):
+                user = db.get_user(payload["user_id"])
+                if user:
+                    return user
+        except Exception:
+            pass
+
+    return {"id": "lan_reader", "username": "lan_reader", "is_admin": True}
