@@ -85,6 +85,7 @@ class Database:
 
             migrations = [
                 (1, self._migration_v1),
+                (2, self._migration_v2),
             ]
 
             for version, migration_fn in migrations:
@@ -169,6 +170,13 @@ class Database:
             "CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id)"
         )
 
+    def _migration_v2(self, cur: sqlite3.Cursor) -> None:
+        cur.execute(
+            """
+            ALTER TABLE playlists ADD COLUMN creator_id TEXT REFERENCES users(id)
+            """
+        )
+
     # -------------------------------------------------------------------------
     # Users CRUD
     # -------------------------------------------------------------------------
@@ -247,6 +255,7 @@ class Database:
         poster_url: str = "",
         enabled: bool = True,
         sync_status: str = "never_synced",
+        creator_id: Optional[str] = None,
     ) -> dict[str, Any]:
         if hasattr(playlist_id, "id") and hasattr(playlist_id, "name"):
             p_id = str(playlist_id.id)
@@ -263,17 +272,18 @@ class Database:
         with self._lock:
             self.conn.execute(
                 """
-                INSERT INTO playlists (id, name, service, description, poster_url, enabled, sync_status, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                INSERT INTO playlists (id, name, service, description, poster_url, enabled, sync_status, creator_id, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
                 ON CONFLICT(id) DO UPDATE SET
                     name = excluded.name,
                     service = excluded.service,
                     description = excluded.description,
                     poster_url = excluded.poster_url,
                     enabled = excluded.enabled,
+                    creator_id = COALESCE(excluded.creator_id, playlists.creator_id),
                     updated_at = CURRENT_TIMESTAMP
                 """,
-                (p_id, p_name, service, p_desc, p_poster, enabled_val, sync_status),
+                (p_id, p_name, service, p_desc, p_poster, enabled_val, sync_status, creator_id),
             )
             self.conn.commit()
         playlist = self.get_playlist(p_id)
@@ -284,7 +294,7 @@ class Database:
     def get_playlist(self, playlist_id: str) -> Optional[dict[str, Any]]:
         cur = self.conn.execute(
             """
-            SELECT id, name, service, description, poster_url, enabled,
+            SELECT id, name, service, description, poster_url, enabled, creator_id,
                    last_synced_at, sync_status, created_at, updated_at
             FROM playlists
             WHERE id = ?
@@ -307,7 +317,7 @@ class Database:
             if enabled_only:
                 cur = self.conn.execute(
                     """
-                    SELECT p.id, p.name, p.service, p.description, p.poster_url, p.enabled,
+                    SELECT p.id, p.name, p.service, p.description, p.poster_url, p.enabled, p.creator_id,
                            p.last_synced_at, p.sync_status, p.created_at, p.updated_at
                     FROM playlists p
                     INNER JOIN playlist_targets pt ON p.id = pt.playlist_id
@@ -319,7 +329,7 @@ class Database:
             else:
                 cur = self.conn.execute(
                     """
-                    SELECT p.id, p.name, p.service, p.description, p.poster_url, p.enabled,
+                    SELECT p.id, p.name, p.service, p.description, p.poster_url, p.enabled, p.creator_id,
                            p.last_synced_at, p.sync_status, p.created_at, p.updated_at
                     FROM playlists p
                     INNER JOIN playlist_targets pt ON p.id = pt.playlist_id
@@ -332,7 +342,7 @@ class Database:
             if enabled_only:
                 cur = self.conn.execute(
                     """
-                    SELECT id, name, service, description, poster_url, enabled,
+                    SELECT id, name, service, description, poster_url, enabled, creator_id,
                            last_synced_at, sync_status, created_at, updated_at
                     FROM playlists
                     WHERE enabled = 1
@@ -342,8 +352,8 @@ class Database:
             else:
                 cur = self.conn.execute(
                     """
-                    SELECT id, name, service, description, poster_url, enabled,
-                           last_synced_at, sync_status, created_at, updated_at
+                    SELECT id, name, service, description, poster_url, enabled, creator_id,
+                   last_synced_at, sync_status, created_at, updated_at
                     FROM playlists
                     ORDER BY name ASC
                     """

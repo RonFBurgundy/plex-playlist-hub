@@ -301,14 +301,9 @@ def verify_session_token(token: str, secret_key: bytes) -> Optional[dict[str, An
 
     payload_b64, sig_b64 = parts
 
-    try:
-        pad_len = (4 - len(sig_b64) % 4) % 4
-        expected_sig = base64.urlsafe_b64decode(sig_b64 + "=" * pad_len)
-    except (binascii.Error, ValueError):
-        return None
-
     computed_sig = hmac.new(secret_key, payload_b64.encode("ascii"), hashlib.sha256).digest()
-    if not hmac.compare_digest(expected_sig, computed_sig):
+    computed_sig_b64 = base64.urlsafe_b64encode(computed_sig).decode("ascii").rstrip("=")
+    if not hmac.compare_digest(sig_b64, computed_sig_b64):
         return None
 
     try:
