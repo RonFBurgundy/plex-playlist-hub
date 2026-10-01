@@ -1,15 +1,26 @@
-FROM python:3.10-alpine
+FROM python:3.12-slim
 
-ENV PYTHONUNBUFFERED 1
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PIP_NO_CACHE_DIR=1
 
 WORKDIR /app
 
-COPY requirements.txt requirements.txt
-RUN pip install -r requirements.txt
+# Install dependencies
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
 
-COPY . .
-WORKDIR /app
+# Copy source code and config
+COPY plex_playlist_sync ./plex_playlist_sync
+COPY pyproject.toml README.md ./
 
-CMD ["python", "./plex-playlist-sync/run.py"]
+# Create data directory and non-root app user
+RUN mkdir -p /data && \
+    useradd --create-home --uid 1000 appuser && \
+    chown -R appuser:appuser /app /data
 
-# docker buildx build --platform linux/amd64,linux/arm64,linux/arm/v7 -t rnagabhyrava/plexplaylistsync:<tag> --push .
+USER appuser
+
+VOLUME ["/data"]
+
+CMD ["python", "-m", "plex_playlist_sync"]

@@ -1,99 +1,120 @@
 # Plex Playlist Sync
 
-Create spotify and deezer playlists in your plex account using tracks from your server and keeps plex playlists in sync with original playlists. 
+Synchronize Spotify and Deezer playlists with your local Plex Media Server using existing audio tracks in your library.
 
-This DOES NOT download any songs from anywhere.
+> [!NOTE]
+> This tool matches and manages playlists in your Plex server against songs already present in your music library. It does not download music files from third-party services.
 
-## Features
-* From Spotify: Sync all of the given user account's public playlists to plex
-* From Deezer: Sync all of the given user account's public playlists and/or any given public playlist IDs to plex
-* --- New ---
-* Option to write missing songs as a csv
-* Option to include poster and description in playlists.
+---
 
-## Prerequisites
-### Plex
-* Plex server's host and port
-* Plex token - [Don't know where to find it?](https://support.plex.tv/articles/204059436-finding-an-authentication-token-x-plex-token/)
+## Key Features
 
-### To use Spotify sync
-* Spotify client ID and client secret - Can be obtained from [spotify developer](https://developer.spotify.com/dashboard/login)
-* Spotify user ID - This can be found on spotify [account page](https://www.spotify.com/us/account/overview/)
+- **Spotify Synchronization**:
+  - Automatically fetches all playlists for a Spotify user account with **full dynamic pagination** (no 50-playlist limit).
+  - Sync specific curated, public, or shared playlists via `SPOTIFY_PLAYLIST_ID` (supports playlist IDs, URLs, and Spotify URIs).
+  - Built-in retry backoff handling for Spotify API rate limits (HTTP 429) and gateway timeouts.
+- **Deezer Synchronization**:
+  - Sync all public playlists for a Deezer profile ID (`DEEZER_USER_ID`).
+  - Sync explicit Deezer playlist IDs (`DEEZER_PLAYLIST_ID`).
+- **Smart Plex Track Matching**:
+  - Multi-tier matching (exact title & artist fuzzy comparison).
+  - Automated title sanitization for fallback searching (cleans remaster tags, deluxe edition brackets, and feature tags).
+  - Configurable similarity threshold (`SEARCH_SIMILARITY_THRESHOLD`).
+- **Flexible Execution Modes**:
+  - **Daemon Loop**: Continuous synchronization with configurable wait intervals (`SECONDS_TO_WAIT`).
+  - **One-Shot / Cron Mode**: Runs a single synchronization cycle and exits cleanly (`RUN_ONCE=1` or `CRON=1`).
+- **Security & Network Flexibility**:
+  - Optional SSL verification bypass (`PLEX_VERIFY_SSL=0` or `IGNORE_SSL=1`) for self-signed certificates or internal reverse proxies.
+  - Multi-architecture non-root Docker container (`uid 1000`).
+- **Export Missing Tracks**:
+  - Option to write unmatched tracks per playlist to CSV files in `/data` (`WRITE_MISSING_AS_CSV=1`). Automatically cleans up CSVs once all tracks are matched.
 
-### To use Deezer sync
-* Deezer profile ID of the account from which playlists need to sync from
-  * Login to deezer.com
-  * Click on your profile
-  * Grab the profile ID from the URL
-  *  Example: https://www.deezer.com/us/profile/9999999 - Here 9999999 is the profile ID
-OR
-* Get playlists IDs of playlists you want to sync
-  *  Example: https://www.deezer.com/us/playlist/1313621735 - Here 1313621735 is the playlist ID
+---
 
-## Docker Setup
-You need either docker or docker with docker-compose to run this. Docker images are available on [the hub](https://hub.docker.com/r/rnagabhyrava/plexplaylistsync/tags) for amd64, arm64 and arm/v7 and will be auto pulled based on your platform.
+## Configuration & Environment Variables
 
-Configure the parameters as needed. Plex URL and TOKEN are mandatory and either one of the Options (1,2,3) fields are required.
+| Variable | Default | Description |
+|---|---|---|
+| `PLEX_URL` | *Required* | Base URL to your Plex server (e.g. `http://192.168.1.100:32400`) |
+| `PLEX_TOKEN` | *Required* | Plex authentication token ([Find your Plex Token](https://support.plex.tv/articles/204059436-finding-an-authentication-token-x-plex-token/)) |
+| `PLEX_VERIFY_SSL` | `1` | Set to `0` or `false` to disable SSL certificate verification (useful for self-signed certs) |
+| `RUN_ONCE` / `CRON` | `0` | Set to `1` to run a single sync pass and exit (ideal for cron or task schedulers) |
+| `SECONDS_TO_WAIT` | `86400` | Seconds to wait between sync cycles when running as a continuous daemon |
+| `APPEND_SERVICE_SUFFIX` | `1` | Appends ` - Spotify` or ` - Deezer` to the Plex playlist title (`1` = enabled, `0` = disabled) |
+| `ADD_PLAYLIST_POSTER` | `1` | Copies playlist cover art to Plex (`1` = enabled, `0` = disabled) |
+| `ADD_PLAYLIST_DESCRIPTION` | `1` | Copies playlist description to Plex (`1` = enabled, `0` = disabled) |
+| `APPEND_INSTEAD_OF_SYNC` | `0` | `0` = keeps Plex playlist in sync with source; `1` = append tracks only without removing deletions |
+| `WRITE_MISSING_AS_CSV` | `0` | `1` = writes unmatched tracks for each playlist to `/data/<playlist_name>.csv` |
+| `SEARCH_SIMILARITY_THRESHOLD` | `0.9` | Float threshold between `0.0` and `1.0` for fuzzy artist/album title matching |
+| `LOG_LEVEL` | `INFO` | Logging level (`DEBUG`, `INFO`, `WARNING`, `ERROR`) |
+| `SPOTIFY_CLIENT_ID` | *Optional* | Spotify Developer Application Client ID |
+| `SPOTIFY_CLIENT_SECRET` | *Optional* | Spotify Developer Application Client Secret |
+| `SPOTIFY_USER_ID` | *Optional* | Spotify user profile ID (syncs all owned/followed playlists) |
+| `SPOTIFY_PLAYLIST_ID` | *Optional* | Space- or comma-separated list of Spotify playlist IDs, URLs, or URIs |
+| `DEEZER_USER_ID` | *Optional* | Deezer numerical user ID |
+| `DEEZER_PLAYLIST_ID` | *Optional* | Space- or comma-separated list of Deezer playlist IDs |
+
+---
+
+## Docker Deployment
 
 ### Docker Run
 
-```
+```bash
 docker run -d \
   --name=playlistSync \
-  -e PLEX_URL=<your local plex url> \
-  -e PLEX_TOKEN=<your plex token> \
-  -e WRITE_MISSING_AS_CSV=<1 or 0> # Default 0, 1 = writes missing tracks from each playlist to a csv
-  -e APPEND_SERVICE_SUFFIX=<1 or 0> # Default 1, 1 = appends the service name to the playlist name
-  -e ADD_PLAYLIST_POSTER=<1 or 0> # Default 1, 1 = add poster for each playlist
-  -e ADD_PLAYLIST_DESCRIPTION=<1 or 0> # Default 1, 1 = add description for each playlist
-  -e APPEND_INSTEAD_OF_SYNC=0 # Default 0, 1 = Sync tracks, 0 = Append only
-  -e SECONDS_TO_WAIT=84000 # Seconds to wait between syncs \
-  -e SPOTIFY_CLIENT_ID=<your spotify client id> # Option 1 \
-  -e SPOTIFY_CLIENT_SECRET=<your spotify client secret> # Option 1 \
-  -e SPOTIFY_USER_ID=<your spotify user id from the account page> # Option 1 \
-  -e DEEZER_USER_ID=<your deezer user id> # Option 2 \
-  -e DEEZER_PLAYLIST_ID= #<deezer playlist ids space seperated> # Option 3 \
-  -v <Path where you want to write missing tracks>:/data \
   --restart unless-stopped \
-  rnagabhyrava/plexplaylistsync:latest
+  -e PLEX_URL="http://192.168.1.100:32400" \
+  -e PLEX_TOKEN="YOUR_PLEX_TOKEN" \
+  -e SPOTIFY_CLIENT_ID="YOUR_SPOTIFY_CLIENT_ID" \
+  -e SPOTIFY_CLIENT_SECRET="YOUR_SPOTIFY_CLIENT_SECRET" \
+  -e SPOTIFY_USER_ID="YOUR_SPOTIFY_USER_ID" \
+  -e WRITE_MISSING_AS_CSV=1 \
+  -v /path/to/missing_data:/data \
+  ghcr.io/ronfburgundy/plex-playlist-sync:latest
 ```
-#### Notes
-- Include `http://` in the PLEX_URL
-- Remove comments (ex: `# Optional x`) before running 
 
 ### Docker Compose
 
-docker-compose.yml can be configured as follows. See [docker-compose-example.yml](https://github.com/rnagabhyrava/plex-playlist-sync/blob/main/docker-compose-example.yml) for example
-```
-version: "2.1"
+```yaml
 services:
   playlistSync:
-    image: rnagabhyrava/plexplaylistsync:latest
+    image: ghcr.io/ronfburgundy/plex-playlist-sync:latest
     container_name: playlistSync
-    # optional only if you chose WRITE_MISSING_AS_CSV=1 in env
-    volumes:
-      - <Path where you want to write missing tracks>:/data
-    environment:
-      - PLEX_URL= <your local plex url>
-      - PLEX_TOKEN=<your plex token>
-      - WRITE_MISSING_AS_CSV=<1 or 0> # Default 0, 1 = writes missing tracks from each playlist to a csv
-      - APPEND_SERVICE_SUFFIX=<1 or 0> # Default 1, 1 = appends the service name to the playlist name
-      - ADD_PLAYLIST_POSTER=<1 or 0> # Default 1, 1 = add poster for each playlist
-      - ADD_PLAYLIST_DESCRIPTION=<1 or 0> # Default 1, 1 = add description for each playlist
-      - APPEND_INSTEAD_OF_SYNC=0 # Default 0, 1 = Sync tracks, 0 = Append only
-      - SECONDS_TO_WAIT=84000
-      - SPOTIFY_CLIENT_ID=<your spotify client id>
-      - SPOTIFY_CLIENT_SECRET=<your spotify client secret>
-      - SPOTIFY_USER_ID=<your spotify user id>
-      - DEEZER_USER_ID=<your spotify user id>
-      - DEEZER_PLAYLIST_ID= #<deezer playlist ids space seperated>
     restart: unless-stopped
+    volumes:
+      - ./data:/data
+    environment:
+      - PLEX_URL=http://localhost:32400
+      - PLEX_TOKEN=your_plex_token_here
+      - PLEX_VERIFY_SSL=1
+      - SECONDS_TO_WAIT=86400
+      - RUN_ONCE=0
+      - APPEND_SERVICE_SUFFIX=1
+      - ADD_PLAYLIST_POSTER=1
+      - ADD_PLAYLIST_DESCRIPTION=1
+      - WRITE_MISSING_AS_CSV=0
+      - SPOTIFY_CLIENT_ID=your_client_id
+      - SPOTIFY_CLIENT_SECRET=your_client_secret
+      - SPOTIFY_USER_ID=your_spotify_user
+      - DEEZER_USER_ID=
+```
 
-```
-And run with :
-```
-docker-compose up
+---
+
+## Local Development & Testing
+
+```bash
+# Clone the repository
+git clone https://github.com/RonFBurgundy/plex-playlist-sync.git
+cd plex-playlist-sync
+
+# Run test suite
+pytest
 ```
 
-### Issues
-Something's off? See room for improvement? Feel free to open an issue with as much info as possible. Cheers!
+---
+
+## License
+
+GNU General Public License v3 (GPL-3.0). See [LICENSE.md](LICENSE.md) for details.

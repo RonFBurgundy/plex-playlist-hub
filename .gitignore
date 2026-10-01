@@ -135,3 +135,16 @@ Notebooks/
 # files
 *.ipynb
 .*.py
+
+# Local Orchestration & Runner Harness
+.opencode/
+scripts/
+docs/notes/
+*.notes.md
+
+# Runtime data & testing caches
+data/
+*.log
+.coverage
+.pytest_cache/
+.ruff_cache/
