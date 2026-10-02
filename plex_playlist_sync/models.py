@@ -508,4 +508,139 @@ class NotificationChannel:
         }
 
 
+class LibraryMode(StrEnum):
+    NATIVE = "native"
+    LIDARR = "lidarr"
+
+
+@dataclass
+class LibraryArtist:
+    id: str
+    name: str
+    clean_name: str = ""
+    foreign_artist_id: Optional[str] = None
+    path: Optional[str] = None
+    monitored: bool = True
+    quality_profile_id: Optional[str] = None
+    metadata_json: Optional[str] = None
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "id": self.id,
+            "name": self.name,
+            "clean_name": self.clean_name,
+            "foreign_artist_id": self.foreign_artist_id,
+            "path": self.path,
+            "monitored": bool(self.monitored),
+            "quality_profile_id": self.quality_profile_id,
+            "metadata_json": self.metadata_json,
+            "created_at": self.created_at,
+            "updated_at": self.updated_at,
+        }
+
+
+@dataclass
+class LibraryAlbum:
+    id: str
+    artist_id: str
+    title: str
+    clean_title: str = ""
+    foreign_album_id: Optional[str] = None
+    release_date: Optional[str] = None
+    year: Optional[int] = None
+    album_type: str = "album"
+    monitored: bool = True
+    path: Optional[str] = None
+    cover_url: Optional[str] = None
+    total_tracks: Optional[int] = None
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "id": self.id,
+            "artist_id": self.artist_id,
+            "title": self.title,
+            "clean_title": self.clean_title,
+            "foreign_album_id": self.foreign_album_id,
+            "release_date": self.release_date,
+            "year": int(self.year) if self.year is not None else None,
+            "album_type": self.album_type,
+            "monitored": bool(self.monitored),
+            "path": self.path,
+            "cover_url": self.cover_url,
+            "total_tracks": int(self.total_tracks) if self.total_tracks is not None else None,
+            "created_at": self.created_at,
+            "updated_at": self.updated_at,
+        }
+
+
+@dataclass
+class LibraryTrack:
+    id: str
+    album_id: str
+    artist_id: str
+    title: str
+    clean_title: str = ""
+    track_number: int = 1
+    disc_number: int = 1
+    duration_seconds: Optional[float] = None
+    monitored: bool = True
+    foreign_track_id: Optional[str] = None
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "id": self.id,
+            "album_id": self.album_id,
+            "artist_id": self.artist_id,
+            "title": self.title,
+            "clean_title": self.clean_title,
+            "track_number": int(self.track_number),
+            "disc_number": int(self.disc_number),
+            "duration_seconds": float(self.duration_seconds) if self.duration_seconds is not None else None,
+            "monitored": bool(self.monitored),
+            "foreign_track_id": self.foreign_track_id,
+            "created_at": self.created_at,
+            "updated_at": self.updated_at,
+        }
+
+
+@dataclass
+class LibraryFile:
+    id: str
+    track_id: str
+    file_path: str
+    relative_path: str
+    codec: str
+    bitrate: Optional[int] = None
+    sample_rate: Optional[int] = None
+    bits_per_sample: Optional[int] = None
+    quality_name: str = "Unknown"
+    size_bytes: int = 0
+    cutoff_met: bool = True
+    date_added: Optional[str] = None
+    updated_at: Optional[str] = None
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "id": self.id,
+            "track_id": self.track_id,
+            "file_path": self.file_path,
+            "relative_path": self.relative_path,
+            "codec": self.codec,
+            "bitrate": int(self.bitrate) if self.bitrate is not None else None,
+            "sample_rate": int(self.sample_rate) if self.sample_rate is not None else None,
+            "bits_per_sample": int(self.bits_per_sample) if self.bits_per_sample is not None else None,
+            "quality_name": self.quality_name,
+            "size_bytes": int(self.size_bytes),
+            "cutoff_met": bool(self.cutoff_met),
+            "date_added": self.date_added,
+            "updated_at": self.updated_at,
+        }
+
+
 

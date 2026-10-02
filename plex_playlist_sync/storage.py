@@ -2,8 +2,10 @@
 
 import json
 import os
+import re
 import sqlite3
 import threading
+import uuid
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional, Union
@@ -14,6 +16,11 @@ from plex_playlist_sync.models import (
     DownloadDriverType,
     DownloadStatus,
     IndexerConfig,
+    LibraryAlbum,
+    LibraryArtist,
+    LibraryFile,
+    LibraryMode,
+    LibraryTrack,
     MediaIssue,
     MusicRequest,
     NotificationChannel,
@@ -25,6 +32,14 @@ from plex_playlist_sync.models import (
     RequestStatus,
     Track,
 )
+
+
+def clean_library_name(text: str) -> str:
+    """Normalizes string for indexing and resilient comparison: lowercased, alphanumerics and single spaces."""
+    if not text:
+        return ""
+    cleaned = re.sub(r"[^\w\s]", "", str(text).lower())
+    return re.sub(r"\s+", " ", cleaned).strip()
 
 
 class Database:
@@ -150,6 +165,7 @@ class Database:
                 (12, self._migration_v12),
                 (13, self._migration_v13),
                 (14, self._migration_v14),
+                (15, self._migration_v15),
             ]
 
             for version, migration_fn in migrations:
@@ -633,6 +649,120 @@ class Database:
         )
         cur.execute(
             "CREATE INDEX IF NOT EXISTS idx_music_requests_cutoff ON music_requests(status, cutoff_met);"
+        )
+
+    def _migration_v15(self, cur: sqlite3.Cursor) -> None:
+        cur.execute(
+            "ALTER TABLE media_management_settings ADD COLUMN library_mode TEXT NOT NULL DEFAULT 'native';"
+        )
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS library_artists (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                clean_name TEXT NOT NULL,
+                foreign_artist_id TEXT,
+                path TEXT,
+                monitored INTEGER NOT NULL DEFAULT 1,
+                quality_profile_id TEXT REFERENCES quality_profiles(id),
+                metadata_json TEXT,
+                created_at TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP),
+                updated_at TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP)
+            );
+            """
+        )
+        cur.execute(
+            "CREATE INDEX IF NOT EXISTS idx_lib_artists_clean_name ON library_artists(clean_name);"
+        )
+        cur.execute(
+            "CREATE INDEX IF NOT EXISTS idx_lib_artists_foreign ON library_artists(foreign_artist_id);"
+        )
+
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS library_albums (
+                id TEXT PRIMARY KEY,
+                artist_id TEXT NOT NULL REFERENCES library_artists(id) ON DELETE CASCADE,
+                title TEXT NOT NULL,
+                clean_title TEXT NOT NULL,
+                foreign_album_id TEXT,
+                release_date TEXT,
+                year INTEGER,
+                album_type TEXT NOT NULL DEFAULT 'album',
+                monitored INTEGER NOT NULL DEFAULT 1,
+                path TEXT,
+                cover_url TEXT,
+                total_tracks INTEGER,
+                created_at TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP),
+                updated_at TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP)
+            );
+            """
+        )
+        cur.execute(
+            "CREATE INDEX IF NOT EXISTS idx_lib_albums_artist ON library_albums(artist_id);"
+        )
+        cur.execute(
+            "CREATE INDEX IF NOT EXISTS idx_lib_albums_clean_title ON library_albums(clean_title);"
+        )
+        cur.execute(
+            "CREATE INDEX IF NOT EXISTS idx_lib_albums_foreign ON library_albums(foreign_album_id);"
+        )
+
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS library_tracks (
+                id TEXT PRIMARY KEY,
+                album_id TEXT NOT NULL REFERENCES library_albums(id) ON DELETE CASCADE,
+                artist_id TEXT NOT NULL REFERENCES library_artists(id) ON DELETE CASCADE,
+                title TEXT NOT NULL,
+                clean_title TEXT NOT NULL,
+                track_number INTEGER NOT NULL DEFAULT 1,
+                disc_number INTEGER NOT NULL DEFAULT 1,
+                duration_seconds REAL,
+                monitored INTEGER NOT NULL DEFAULT 1,
+                foreign_track_id TEXT,
+                created_at TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP),
+                updated_at TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP)
+            );
+            """
+        )
+        cur.execute(
+            "CREATE INDEX IF NOT EXISTS idx_lib_tracks_album ON library_tracks(album_id);"
+        )
+        cur.execute(
+            "CREATE INDEX IF NOT EXISTS idx_lib_tracks_artist ON library_tracks(artist_id);"
+        )
+        cur.execute(
+            "CREATE INDEX IF NOT EXISTS idx_lib_tracks_clean_title ON library_tracks(clean_title);"
+        )
+
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS library_files (
+                id TEXT PRIMARY KEY,
+                track_id TEXT NOT NULL REFERENCES library_tracks(id) ON DELETE CASCADE,
+                file_path TEXT NOT NULL UNIQUE,
+                relative_path TEXT NOT NULL,
+                codec TEXT NOT NULL,
+                bitrate INTEGER,
+                sample_rate INTEGER,
+                bits_per_sample INTEGER,
+                quality_name TEXT NOT NULL,
+                size_bytes INTEGER NOT NULL DEFAULT 0,
+                cutoff_met INTEGER NOT NULL DEFAULT 1,
+                date_added TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP),
+                updated_at TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP)
+            );
+            """
+        )
+        cur.execute(
+            "CREATE INDEX IF NOT EXISTS idx_lib_files_track ON library_files(track_id);"
+        )
+        cur.execute(
+            "CREATE INDEX IF NOT EXISTS idx_lib_files_path ON library_files(file_path);"
+        )
+        cur.execute(
+            "CREATE INDEX IF NOT EXISTS idx_lib_files_cutoff ON library_files(cutoff_met);"
         )
 
     # -------------------------------------------------------------------------
@@ -1456,6 +1586,7 @@ class Database:
             res["import_mode"] = str(res.get("import_mode") or "move")
             res["delete_completed_transfers"] = bool(res.get("delete_completed_transfers", 0))
             res["enable_quality_upgrades"] = bool(res.get("enable_quality_upgrades", 1))
+            res["library_mode"] = str(res.get("library_mode") or "native")
             return res
 
     def update_media_management_settings(self, settings: dict[str, Any]) -> dict[str, Any]:
@@ -1476,6 +1607,7 @@ class Database:
             "save_cover_art_file",
             "delete_completed_transfers",
             "enable_quality_upgrades",
+            "library_mode",
         }
         updates: dict[str, Any] = {}
         for k, v in settings.items():
@@ -2468,6 +2600,610 @@ class Database:
             )
             self.conn.commit()
             return cur.rowcount > 0
+
+    # -------------------------------------------------------------------------
+    # Native Library CRUD
+    # -------------------------------------------------------------------------
+
+    def _map_library_artist(self, row: sqlite3.Row) -> dict[str, Any]:
+        res = dict(row)
+        res["monitored"] = bool(res.get("monitored", 1))
+        return res
+
+    def _map_library_album(self, row: sqlite3.Row) -> dict[str, Any]:
+        res = dict(row)
+        res["monitored"] = bool(res.get("monitored", 1))
+        if res.get("year") is not None:
+            res["year"] = int(res["year"])
+        if res.get("total_tracks") is not None:
+            res["total_tracks"] = int(res["total_tracks"])
+        return res
+
+    def _map_library_track(self, row: sqlite3.Row) -> dict[str, Any]:
+        res = dict(row)
+        res["monitored"] = bool(res.get("monitored", 1))
+        res["track_number"] = int(res.get("track_number", 1))
+        res["disc_number"] = int(res.get("disc_number", 1))
+        if res.get("duration_seconds") is not None:
+            res["duration_seconds"] = float(res["duration_seconds"])
+        return res
+
+    def _map_library_file(self, row: sqlite3.Row) -> dict[str, Any]:
+        res = dict(row)
+        res["cutoff_met"] = bool(res.get("cutoff_met", 1))
+        res["size_bytes"] = int(res.get("size_bytes", 0))
+        if res.get("bitrate") is not None:
+            res["bitrate"] = int(res["bitrate"])
+        if res.get("sample_rate") is not None:
+            res["sample_rate"] = int(res["sample_rate"])
+        if res.get("bits_per_sample") is not None:
+            res["bits_per_sample"] = int(res["bits_per_sample"])
+        return res
+
+    def upsert_library_artist(
+        self, artist_data: Union[LibraryArtist, dict[str, Any]]
+    ) -> dict[str, Any]:
+        """Creates or updates a native library artist."""
+        d = artist_data.to_dict() if hasattr(artist_data, "to_dict") else dict(artist_data)
+        artist_id = str(d.get("id") or uuid.uuid4())
+        name = str(d.get("name") or "")
+        clean_name = clean_library_name(d.get("clean_name") or name)
+        foreign_artist_id = str(d["foreign_artist_id"]) if d.get("foreign_artist_id") is not None else None
+        path = str(d["path"]) if d.get("path") is not None else None
+        monitored = 1 if d.get("monitored", True) else 0
+        quality_profile_id = str(d["quality_profile_id"]) if d.get("quality_profile_id") is not None else None
+        metadata_json = d.get("metadata_json")
+        if isinstance(metadata_json, dict):
+            metadata_json = json.dumps(metadata_json)
+        elif metadata_json is not None:
+            metadata_json = str(metadata_json)
+        created_at = d.get("created_at")
+
+        with self._lock:
+            self.conn.execute(
+                """
+                INSERT INTO library_artists (
+                    id, name, clean_name, foreign_artist_id, path, monitored,
+                    quality_profile_id, metadata_json, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, COALESCE(?, CURRENT_TIMESTAMP), CURRENT_TIMESTAMP)
+                ON CONFLICT(id) DO UPDATE SET
+                    name = excluded.name,
+                    clean_name = excluded.clean_name,
+                    foreign_artist_id = excluded.foreign_artist_id,
+                    path = excluded.path,
+                    monitored = excluded.monitored,
+                    quality_profile_id = excluded.quality_profile_id,
+                    metadata_json = excluded.metadata_json,
+                    updated_at = CURRENT_TIMESTAMP
+                """,
+                (
+                    artist_id,
+                    name,
+                    clean_name,
+                    foreign_artist_id,
+                    path,
+                    monitored,
+                    quality_profile_id,
+                    metadata_json,
+                    created_at,
+                ),
+            )
+            self.conn.commit()
+
+        artist = self.get_library_artist(artist_id)
+        if artist is None:
+            raise RuntimeError(f"Failed to upsert library artist {artist_id}")
+        return artist
+
+    def get_library_artist(self, artist_id: str) -> Optional[dict[str, Any]]:
+        """Retrieves a single library artist by ID."""
+        with self._lock:
+            cur = self.conn.execute(
+                "SELECT * FROM library_artists WHERE id = ?",
+                (str(artist_id),),
+            )
+            row = cur.fetchone()
+            return self._map_library_artist(row) if row else None
+
+    def get_library_artist_by_name(self, name: str) -> Optional[dict[str, Any]]:
+        """Retrieves an artist by exact name or cleaned normalized name."""
+        clean = clean_library_name(name)
+        with self._lock:
+            cur = self.conn.execute(
+                "SELECT * FROM library_artists WHERE clean_name = ? OR LOWER(name) = LOWER(?) LIMIT 1",
+                (clean, str(name).strip()),
+            )
+            row = cur.fetchone()
+            return self._map_library_artist(row) if row else None
+
+    def list_library_artists(
+        self,
+        monitored_only: bool = False,
+        query: Optional[str] = None,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> list[dict[str, Any]]:
+        """Lists library artists with optional filtering, search query, and pagination."""
+        sql = "SELECT * FROM library_artists WHERE 1=1"
+        params: list[Any] = []
+        if monitored_only:
+            sql += " AND monitored = 1"
+        if query:
+            clean_q = clean_library_name(query)
+            sql += " AND (clean_name LIKE ? OR name LIKE ?)"
+            params.extend([f"%{clean_q}%", f"%{query}%"])
+        sql += " ORDER BY name COLLATE NOCASE ASC LIMIT ? OFFSET ?"
+        params.extend([int(limit), int(offset)])
+
+        with self._lock:
+            cur = self.conn.execute(sql, params)
+            return [self._map_library_artist(row) for row in cur.fetchall()]
+
+    def delete_library_artist(self, artist_id: str) -> bool:
+        """Deletes a library artist and cascades to child albums, tracks, and files."""
+        with self._lock:
+            cur = self.conn.execute(
+                "DELETE FROM library_artists WHERE id = ?",
+                (str(artist_id),),
+            )
+            self.conn.commit()
+            return cur.rowcount > 0
+
+    def set_artist_monitored(
+        self, artist_id: str, monitored: bool, cascade_children: bool = True
+    ) -> bool:
+        """Sets monitoring status for an artist and optionally cascades to child albums and tracks."""
+        val = 1 if monitored else 0
+        with self._lock:
+            cur = self.conn.execute(
+                "UPDATE library_artists SET monitored = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                (val, str(artist_id)),
+            )
+            if cur.rowcount == 0:
+                return False
+            if cascade_children:
+                self.conn.execute(
+                    "UPDATE library_albums SET monitored = ?, updated_at = CURRENT_TIMESTAMP WHERE artist_id = ?",
+                    (val, str(artist_id)),
+                )
+                self.conn.execute(
+                    "UPDATE library_tracks SET monitored = ?, updated_at = CURRENT_TIMESTAMP WHERE artist_id = ?",
+                    (val, str(artist_id)),
+                )
+            self.conn.commit()
+            return True
+
+    def upsert_library_album(
+        self, album_data: Union[LibraryAlbum, dict[str, Any]]
+    ) -> dict[str, Any]:
+        """Creates or updates a native library album."""
+        d = album_data.to_dict() if hasattr(album_data, "to_dict") else dict(album_data)
+        album_id = str(d.get("id") or uuid.uuid4())
+        artist_id = str(d.get("artist_id") or "")
+        title = str(d.get("title") or "")
+        clean_title = clean_library_name(d.get("clean_title") or title)
+        foreign_album_id = str(d["foreign_album_id"]) if d.get("foreign_album_id") is not None else None
+        release_date = str(d["release_date"]) if d.get("release_date") is not None else None
+        year = int(d["year"]) if d.get("year") is not None else None
+        album_type = str(d.get("album_type") or "album")
+        monitored = 1 if d.get("monitored", True) else 0
+        path = str(d["path"]) if d.get("path") is not None else None
+        cover_url = str(d["cover_url"]) if d.get("cover_url") is not None else None
+        total_tracks = int(d["total_tracks"]) if d.get("total_tracks") is not None else None
+        created_at = d.get("created_at")
+
+        with self._lock:
+            self.conn.execute(
+                """
+                INSERT INTO library_albums (
+                    id, artist_id, title, clean_title, foreign_album_id, release_date,
+                    year, album_type, monitored, path, cover_url, total_tracks,
+                    created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, COALESCE(?, CURRENT_TIMESTAMP), CURRENT_TIMESTAMP)
+                ON CONFLICT(id) DO UPDATE SET
+                    artist_id = excluded.artist_id,
+                    title = excluded.title,
+                    clean_title = excluded.clean_title,
+                    foreign_album_id = excluded.foreign_album_id,
+                    release_date = excluded.release_date,
+                    year = excluded.year,
+                    album_type = excluded.album_type,
+                    monitored = excluded.monitored,
+                    path = excluded.path,
+                    cover_url = excluded.cover_url,
+                    total_tracks = excluded.total_tracks,
+                    updated_at = CURRENT_TIMESTAMP
+                """,
+                (
+                    album_id,
+                    artist_id,
+                    title,
+                    clean_title,
+                    foreign_album_id,
+                    release_date,
+                    year,
+                    album_type,
+                    monitored,
+                    path,
+                    cover_url,
+                    total_tracks,
+                    created_at,
+                ),
+            )
+            self.conn.commit()
+
+        album = self.get_library_album(album_id)
+        if album is None:
+            raise RuntimeError(f"Failed to upsert library album {album_id}")
+        return album
+
+    def get_library_album(self, album_id: str) -> Optional[dict[str, Any]]:
+        """Retrieves a single library album by ID."""
+        with self._lock:
+            cur = self.conn.execute(
+                "SELECT * FROM library_albums WHERE id = ?",
+                (str(album_id),),
+            )
+            row = cur.fetchone()
+            return self._map_library_album(row) if row else None
+
+    def get_library_album_by_title(
+        self, artist_id: str, title: str
+    ) -> Optional[dict[str, Any]]:
+        """Retrieves a library album by artist ID and title using clean_library_name."""
+        clean = clean_library_name(title)
+        with self._lock:
+            cur = self.conn.execute(
+                "SELECT * FROM library_albums WHERE artist_id = ? AND clean_title = ? LIMIT 1",
+                (str(artist_id), clean),
+            )
+            row = cur.fetchone()
+            return self._map_library_album(row) if row else None
+
+    def list_library_albums(
+        self,
+        artist_id: Optional[str] = None,
+        monitored_only: bool = False,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> list[dict[str, Any]]:
+        """Lists library albums with optional artist filtering and pagination."""
+        sql = "SELECT * FROM library_albums WHERE 1=1"
+        params: list[Any] = []
+        if artist_id:
+            sql += " AND artist_id = ?"
+            params.append(str(artist_id))
+        if monitored_only:
+            sql += " AND monitored = 1"
+        sql += " ORDER BY year DESC, title COLLATE NOCASE ASC LIMIT ? OFFSET ?"
+        params.extend([int(limit), int(offset)])
+
+        with self._lock:
+            cur = self.conn.execute(sql, params)
+            return [self._map_library_album(row) for row in cur.fetchall()]
+
+    def delete_library_album(self, album_id: str) -> bool:
+        """Deletes a library album and cascades to child tracks and files."""
+        with self._lock:
+            cur = self.conn.execute(
+                "DELETE FROM library_albums WHERE id = ?",
+                (str(album_id),),
+            )
+            self.conn.commit()
+            return cur.rowcount > 0
+
+    def set_album_monitored(
+        self, album_id: str, monitored: bool, cascade_tracks: bool = True
+    ) -> bool:
+        """Sets monitoring status for an album and optionally cascades to child tracks."""
+        val = 1 if monitored else 0
+        with self._lock:
+            cur = self.conn.execute(
+                "UPDATE library_albums SET monitored = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                (val, str(album_id)),
+            )
+            if cur.rowcount == 0:
+                return False
+            if cascade_tracks:
+                self.conn.execute(
+                    "UPDATE library_tracks SET monitored = ?, updated_at = CURRENT_TIMESTAMP WHERE album_id = ?",
+                    (val, str(album_id)),
+                )
+            self.conn.commit()
+            return True
+
+    def upsert_library_track(
+        self, track_data: Union[LibraryTrack, dict[str, Any]]
+    ) -> dict[str, Any]:
+        """Creates or updates a native library track."""
+        d = track_data.to_dict() if hasattr(track_data, "to_dict") else dict(track_data)
+        track_id = str(d.get("id") or uuid.uuid4())
+        album_id = str(d.get("album_id") or "")
+        artist_id = str(d.get("artist_id") or "")
+        title = str(d.get("title") or "")
+        clean_title = clean_library_name(d.get("clean_title") or title)
+        track_number = int(d.get("track_number", 1))
+        disc_number = int(d.get("disc_number", 1))
+        duration_seconds = float(d["duration_seconds"]) if d.get("duration_seconds") is not None else None
+        monitored = 1 if d.get("monitored", True) else 0
+        foreign_track_id = str(d["foreign_track_id"]) if d.get("foreign_track_id") is not None else None
+        created_at = d.get("created_at")
+
+        with self._lock:
+            self.conn.execute(
+                """
+                INSERT INTO library_tracks (
+                    id, album_id, artist_id, title, clean_title, track_number,
+                    disc_number, duration_seconds, monitored, foreign_track_id,
+                    created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, COALESCE(?, CURRENT_TIMESTAMP), CURRENT_TIMESTAMP)
+                ON CONFLICT(id) DO UPDATE SET
+                    album_id = excluded.album_id,
+                    artist_id = excluded.artist_id,
+                    title = excluded.title,
+                    clean_title = excluded.clean_title,
+                    track_number = excluded.track_number,
+                    disc_number = excluded.disc_number,
+                    duration_seconds = excluded.duration_seconds,
+                    monitored = excluded.monitored,
+                    foreign_track_id = excluded.foreign_track_id,
+                    updated_at = CURRENT_TIMESTAMP
+                """,
+                (
+                    track_id,
+                    album_id,
+                    artist_id,
+                    title,
+                    clean_title,
+                    track_number,
+                    disc_number,
+                    duration_seconds,
+                    monitored,
+                    foreign_track_id,
+                    created_at,
+                ),
+            )
+            self.conn.commit()
+
+        track = self.get_library_track(track_id)
+        if track is None:
+            raise RuntimeError(f"Failed to upsert library track {track_id}")
+        return track
+
+    def get_library_track(self, track_id: str) -> Optional[dict[str, Any]]:
+        """Retrieves a single library track by ID."""
+        with self._lock:
+            cur = self.conn.execute(
+                "SELECT * FROM library_tracks WHERE id = ?",
+                (str(track_id),),
+            )
+            row = cur.fetchone()
+            return self._map_library_track(row) if row else None
+
+    def get_library_track_by_title(
+        self, album_id: str, title: str, track_number: Optional[int] = None
+    ) -> Optional[dict[str, Any]]:
+        """Retrieves a library track by album ID, clean title, and optional track number."""
+        clean = clean_library_name(title)
+        with self._lock:
+            if track_number is not None:
+                cur = self.conn.execute(
+                    "SELECT * FROM library_tracks WHERE album_id = ? AND (clean_title = ? OR track_number = ?) LIMIT 1",
+                    (str(album_id), clean, int(track_number)),
+                )
+            else:
+                cur = self.conn.execute(
+                    "SELECT * FROM library_tracks WHERE album_id = ? AND clean_title = ? LIMIT 1",
+                    (str(album_id), clean),
+                )
+            row = cur.fetchone()
+            return self._map_library_track(row) if row else None
+
+    def list_library_tracks(
+        self,
+        album_id: Optional[str] = None,
+        artist_id: Optional[str] = None,
+        monitored_only: bool = False,
+        limit: int = 200,
+        offset: int = 0,
+    ) -> list[dict[str, Any]]:
+        """Lists library tracks filtered by album and/or artist with pagination."""
+        sql = "SELECT * FROM library_tracks WHERE 1=1"
+        params: list[Any] = []
+        if album_id:
+            sql += " AND album_id = ?"
+            params.append(str(album_id))
+        if artist_id:
+            sql += " AND artist_id = ?"
+            params.append(str(artist_id))
+        if monitored_only:
+            sql += " AND monitored = 1"
+        sql += " ORDER BY disc_number ASC, track_number ASC LIMIT ? OFFSET ?"
+        params.extend([int(limit), int(offset)])
+
+        with self._lock:
+            cur = self.conn.execute(sql, params)
+            return [self._map_library_track(row) for row in cur.fetchall()]
+
+    def delete_library_track(self, track_id: str) -> bool:
+        """Deletes a library track and cascades to child files."""
+        with self._lock:
+            cur = self.conn.execute(
+                "DELETE FROM library_tracks WHERE id = ?",
+                (str(track_id),),
+            )
+            self.conn.commit()
+            return cur.rowcount > 0
+
+    def set_track_monitored(self, track_id: str, monitored: bool) -> bool:
+        """Sets monitoring status for a single library track."""
+        val = 1 if monitored else 0
+        with self._lock:
+            cur = self.conn.execute(
+                "UPDATE library_tracks SET monitored = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                (val, str(track_id)),
+            )
+            self.conn.commit()
+            return cur.rowcount > 0
+
+    def upsert_library_file(
+        self, file_data: Union[LibraryFile, dict[str, Any]]
+    ) -> dict[str, Any]:
+        """Creates or updates a native library file."""
+        d = file_data.to_dict() if hasattr(file_data, "to_dict") else dict(file_data)
+        file_path = str(d.get("file_path") or "")
+
+        with self._lock:
+            if not d.get("id"):
+                cur = self.conn.execute(
+                    "SELECT id FROM library_files WHERE file_path = ?", (file_path,)
+                )
+                row = cur.fetchone()
+                file_id = str(row[0]) if row else str(uuid.uuid4())
+            else:
+                file_id = str(d["id"])
+
+            track_id = str(d.get("track_id") or "")
+            relative_path = str(d.get("relative_path") or "")
+            codec = str(d.get("codec") or "")
+            bitrate = int(d["bitrate"]) if d.get("bitrate") is not None else None
+            sample_rate = int(d["sample_rate"]) if d.get("sample_rate") is not None else None
+            bits_per_sample = int(d["bits_per_sample"]) if d.get("bits_per_sample") is not None else None
+            quality_name = str(d.get("quality_name") or "Unknown")
+            size_bytes = int(d.get("size_bytes", 0))
+            cutoff_met = 1 if d.get("cutoff_met", True) else 0
+            date_added = d.get("date_added")
+
+            self.conn.execute(
+                """
+                INSERT INTO library_files (
+                    id, track_id, file_path, relative_path, codec, bitrate,
+                    sample_rate, bits_per_sample, quality_name, size_bytes,
+                    cutoff_met, date_added, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, COALESCE(?, CURRENT_TIMESTAMP), CURRENT_TIMESTAMP)
+                ON CONFLICT(id) DO UPDATE SET
+                    track_id = excluded.track_id,
+                    file_path = excluded.file_path,
+                    relative_path = excluded.relative_path,
+                    codec = excluded.codec,
+                    bitrate = excluded.bitrate,
+                    sample_rate = excluded.sample_rate,
+                    bits_per_sample = excluded.bits_per_sample,
+                    quality_name = excluded.quality_name,
+                    size_bytes = excluded.size_bytes,
+                    cutoff_met = excluded.cutoff_met,
+                    updated_at = CURRENT_TIMESTAMP
+                """,
+                (
+                    file_id,
+                    track_id,
+                    file_path,
+                    relative_path,
+                    codec,
+                    bitrate,
+                    sample_rate,
+                    bits_per_sample,
+                    quality_name,
+                    size_bytes,
+                    cutoff_met,
+                    date_added,
+                ),
+            )
+            self.conn.commit()
+
+        fl = self.get_library_file(file_id)
+        if fl is None:
+            raise RuntimeError(f"Failed to upsert library file {file_id}")
+        return fl
+
+    def get_library_file(self, file_id: str) -> Optional[dict[str, Any]]:
+        """Retrieves a library file by ID."""
+        with self._lock:
+            cur = self.conn.execute(
+                "SELECT * FROM library_files WHERE id = ?",
+                (str(file_id),),
+            )
+            row = cur.fetchone()
+            return self._map_library_file(row) if row else None
+
+    def get_library_file_by_path(self, file_path: str) -> Optional[dict[str, Any]]:
+        """Retrieves a library file by full file path."""
+        with self._lock:
+            cur = self.conn.execute(
+                "SELECT * FROM library_files WHERE file_path = ? LIMIT 1",
+                (str(file_path),),
+            )
+            row = cur.fetchone()
+            return self._map_library_file(row) if row else None
+
+    def get_library_file_for_track(self, track_id: str) -> Optional[dict[str, Any]]:
+        """Retrieves the file associated with a specific track ID."""
+        with self._lock:
+            cur = self.conn.execute(
+                "SELECT * FROM library_files WHERE track_id = ? LIMIT 1",
+                (str(track_id),),
+            )
+            row = cur.fetchone()
+            return self._map_library_file(row) if row else None
+
+    def delete_library_file(self, file_id: str) -> bool:
+        """Deletes a library file record."""
+        with self._lock:
+            cur = self.conn.execute(
+                "DELETE FROM library_files WHERE id = ?",
+                (str(file_id),),
+            )
+            self.conn.commit()
+            return cur.rowcount > 0
+
+    def list_library_files(
+        self, limit: int = 500, offset: int = 0
+    ) -> list[dict[str, Any]]:
+        """Lists library files ordered by date added with pagination."""
+        with self._lock:
+            cur = self.conn.execute(
+                "SELECT * FROM library_files ORDER BY date_added DESC LIMIT ? OFFSET ?",
+                (int(limit), int(offset)),
+            )
+            return [self._map_library_file(row) for row in cur.fetchall()]
+
+    def get_library_stats(self) -> dict[str, Any]:
+        """Calculates aggregate statistics for the native library catalog."""
+        with self._lock:
+            cur = self.conn.cursor()
+            cur.execute("SELECT COUNT(*) FROM library_artists")
+            artist_count = int(cur.fetchone()[0] or 0)
+
+            cur.execute("SELECT COUNT(*) FROM library_albums")
+            album_count = int(cur.fetchone()[0] or 0)
+
+            cur.execute("SELECT COUNT(*) FROM library_tracks")
+            track_count = int(cur.fetchone()[0] or 0)
+
+            cur.execute("SELECT COUNT(*), COALESCE(SUM(size_bytes), 0) FROM library_files")
+            row = cur.fetchone()
+            file_count = int(row[0] or 0) if row else 0
+            total_size_bytes = int(row[1] or 0) if row else 0
+
+            cur.execute("SELECT COUNT(*) FROM library_artists WHERE monitored = 1")
+            monitored_artist_count = int(cur.fetchone()[0] or 0)
+
+            cur.execute("SELECT COUNT(*) FROM library_tracks WHERE monitored = 1")
+            monitored_track_count = int(cur.fetchone()[0] or 0)
+
+            cur.execute("SELECT COUNT(DISTINCT track_id) FROM library_files WHERE cutoff_met = 0")
+            cutoff_unmet_track_count = int(cur.fetchone()[0] or 0)
+
+            return {
+                "artist_count": artist_count,
+                "album_count": album_count,
+                "track_count": track_count,
+                "file_count": file_count,
+                "total_size_bytes": total_size_bytes,
+                "monitored_artist_count": monitored_artist_count,
+                "monitored_track_count": monitored_track_count,
+                "cutoff_unmet_track_count": cutoff_unmet_track_count,
+            }
 
 
 
