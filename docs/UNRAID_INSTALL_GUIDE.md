@@ -32,26 +32,17 @@ This saves the official TrackSeerr template into your local templates directory.
 
 ---
 
-## Storage Mounts and Acquisition Choices
+## Storage Mounts & TRaSH Guides Volume Alignment
 
-TrackSeerr supports two acquisition models, which determines which volume paths you need to configure:
+TrackSeerr aligns directly with **TRaSH Guides** standards to ensure instant atomic file moves (`os.replace`) and zero-copy hardlinks (`os.link`) for torrent seeding:
 
-### Mode A: Lidarr Integration (Default Homelab Setup)
-If you already run Lidarr, Lidarr handles download clients, file renaming, and moving audio into your music library.
-- **Required Mount**: AppData (`/mnt/user/appdata/trackseerr` mapped to `/data`).
-- **Optional Mounts**: `/music` and `/downloads` are not required because Lidarr handles the filesystem operations.
+### Recommended TRaSH Guides Layout:
+- **AppData Storage (`/config`)**: `/mnt/user/appdata/trackseerr` mapped to `/config` (stores SQLite database, secrets, and logs).
+- **Unified Data Share (`/data`)**: `/mnt/user/data` mapped to `/data`.
+  - **Music Library**: `/data/media/music` (organized tracks for Plex).
+  - **Download Staging**: `/data/downloads` (transfers downloaded by slskd, SABnzbd, or qBittorrent).
 
-### Mode B: Native Acquisition Drivers (slskd, SABnzbd, qBittorrent)
-If you run TrackSeerr without Lidarr using its built-in acquisition drivers:
-- **AppData**: `/mnt/user/appdata/trackseerr` -> `/data` (database and settings).
-- **Music Library**: `/mnt/user/data/media/music` -> `/music` (destination folder where TrackSeerr organizes completed tracks for Plex).
-- **Download Staging**: `/mnt/user/data/downloads` -> `/downloads` (folder where slskd, SABnzbd, or qBittorrent saves completed files).
-
-To add these paths in Unraid:
-1. Click **Add another Path, Port, Variable, Device or Extra Parameter** at the bottom of the container edit page.
-2. Choose **Path**.
-3. Name: `Music Library`, Container Path: `/music`, Host Path: `/mnt/user/data/media/music`.
-4. Add another Path: Name: `Download Staging`, Container Path: `/downloads`, Host Path: `/mnt/user/data/downloads`.
+Because both staging and library directories reside on the same `/data` container filesystem, TrackSeerr can link and move multi-gigabyte albums instantaneously without disk I/O bottlenecks or cross-device copy overhead.
 
 ---
 
@@ -60,17 +51,19 @@ To add these paths in Unraid:
 | Setting | Default Value | Description |
 |---|---|---|
 | **WebUI & API Port** | `5250` | Port used to access the web dashboard in your browser. |
-| **AppData Storage** | `/mnt/user/appdata/trackseerr` | Persistent directory for SQLite database, settings, and sessions. |
-| **Music Storage (Optional)** | `/mnt/user/data/media/music` | Destination music directory. Required only for native acquisition. |
-| **Download Storage (Optional)** | `/mnt/user/data/downloads` | Staging download directory. Required only for native acquisition. |
+| **AppData Storage** | `/mnt/user/appdata/trackseerr` | Mapped to `/config`. Persistent directory for SQLite database, settings, and sessions. |
+| **Data Storage (TRaSH)** | `/mnt/user/data` | Mapped to `/data`. Unified share holding library (`/data/media/music`) and staging (`/data/downloads`). |
 | **Plex Server URL** | `http://192.168.1.100:32400` | Local LAN IP address and port 32400 of your Plex Media Server. |
 | **Plex Token** | *(blank)* | Plex admin token (`X-Plex-Token`). Found in any Plex item XML view. |
 | **Plex Music Section** | `Music` | Exact name of your music library section in Plex. |
 | **Plex SSL Verification** | `1` | Set to `0` if using self-signed certificates. |
-| **Lidarr URL & API Key** | *(blank)* | Optional: Base URL and API key if using Lidarr for acquisition. |
 | **Feed Token** | *(blank)* | Optional: Secret key to protect RSS feeds and webhooks. |
 | **PUID / PGID** | `99` / `100` | Unraid nobody:users permissions for file compatibility. |
 | **Umask** | `022` | File creation permissions. |
+
+> [!TIP]
+> **Lidarr & Acquisition Configuration in WebUI**:
+> Lidarr connection URL, API key, auto-search triggers, paced trickle rate, batch sizes, automated trickle schedules, download clients, and indexers are configured dynamically directly within the **WebUI -> Settings** panel, eliminating the need to manage dozens of Docker template variables. |
 
 Important note regarding container networking:
 Because Docker containers run in bridge networking mode, `localhost` refers to the container itself, not the Unraid host. Always use your Unraid server's actual LAN IP address (for example, `http://192.168.1.100:32400`) rather than `http://localhost:32400`.

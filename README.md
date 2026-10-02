@@ -122,10 +122,9 @@ services:
     ports:
       - "5250:5250"
     volumes:
-      - ./data:/data
-      # Optional: uncomment if using native acquisition drivers (slskd/SABnzbd/qBittorrent)
-      # - /path/to/music:/music
-      # - /path/to/downloads:/downloads
+      - ./appdata:/config
+      # TRaSH Guides unified data share (holds /data/media/music and /data/downloads)
+      - /path/to/data:/data
     environment:
       - ROLE=all-in-one
       - PORT=5250
@@ -141,11 +140,7 @@ services:
       # Spotify: Leave blank to use the built-in keyless web scraper
       - SPOTIFY_CLIENT_ID=
       - SPOTIFY_CLIENT_SECRET=
-      # Optional Lidarr integration
-      # - LIDARR_URL=http://192.168.1.100:8686
-      # - LIDARR_API_KEY=your_lidarr_api_key
-      # - LIDARR_AUTO_TRICKLE=0
-      # - FEED_TOKEN=my-secure-token
+      # Note: Lidarr, download clients, indexers, and quotas are configured in the WebUI Settings
 ```
 
 Run with:
@@ -188,9 +183,8 @@ services:
     expose:
       - "5251"
     volumes:
-      - ./data:/data
-      - /path/to/music:/music
-      - /path/to/downloads:/downloads
+      - ./appdata:/config
+      - /path/to/data:/data
     environment:
       - ROLE=core
       - PORT=5251
