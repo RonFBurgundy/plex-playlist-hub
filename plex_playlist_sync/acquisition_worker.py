@@ -6,6 +6,7 @@ paths via the token template engine, performs atomic file moves with
 collision resolution into /music, and triggers Plex library update pings.
 """
 
+import difflib
 import json
 import logging
 import os
@@ -44,7 +45,7 @@ from plex_playlist_sync.naming import build_track_path
 from plex_playlist_sync.notifications import notification_dispatcher
 from plex_playlist_sync.quality import evaluate_release, parse_release_title
 from plex_playlist_sync.security import is_safe_service_url
-from plex_playlist_sync.storage import Database
+from plex_playlist_sync.storage import Database, clean_library_name
 
 logger = logging.getLogger(__name__)
 
@@ -131,6 +132,130 @@ def place_audio_file(
             return dst
     else:
         return safe_atomic_move(source_file, target_file)
+
+
+def reconcile_audio_file_to_track(
+    meta: dict[str, Any],
+    candidate_tracks: list[dict[str, Any]],
+) -> Optional[dict[str, Any]]:
+    """Reconciles an audio file's metadata against a list of expected library tracks.
+
+    Matching hierarchy:
+    1. Exact match on disc_number and track_number (if mutagen extracted valid track number).
+    2. Clean title similarity match (clean_library_name(t["title"]) == clean_library_name(meta["title"]) or ratio >= 0.85).
+    3. Duration tolerance match (within 5 seconds) if multiple candidates match title.
+    """
+    if not candidate_tracks:
+        return None
+
+    file_track = meta.get("track_number")
+    file_disc = meta.get("disc_number") or 1
+    has_valid_track_num = isinstance(file_track, int) and file_track > 0
+
+    # 1. Exact match on disc_number and track_number (if mutagen extracted valid track number)
+    if has_valid_track_num:
+        num_matches = [
+            t
+            for t in candidate_tracks
+            if int(t.get("track_number") or 1) == file_track
+            and int(t.get("disc_number") or 1) == int(file_disc)
+        ]
+        if len(num_matches) == 1:
+            return num_matches[0]
+        elif len(num_matches) > 1:
+            clean_title = clean_library_name(meta.get("title") or "")
+            title_matches = [
+                t
+                for t in num_matches
+                if clean_library_name(t.get("title") or "") == clean_title
+            ]
+            if len(title_matches) == 1:
+                return title_matches[0]
+            file_dur = meta.get("duration") or meta.get("duration_seconds")
+            if file_dur is not None:
+                dur_matches = [
+                    t
+                    for t in num_matches
+                    if t.get("duration_seconds") is not None
+                    and abs(float(t["duration_seconds"]) - float(file_dur)) <= 5.0
+                ]
+                if dur_matches:
+                    return min(
+                        dur_matches,
+                        key=lambda t: abs(float(t["duration_seconds"]) - float(file_dur)),
+                    )
+            return num_matches[0]
+
+    # 2. Clean title similarity match
+    meta_title = meta.get("title") or ""
+    clean_meta = clean_library_name(meta_title)
+    if not clean_meta and meta.get("file_path"):
+        clean_meta = clean_library_name(Path(meta["file_path"]).stem)
+
+    if clean_meta:
+        # Exact clean title match
+        exact_title_matches = [
+            t
+            for t in candidate_tracks
+            if clean_library_name(t.get("title") or "") == clean_meta
+        ]
+        if len(exact_title_matches) == 1:
+            return exact_title_matches[0]
+        elif len(exact_title_matches) > 1:
+            # 3. Duration tolerance match (within 5 seconds) if multiple candidates match title
+            file_dur = meta.get("duration") or meta.get("duration_seconds")
+            if file_dur is not None:
+                dur_matches = [
+                    t
+                    for t in exact_title_matches
+                    if t.get("duration_seconds") is not None
+                    and abs(float(t["duration_seconds"]) - float(file_dur)) <= 5.0
+                ]
+                if len(dur_matches) == 1:
+                    return dur_matches[0]
+                elif dur_matches:
+                    return min(
+                        dur_matches,
+                        key=lambda t: abs(float(t["duration_seconds"]) - float(file_dur)),
+                    )
+            return exact_title_matches[0]
+
+        # Fuzzy title match with ratio >= 0.85
+        fuzzy_candidates: list[tuple[float, dict[str, Any]]] = []
+        for t in candidate_tracks:
+            clean_t = clean_library_name(t.get("title") or "")
+            if not clean_t:
+                continue
+            ratio = difflib.SequenceMatcher(None, clean_t, clean_meta).ratio()
+            if ratio >= 0.85:
+                fuzzy_candidates.append((ratio, t))
+
+        if fuzzy_candidates:
+            fuzzy_candidates.sort(key=lambda x: x[0], reverse=True)
+            top_ratio = fuzzy_candidates[0][0]
+            top_matches = [t for r, t in fuzzy_candidates if abs(r - top_ratio) < 0.001]
+            if len(top_matches) == 1:
+                return top_matches[0]
+
+            # 3. Duration tolerance match if multiple fuzzy candidates
+            file_dur = meta.get("duration") or meta.get("duration_seconds")
+            if file_dur is not None:
+                dur_matches = [
+                    t
+                    for t in top_matches
+                    if t.get("duration_seconds") is not None
+                    and abs(float(t["duration_seconds"]) - float(file_dur)) <= 5.0
+                ]
+                if len(dur_matches) == 1:
+                    return dur_matches[0]
+                elif dur_matches:
+                    return min(
+                        dur_matches,
+                        key=lambda t: abs(float(t["duration_seconds"]) - float(file_dur)),
+                    )
+            return top_matches[0]
+
+    return None
 
 
 def translate_remote_path(
@@ -546,6 +671,35 @@ class AcquisitionWorker:
                         logger.warning("Cover art URL rejected by SSRF protection: %s", cover_url)
 
                 last_metadata: dict[str, Any] = {}
+
+                # Check if item has album_id or matches an existing album in catalog
+                target_album = None
+                if item.get("album_id"):
+                    target_album = db.get_library_album(item["album_id"])
+                elif item.get("track_id"):
+                    req_track = db.get_library_track(item["track_id"])
+                    if req_track:
+                        target_album = db.get_library_album(req_track["album_id"])
+
+                if not target_album:
+                    art_name_cand = item.get("artist") or (req.get("artist") if req else None)
+                    alb_title_cand = (
+                        (item.get("title") if item.get("item_type") == "album" else None)
+                        or (req.get("album") or req.get("title") if req else None)
+                        or item.get("title")
+                    )
+                    if art_name_cand and alb_title_cand:
+                        art_cand = db.get_library_artist_by_name(art_name_cand)
+                        if art_cand:
+                            target_album = db.get_library_album_by_title(art_cand["id"], alb_title_cand)
+
+                expected_tracks: list[dict[str, Any]] = []
+                if target_album:
+                    expected_tracks = db.list_library_tracks(album_id=target_album["id"], limit=1000)
+
+                remaining_expected_tracks = list(expected_tracks)
+                placed_to_track: dict[str, dict[str, Any]] = {}
+
                 for af in audio_files:
                     try:
                         metadata = inspect_audio_file(af)
@@ -557,7 +711,7 @@ class AcquisitionWorker:
                             "album": item.get("title") if item.get("item_type") == "album" else "Unknown Album",
                             "file_path": str(af),
                             "extension": af.suffix.lower(),
-                            "track_number": 1,
+                            "track_number": None,
                             "disc_number": 1,
                             "total_discs": 1,
                         }
@@ -567,6 +721,22 @@ class AcquisitionWorker:
                         metadata["artist"] = item.get("artist") or "Unknown Artist"
                     if not metadata.get("title"):
                         metadata["title"] = item.get("title") or af.stem
+
+                    # Reconcile against expected catalog tracks if present
+                    matched_expected_track = None
+                    if remaining_expected_tracks:
+                        matched_expected_track = reconcile_audio_file_to_track(metadata, remaining_expected_tracks)
+                        if matched_expected_track:
+                            remaining_expected_tracks.remove(matched_expected_track)
+                            metadata["title"] = matched_expected_track["title"]
+                            metadata["track_number"] = int(matched_expected_track.get("track_number") or 1)
+                            metadata["disc_number"] = int(matched_expected_track.get("disc_number") or 1)
+                            if target_album:
+                                metadata["album"] = target_album["title"]
+                                art_cand = db.get_library_artist(target_album["artist_id"])
+                                if art_cand:
+                                    metadata["artist"] = art_cand["name"]
+
                     last_metadata = metadata
 
                     target_str = build_track_path(metadata, media_settings)
@@ -578,6 +748,8 @@ class AcquisitionWorker:
 
                     placed_path = place_audio_file(af, target_path, mode=import_mode)
                     imported_paths.append(str(placed_path))
+                    if matched_expected_track:
+                        placed_to_track[str(placed_path)] = matched_expected_track
                     logger.info("Successfully imported '%s' -> '%s'", af.name, placed_path)
 
                     # Tag writing and artwork embedding
@@ -658,104 +830,118 @@ class AcquisitionWorker:
                                 )
                                 f_meta = {}
 
-                            artist_name = (
-                                f_meta.get("artist")
-                                or item.get("artist")
-                                or (req.get("artist") if req else None)
-                                or "Unknown Artist"
-                            ).strip()
-
-                            # 1. Resolve / upsert LibraryArtist
-                            artist_row = None
-                            existing_track = None
-                            if item.get("track_id"):
-                                existing_track = db.get_library_track(item["track_id"])
-                                if existing_track:
-                                    artist_row = db.get_library_artist(existing_track["artist_id"])
-                            if not artist_row:
-                                artist_row = db.get_library_artist_by_name(artist_name)
-                            if not artist_row:
-                                artist_id = str(uuid.uuid4())
-                                artist_folder = (
-                                    str(placed_p.parent.parent)
-                                    if placed_p.parent != root_path
-                                    else str(placed_p.parent)
-                                )
-                                artist_row = db.upsert_library_artist(
-                                    LibraryArtist(
-                                        id=artist_id,
-                                        name=artist_name,
-                                        path=artist_folder,
-                                    )
-                                )
-                            artist_id = artist_row["id"]
-
-                            # 2. Resolve / upsert LibraryAlbum
-                            album_title = (
-                                f_meta.get("album")
-                                or (item.get("title") if item.get("item_type") == "album" else None)
-                                or (req.get("album") or req.get("title") if req else None)
-                                or "Unknown Album"
-                            ).strip()
-                            year_val = f_meta.get("year")
-                            if year_val is None and req and req.get("release_date"):
-                                rdate = str(req["release_date"]).strip()
-                                if len(rdate) >= 4 and rdate[:4].isdigit():
-                                    year_val = int(rdate[:4])
-
-                            album_row = None
-                            if item.get("album_id"):
-                                album_row = db.get_library_album(item["album_id"])
-                            elif item.get("track_id") and existing_track:
-                                album_row = db.get_library_album(existing_track["album_id"])
-                            if not album_row:
-                                album_row = db.get_library_album_by_title(artist_id, album_title)
-                            if not album_row:
-                                album_id = str(uuid.uuid4())
-                                album_row = db.upsert_library_album(
-                                    LibraryAlbum(
-                                        id=album_id,
-                                        artist_id=artist_id,
-                                        title=album_title,
-                                        year=year_val,
-                                        path=str(placed_p.parent),
-                                    )
-                                )
-                            album_id = album_row["id"]
-
-                            # 3. Resolve / upsert LibraryTrack
-                            track_row = None
-                            if item.get("track_id"):
-                                track_row = existing_track or db.get_library_track(item["track_id"])
-                            if not track_row:
-                                track_title = (
-                                    f_meta.get("title")
-                                    or item.get("title")
-                                    or (req.get("title") if req else None)
-                                    or placed_p.stem
+                            matched_track = placed_to_track.get(placed_str)
+                            if matched_track and target_album:
+                                artist_id = target_album["artist_id"]
+                                artist_row = db.get_library_artist(artist_id) or {
+                                    "id": artist_id,
+                                    "name": item.get("artist") or "Unknown Artist",
+                                    "quality_profile_id": None,
+                                }
+                                album_id = target_album["id"]
+                                album_row = target_album
+                                track_id = matched_track["id"]
+                                track_row = matched_track
+                                db.set_track_monitored(track_id, True)
+                            else:
+                                artist_name = (
+                                    f_meta.get("artist")
+                                    or item.get("artist")
+                                    or (req.get("artist") if req else None)
+                                    or "Unknown Artist"
                                 ).strip()
-                                track_num = int(f_meta.get("track_number") or 1)
-                                track_row = db.get_library_track_by_title(
-                                    album_id, track_title, track_number=track_num
-                                )
-                                if not track_row:
-                                    track_id = str(uuid.uuid4())
-                                    track_row = db.upsert_library_track(
-                                        LibraryTrack(
-                                            id=track_id,
-                                            album_id=album_id,
-                                            artist_id=artist_id,
-                                            title=track_title,
-                                            track_number=track_num,
-                                            disc_number=int(f_meta.get("disc_number") or 1),
-                                            duration_seconds=(
-                                                float(f_meta["duration"])
-                                                if f_meta.get("duration") is not None
-                                                else None
-                                            ),
+
+                                # 1. Resolve / upsert LibraryArtist
+                                artist_row = None
+                                existing_track = None
+                                if item.get("track_id"):
+                                    existing_track = db.get_library_track(item["track_id"])
+                                    if existing_track:
+                                        artist_row = db.get_library_artist(existing_track["artist_id"])
+                                if not artist_row:
+                                    artist_row = db.get_library_artist_by_name(artist_name)
+                                if not artist_row:
+                                    artist_id = str(uuid.uuid4())
+                                    artist_folder = (
+                                        str(placed_p.parent.parent)
+                                        if placed_p.parent != root_path
+                                        else str(placed_p.parent)
+                                    )
+                                    artist_row = db.upsert_library_artist(
+                                        LibraryArtist(
+                                            id=artist_id,
+                                            name=artist_name,
+                                            path=artist_folder,
                                         )
                                     )
-                            track_id = track_row["id"]
+                                artist_id = artist_row["id"]
+
+                                # 2. Resolve / upsert LibraryAlbum
+                                album_title = (
+                                    f_meta.get("album")
+                                    or (item.get("title") if item.get("item_type") == "album" else None)
+                                    or (req.get("album") or req.get("title") if req else None)
+                                    or "Unknown Album"
+                                ).strip()
+                                year_val = f_meta.get("year")
+                                if year_val is None and req and req.get("release_date"):
+                                    rdate = str(req["release_date"]).strip()
+                                    if len(rdate) >= 4 and rdate[:4].isdigit():
+                                        year_val = int(rdate[:4])
+
+                                album_row = None
+                                if item.get("album_id"):
+                                    album_row = db.get_library_album(item["album_id"])
+                                elif item.get("track_id") and existing_track:
+                                    album_row = db.get_library_album(existing_track["album_id"])
+                                if not album_row:
+                                    album_row = db.get_library_album_by_title(artist_id, album_title)
+                                if not album_row:
+                                    album_id = str(uuid.uuid4())
+                                    album_row = db.upsert_library_album(
+                                        LibraryAlbum(
+                                            id=album_id,
+                                            artist_id=artist_id,
+                                            title=album_title,
+                                            year=year_val,
+                                            path=str(placed_p.parent),
+                                        )
+                                    )
+                                album_id = album_row["id"]
+
+                                # 3. Resolve / upsert LibraryTrack
+                                track_row = None
+                                if item.get("track_id"):
+                                    track_row = existing_track or db.get_library_track(item["track_id"])
+                                if not track_row:
+                                    track_title = (
+                                        f_meta.get("title")
+                                        or item.get("title")
+                                        or (req.get("title") if req else None)
+                                        or placed_p.stem
+                                    ).strip()
+                                    track_num = int(f_meta.get("track_number") or 1)
+                                    track_row = db.get_library_track_by_title(
+                                        album_id, track_title, track_number=track_num
+                                    )
+                                    if not track_row:
+                                        track_id = str(uuid.uuid4())
+                                        track_row = db.upsert_library_track(
+                                            LibraryTrack(
+                                                id=track_id,
+                                                album_id=album_id,
+                                                artist_id=artist_id,
+                                                title=track_title,
+                                                track_number=track_num,
+                                                disc_number=int(f_meta.get("disc_number") or 1),
+                                                duration_seconds=(
+                                                    float(f_meta["duration"])
+                                                    if f_meta.get("duration") is not None
+                                                    else None
+                                                ),
+                                            )
+                                        )
+                                track_id = track_row["id"]
 
                             # 4. Evaluate cutoff against artist's quality profile (or default)
                             qp_id = artist_row.get("quality_profile_id") or (
