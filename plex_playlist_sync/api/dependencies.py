@@ -173,8 +173,67 @@ def get_current_user(
     return user
 
 
-def require_user(current_user: dict[str, Any] = Depends(get_current_user)) -> dict[str, Any]:
-    """Enforces active user session."""
+def get_current_user_or_api_key(
+    request: Request,
+    db: Database = Depends(get_db),
+    config: Config = Depends(get_config),
+) -> dict[str, Any]:
+    """Authenticates request via X-Api-Key / query param, X-Internal-Token / bearer internal secret, or user session."""
+    # 1. Check X-Api-Key header or query parameter apikey / api_key
+    api_key = (
+        request.headers.get("X-Api-Key")
+        or request.query_params.get("apikey")
+        or request.query_params.get("api_key")
+    )
+    if api_key is not None:
+        if db.validate_api_key(api_key):
+            return {
+                "id": "api_key_user",
+                "username": "api_key",
+                "is_admin": True,
+                "permissions": int(UserPermission.ADMIN),
+            }
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid API key",
+        )
+
+    # 2. Check X-Internal-Token header or Authorization: Bearer <token> matching internal_core_secret
+    internal_token = request.headers.get("X-Internal-Token")
+    if internal_token is not None:
+        if config.internal_core_secret and secrets.compare_digest(
+            internal_token.strip(), config.internal_core_secret.strip()
+        ):
+            return {
+                "id": "internal_gateway",
+                "username": "internal_gateway",
+                "is_admin": True,
+                "permissions": int(UserPermission.ADMIN),
+            }
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid internal token",
+        )
+
+    auth_header = request.headers.get("Authorization")
+    if auth_header and auth_header.startswith("Bearer "):
+        bearer_token = auth_header[7:].strip()
+        if config.internal_core_secret and secrets.compare_digest(
+            bearer_token, config.internal_core_secret.strip()
+        ):
+            return {
+                "id": "internal_gateway",
+                "username": "internal_gateway",
+                "is_admin": True,
+                "permissions": int(UserPermission.ADMIN),
+            }
+
+    # 3. Fall back to standard session token validation
+    return get_current_user(request=request, db=db, config=config)
+
+
+def require_user(current_user: dict[str, Any] = Depends(get_current_user_or_api_key)) -> dict[str, Any]:
+    """Enforces active user session or valid machine authentication."""
     return current_user
 
 
@@ -197,7 +256,7 @@ def has_permission(user: dict[str, Any], permission: UserPermission) -> bool:
 
 def require_permission(permission: UserPermission):
     """FastAPI dependency factory enforcing that current user holds the specified permission."""
-    def _dependency(current_user: dict[str, Any] = Depends(get_current_user)) -> dict[str, Any]:
+    def _dependency(current_user: dict[str, Any] = Depends(get_current_user_or_api_key)) -> dict[str, Any]:
         if not has_permission(current_user, permission):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
@@ -207,7 +266,7 @@ def require_permission(permission: UserPermission):
     return _dependency
 
 
-def require_admin(current_user: dict[str, Any] = Depends(get_current_user)) -> dict[str, Any]:
+def require_admin(current_user: dict[str, Any] = Depends(get_current_user_or_api_key)) -> dict[str, Any]:
     """Enforces is_admin=True or UserPermission.ADMIN, raises 403 otherwise."""
     user_perms = int(current_user.get("permissions") if current_user.get("permissions") is not None else 0)
     if not (current_user.get("is_admin") or (user_perms & int(UserPermission.ADMIN))):
@@ -216,6 +275,16 @@ def require_admin(current_user: dict[str, Any] = Depends(get_current_user)) -> d
             detail="Administrator access required",
         )
     return current_user
+
+
+def require_core_tier(config: Config = Depends(get_config)) -> None:
+    """Enforces that endpoint is running on TrackSeerr Core tier; blocks execution in gateway mode."""
+    role = (config.role or os.getenv("ROLE", "all-in-one")).lower().strip()
+    if role == "gateway":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Library management is restricted to TrackSeerr Core tier. Gateway tier cannot execute library mutations.",
+        )
 
 
 def get_lidarr_client(

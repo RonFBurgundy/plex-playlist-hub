@@ -3,6 +3,7 @@
 import json
 import os
 import re
+import secrets
 import sqlite3
 import threading
 import uuid
@@ -169,6 +170,7 @@ class Database:
                 (15, self._migration_v15),
                 (16, self._migration_v16),
                 (17, self._migration_v17),
+                (18, self._migration_v18),
             ]
 
             for version, migration_fn in migrations:
@@ -825,6 +827,27 @@ class Database:
         cur.execute(
             "CREATE INDEX IF NOT EXISTS idx_active_downloads_album ON active_downloads(album_id);"
         )
+
+    def _migration_v18(self, cur: sqlite3.Cursor) -> None:
+        cur.execute("PRAGMA table_info(general_settings);")
+        columns = [row[1] for row in cur.fetchall()]
+        if "api_key" not in columns:
+            cur.execute(
+                "ALTER TABLE general_settings ADD COLUMN api_key TEXT NOT NULL DEFAULT '';"
+            )
+
+        cur.execute("SELECT api_key FROM general_settings WHERE id = 1")
+        row = cur.fetchone()
+        if not row:
+            cur.execute(
+                "INSERT OR IGNORE INTO general_settings (id, application_url, api_key) VALUES (1, '', ?)",
+                (secrets.token_hex(16),),
+            )
+        elif not row[0]:
+            cur.execute(
+                "UPDATE general_settings SET api_key = ?, updated_at = CURRENT_TIMESTAMP WHERE id = 1",
+                (secrets.token_hex(16),),
+            )
 
     # -------------------------------------------------------------------------
     # Users CRUD
@@ -1735,6 +1758,55 @@ class Database:
                 self.conn.commit()
 
         return self.get_general_settings()
+
+    def get_api_key(self) -> str:
+        """Fetches api_key from general_settings. If empty, generates secrets.token_hex(16), saves it, and returns it."""
+        with self._lock:
+            cur = self.conn.execute("SELECT api_key FROM general_settings WHERE id = 1")
+            row = cur.fetchone()
+            key = str(row["api_key"] or "").strip() if row and "api_key" in row.keys() else ""
+            if not key:
+                key = secrets.token_hex(16)
+                check = self.conn.execute("SELECT 1 FROM general_settings WHERE id = 1").fetchone()
+                if check:
+                    self.conn.execute(
+                        "UPDATE general_settings SET api_key = ?, updated_at = CURRENT_TIMESTAMP WHERE id = 1",
+                        (key,),
+                    )
+                else:
+                    self.conn.execute(
+                        "INSERT INTO general_settings (id, application_url, api_key) VALUES (1, '', ?)",
+                        (key,),
+                    )
+                self.conn.commit()
+            return key
+
+    def regenerate_api_key(self) -> str:
+        """Generates new 32-character hexadecimal API key, saves it to general_settings, and returns it."""
+        new_key = secrets.token_hex(16)
+        with self._lock:
+            check = self.conn.execute("SELECT 1 FROM general_settings WHERE id = 1").fetchone()
+            if check:
+                self.conn.execute(
+                    "UPDATE general_settings SET api_key = ?, updated_at = CURRENT_TIMESTAMP WHERE id = 1",
+                    (new_key,),
+                )
+            else:
+                self.conn.execute(
+                    "INSERT INTO general_settings (id, application_url, api_key) VALUES (1, '', ?)",
+                    (new_key,),
+                )
+            self.conn.commit()
+        return new_key
+
+    def validate_api_key(self, candidate_key: Optional[str]) -> bool:
+        """Returns False if candidate_key is empty/None; compares candidate_key against stored api_key with secrets.compare_digest."""
+        if not candidate_key or not isinstance(candidate_key, str) or not candidate_key.strip():
+            return False
+        stored_key = self.get_api_key()
+        if not stored_key:
+            return False
+        return secrets.compare_digest(candidate_key.strip(), stored_key)
 
     # -------------------------------------------------------------------------
     # Lidarr Settings CRUD

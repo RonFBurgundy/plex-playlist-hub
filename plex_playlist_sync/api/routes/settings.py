@@ -455,3 +455,47 @@ def update_general_settings(
             detail=f"Database update failed: {e}",
         ) from e
 
+
+# -----------------------------------------------------------------------------
+# API Key Settings Endpoints
+# -----------------------------------------------------------------------------
+
+
+class ApiKeyResponse(BaseModel):
+    api_key: str
+
+
+class ApiKeyRegenerateResponse(BaseModel):
+    api_key: str
+    message: str = "API key successfully regenerated"
+
+
+@router.get(
+    "/api-key",
+    response_model=ApiKeyResponse,
+    summary="Get API Key (Admin or API Key)",
+)
+def get_api_key(
+    db: Database = Depends(get_db),
+    admin_user: dict[str, Any] = Depends(require_admin),
+) -> ApiKeyResponse:
+    """Retrieves the machine API key."""
+    return ApiKeyResponse(api_key=db.get_api_key())
+
+
+@router.post(
+    "/api-key/regenerate",
+    response_model=ApiKeyRegenerateResponse,
+    summary="Regenerate API Key (Admin Only)",
+)
+def regenerate_api_key(
+    db: Database = Depends(get_db),
+    admin_user: dict[str, Any] = Depends(require_admin),
+) -> ApiKeyRegenerateResponse:
+    """Regenerates the machine API key."""
+    new_key = db.regenerate_api_key()
+    return ApiKeyRegenerateResponse(
+        api_key=new_key,
+        message="API key successfully regenerated",
+    )
+

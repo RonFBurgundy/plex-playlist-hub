@@ -1,8 +1,11 @@
 """Requests REST API endpoints for user requests, approval workflows, and Lidarr dispatch."""
 
 import logging
+import os
 import uuid
 from typing import Any, Optional
+
+import httpx
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
@@ -17,6 +20,7 @@ from plex_playlist_sync.api.dependencies import (
     require_admin,
     require_user,
 )
+from plex_playlist_sync.clients.core_client import CoreClient
 from plex_playlist_sync.clients.lidarr import LidarrClient
 from plex_playlist_sync.config import Config
 from plex_playlist_sync.lidarr_queue import lidarr_worker
@@ -80,6 +84,27 @@ def create_request(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Permission denied: requires REQUEST",
         )
+
+    role = (config.role or os.getenv("ROLE", "all-in-one")).lower().strip()
+    if role == "gateway" and config.trackseerr_core_url:
+        core_client = CoreClient(
+            core_url=config.trackseerr_core_url,
+            secret=config.internal_core_secret,
+        )
+        try:
+            return core_client.forward_request(body.model_dump(), user_info=current_user)
+        except httpx.HTTPStatusError as exc:
+            try:
+                err_detail = exc.response.json().get("detail", exc.response.text)
+            except Exception:
+                err_detail = exc.response.text
+            raise HTTPException(status_code=exc.response.status_code, detail=err_detail) from exc
+        except (httpx.RequestError, Exception) as exc:
+            logger.error("Failed to forward request to Core at %s: %s", config.trackseerr_core_url, exc)
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail="Unable to communicate with TrackSeerr Core engine",
+            ) from exc
 
     clean_title = body.title.strip()
     clean_artist = body.artist.strip()
@@ -214,6 +239,27 @@ def create_batch_requests(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Permission denied: requires REQUEST",
         )
+
+    role = (config.role or os.getenv("ROLE", "all-in-one")).lower().strip()
+    if role == "gateway" and config.trackseerr_core_url:
+        core_client = CoreClient(
+            core_url=config.trackseerr_core_url,
+            secret=config.internal_core_secret,
+        )
+        try:
+            return core_client.forward_batch_requests(body.model_dump(), user_info=current_user)
+        except httpx.HTTPStatusError as exc:
+            try:
+                err_detail = exc.response.json().get("detail", exc.response.text)
+            except Exception:
+                err_detail = exc.response.text
+            raise HTTPException(status_code=exc.response.status_code, detail=err_detail) from exc
+        except (httpx.RequestError, Exception) as exc:
+            logger.error("Failed to forward batch requests to Core at %s: %s", config.trackseerr_core_url, exc)
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail="Unable to communicate with TrackSeerr Core engine",
+            ) from exc
 
     if not current_user.get("is_admin"):
         rolling_days = current_user.get("request_limit_days") if current_user.get("request_limit_days") is not None else 7
@@ -469,9 +515,33 @@ def reject_request(
 def delete_request(
     request_id: str,
     db: Database = Depends(get_db),
+    config: Config = Depends(get_config),
     current_user: dict[str, Any] = Depends(require_user),
 ) -> dict[str, Any]:
     """Deletes a request. Requesters can delete pending requests; admins can delete any."""
+    role = (config.role or os.getenv("ROLE", "all-in-one")).lower().strip()
+    if role == "gateway" and config.trackseerr_core_url:
+        core_client = CoreClient(
+            core_url=config.trackseerr_core_url,
+            secret=config.internal_core_secret,
+        )
+        try:
+            ok = core_client.forward_delete_request(request_id)
+            if not ok:
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail="Failed to delete request on TrackSeerr Core",
+                )
+            return {"status": "deleted", "id": request_id}
+        except HTTPException:
+            raise
+        except (httpx.RequestError, Exception) as exc:
+            logger.error("Failed to forward delete request to Core at %s: %s", config.trackseerr_core_url, exc)
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail="Unable to communicate with TrackSeerr Core engine",
+            ) from exc
+
     req = db.get_request(request_id)
     if not req:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Request not found")

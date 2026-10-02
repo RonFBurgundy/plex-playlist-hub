@@ -15,17 +15,24 @@ import uuid
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
 
+import httpx
+
 from plex_playlist_sync.acquisition_coordinator import _to_quality_profile
 from plex_playlist_sync.acquisition_worker import place_audio_file, safe_atomic_move
 from plex_playlist_sync.api.dependencies import (
+    get_config,
     get_db,
     get_lidarr_client,
     get_plex_client,
     require_admin,
+    require_core_tier,
     require_user,
 )
+from plex_playlist_sync.clients.core_client import CoreClient
 from plex_playlist_sync.clients.lidarr import LidarrClient
 from plex_playlist_sync.clients.plex import PlexClient
+from plex_playlist_sync.config import Config
+from plex_playlist_sync.library_availability import get_item_availability
 from plex_playlist_sync.library import (
     AUDIO_EXTENSIONS,
     inspect_audio_file,
@@ -224,7 +231,7 @@ def get_artist(
     return result
 
 
-@router.put("/artists/{artist_id}/monitored")
+@router.put("/artists/{artist_id}/monitored", dependencies=[Depends(require_core_tier)])
 def set_artist_monitored(
     artist_id: str,
     body: ArtistMonitoredRequest,
@@ -245,7 +252,7 @@ def set_artist_monitored(
     return updated or {}
 
 
-@router.delete("/artists/{artist_id}")
+@router.delete("/artists/{artist_id}", dependencies=[Depends(require_core_tier)])
 def delete_artist(
     artist_id: str,
     delete_files: bool = Query(False),
@@ -332,7 +339,7 @@ def get_album(
     return result
 
 
-@router.put("/albums/{album_id}/monitored")
+@router.put("/albums/{album_id}/monitored", dependencies=[Depends(require_core_tier)])
 def set_album_monitored(
     album_id: str,
     body: AlbumMonitoredRequest,
@@ -353,7 +360,7 @@ def set_album_monitored(
     return updated or {}
 
 
-@router.delete("/albums/{album_id}")
+@router.delete("/albums/{album_id}", dependencies=[Depends(require_core_tier)])
 def delete_album(
     album_id: str,
     delete_files: bool = Query(False),
@@ -426,7 +433,7 @@ def list_tracks(
     return tracks
 
 
-@router.put("/tracks/{track_id}/monitored")
+@router.put("/tracks/{track_id}/monitored", dependencies=[Depends(require_core_tier)])
 def set_track_monitored(
     track_id: str,
     body: TrackMonitoredRequest,
@@ -443,7 +450,7 @@ def set_track_monitored(
     return updated or {}
 
 
-@router.delete("/tracks/{track_id}")
+@router.delete("/tracks/{track_id}", dependencies=[Depends(require_core_tier)])
 def delete_track(
     track_id: str,
     delete_files: bool = Query(False),
@@ -469,7 +476,7 @@ def delete_track(
     return {"success": success}
 
 
-@router.delete("/files/{file_id}")
+@router.delete("/files/{file_id}", dependencies=[Depends(require_core_tier)])
 def delete_file(
     file_id: str,
     delete_file_from_disk: bool = Query(True),
@@ -493,11 +500,57 @@ def delete_file(
     return {"success": success}
 
 
+@router.get("/availability", summary="Get library availability")
+def get_availability(
+    artist_name: Optional[str] = Query(None),
+    album_title: Optional[str] = Query(None),
+    track_title: Optional[str] = Query(None),
+    foreign_id: Optional[str] = Query(None),
+    db: Database = Depends(get_db),
+    config: Config = Depends(get_config),
+    _user: dict[str, Any] = Depends(require_user),
+) -> dict[str, Any]:
+    """Resolves library presence and file availability. In gateway mode, forwards to Core."""
+    role = (config.role or os.getenv("ROLE", "all-in-one")).lower().strip()
+    if role == "gateway" and config.trackseerr_core_url:
+        core_client = CoreClient(
+            core_url=config.trackseerr_core_url,
+            secret=config.internal_core_secret,
+        )
+        try:
+            return core_client.get_availability(
+                artist_name=artist_name,
+                album_title=album_title,
+                track_title=track_title,
+                foreign_id=foreign_id,
+            )
+        except httpx.HTTPStatusError as exc:
+            try:
+                err_detail = exc.response.json().get("detail", exc.response.text)
+            except Exception:
+                err_detail = exc.response.text
+            raise HTTPException(status_code=exc.response.status_code, detail=err_detail) from exc
+        except (httpx.RequestError, Exception) as exc:
+            logger.error("Failed to forward availability request to Core: %s", exc)
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail="Unable to communicate with TrackSeerr Core engine",
+            ) from exc
+
+    return get_item_availability(
+        db,
+        artist_name=artist_name,
+        album_title=album_title,
+        track_title=track_title,
+        foreign_id=foreign_id,
+    )
+
+
 # -------------------------------------------------------------------------
 # 2. Filesystem Scanner Controls
 # -------------------------------------------------------------------------
 
-@router.post("/scan")
+@router.post("/scan", dependencies=[Depends(require_core_tier)])
 def trigger_scan(
     body: Optional[ScanRequest] = None,
     db: Database = Depends(get_db),
@@ -526,7 +579,7 @@ def get_scan_status(
     return library_scanner.get_status()
 
 
-@router.post("/scan/cancel")
+@router.post("/scan/cancel", dependencies=[Depends(require_core_tier)])
 def cancel_scan(
     _admin: dict[str, Any] = Depends(require_admin),
 ) -> dict[str, Any]:
@@ -538,7 +591,7 @@ def cancel_scan(
 # 3. Lidarr Migration Controls
 # -------------------------------------------------------------------------
 
-@router.post("/migrate-lidarr")
+@router.post("/migrate-lidarr", dependencies=[Depends(require_core_tier)])
 def trigger_lidarr_migration(
     body: Optional[MigrateLidarrRequest] = None,
     db: Database = Depends(get_db),
@@ -576,7 +629,7 @@ def get_lidarr_migration_status(
     return lidarr_migration_job.get_status()
 
 
-@router.post("/migrate-lidarr/cancel")
+@router.post("/migrate-lidarr/cancel", dependencies=[Depends(require_core_tier)])
 def cancel_lidarr_migration(
     _admin: dict[str, Any] = Depends(require_admin),
 ) -> dict[str, Any]:
@@ -588,7 +641,7 @@ def cancel_lidarr_migration(
 # 4. Manual Import Pipeline
 # -------------------------------------------------------------------------
 
-@router.post("/manual-import/scan")
+@router.post("/manual-import/scan", dependencies=[Depends(require_core_tier)])
 def manual_import_scan(
     body: Optional[ManualImportScanRequest] = None,
     db: Database = Depends(get_db),
@@ -674,7 +727,7 @@ def manual_import_scan(
     return candidates
 
 
-@router.post("/manual-import/commit")
+@router.post("/manual-import/commit", dependencies=[Depends(require_core_tier)])
 def manual_import_commit(
     body: ManualImportCommitRequest,
     db: Database = Depends(get_db),
@@ -898,7 +951,7 @@ def manual_import_commit(
 # 5. Preview & Batch Renamer
 # -------------------------------------------------------------------------
 
-@router.post("/rename/preview")
+@router.post("/rename/preview", dependencies=[Depends(require_core_tier)])
 def rename_preview(
     body: Optional[RenamePreviewRequest] = None,
     db: Database = Depends(get_db),
@@ -976,7 +1029,7 @@ def rename_preview(
     return preview_diffs
 
 
-@router.post("/rename/apply")
+@router.post("/rename/apply", dependencies=[Depends(require_core_tier)])
 def rename_apply(
     body: RenameApplyRequest,
     db: Database = Depends(get_db),
