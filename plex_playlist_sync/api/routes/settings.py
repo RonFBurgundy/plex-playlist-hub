@@ -112,6 +112,8 @@ class MediaManagementSettingsModel(BaseModel):
     delete_completed_transfers: bool = Field(False, description="Whether to delete completed transfers from client")
     enable_quality_upgrades: bool = Field(True, description="Whether to monitor for quality cutoff upgrades")
     library_mode: str = Field("native", description="Library management mode: native or lidarr")
+    seed_ratio_limit: float | None = Field(None, description="Target seed ratio before transfer cleanup")
+    seed_time_limit_minutes: int | None = Field(None, description="Target seeding duration in minutes before transfer cleanup")
     updated_at: str | None = None
 
 
@@ -132,6 +134,8 @@ class MediaManagementUpdateModel(BaseModel):
     delete_completed_transfers: bool | None = None
     enable_quality_upgrades: bool | None = None
     library_mode: str | None = None
+    seed_ratio_limit: float | None = None
+    seed_time_limit_minutes: int | None = None
 
 
 class PreviewRequestModel(BaseModel):

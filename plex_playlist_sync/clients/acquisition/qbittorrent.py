@@ -155,6 +155,8 @@ class QbittorrentDriver(AcquisitionDriver):
                         "speed_bps": 0,
                         "eta_seconds": 0,
                         "source_path": None,
+                        "ratio": 0.0,
+                        "seeding_time_seconds": 0,
                         "error_message": None,
                     }
 
@@ -166,6 +168,8 @@ class QbittorrentDriver(AcquisitionDriver):
                 speed = int(tor.get("dlspeed", 0))
                 eta = int(tor.get("eta", 0))
                 source_path = tor.get("content_path") or tor.get("save_path")
+                ratio = float(tor.get("ratio", 0.0))
+                seeding_time = int(tor.get("seeding_time") or tor.get("time_seeded") or 0)
 
                 status_str = DownloadStatus.DOWNLOADING.value
                 if any(s in state for s in ("uploading", "pausedup", "queuedup", "stalledup")):
@@ -183,6 +187,8 @@ class QbittorrentDriver(AcquisitionDriver):
                     "speed_bps": speed,
                     "eta_seconds": eta if eta < 8640000 else 0,
                     "source_path": source_path,
+                    "ratio": ratio,
+                    "seeding_time_seconds": seeding_time,
                     "error_message": None,
                 }
         except Exception as e:
@@ -194,6 +200,8 @@ class QbittorrentDriver(AcquisitionDriver):
                 "speed_bps": 0,
                 "eta_seconds": 0,
                 "source_path": None,
+                "ratio": 0.0,
+                "seeding_time_seconds": 0,
                 "error_message": str(e),
             }
 

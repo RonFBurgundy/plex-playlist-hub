@@ -5,7 +5,9 @@ normalizes artists, albums, tracks, and files into SQLite catalog tables,
 and evaluates quality profile cutoff compliance.
 """
 
+import concurrent.futures
 import logging
+import os
 import threading
 import uuid
 from datetime import datetime, timezone
@@ -24,6 +26,44 @@ from plex_playlist_sync.quality import evaluate_release, parse_release_title
 from plex_playlist_sync.storage import Database
 
 logger = logging.getLogger(__name__)
+
+
+def _inspect_audio_file_worker(file_path: Path, root: Path) -> tuple[Path, dict[str, Any]]:
+    """Mutagen worker function for concurrent thread pool inspection."""
+    parent = file_path.parent
+    fallback_album = parent.name if parent != root else "Unknown Album"
+    grandparent = parent.parent
+    fallback_artist = (
+        grandparent.name
+        if (parent != root and grandparent != root and grandparent != parent)
+        else "Unknown Artist"
+    )
+    fallback_title = file_path.stem
+    fallback_track_number = 1
+
+    try:
+        metadata = inspect_audio_file(file_path)
+    except Exception as exc:
+        logger.warning(
+            "LibraryScanner: Mutagen extraction failed for %s: %s. Using path fallbacks.",
+            file_path,
+            exc,
+        )
+        metadata = {
+            "title": fallback_title,
+            "artist": fallback_artist,
+            "album": fallback_album,
+            "track_number": fallback_track_number,
+            "disc_number": 1,
+            "codec": file_path.suffix.lstrip(".").upper() or "UNKNOWN",
+            "bitrate": None,
+            "sample_rate": None,
+            "bits_per_sample": None,
+            "duration": 0.0,
+            "quality_full": file_path.suffix.lstrip(".").upper() or "UNKNOWN",
+            "file_path": str(file_path),
+        }
+    return file_path, metadata
 
 
 class LibraryScanner:
@@ -203,163 +243,249 @@ class LibraryScanner:
                     self._status["completed_at"] = datetime.now(timezone.utc).isoformat()
                     return dict(self._status)
 
-            # Step d: Process audio files
-            for file_path in audio_files:
+            # Step d: Process audio files with caching, concurrency, and batched writes
+            existing_files_map = {
+                f["file_path"]: f for f in db.list_library_files(limit=100000)
+            }
+            artist_cache: dict[str, dict[str, Any]] = {}
+            album_cache: dict[tuple[str, str], dict[str, Any]] = {}
+            track_cache: dict[tuple[str, str, int], dict[str, Any]] = {}
+            track_id_cache: dict[str, dict[str, Any]] = {}
+            quality_profile_cache: dict[Optional[str], Any] = {}
+
+            CHUNK_SIZE = 100
+            for i in range(0, len(audio_files), CHUNK_SIZE):
                 if self._stop_event.is_set():
                     logger.info("LibraryScanner: Cancellation requested during indexing.")
                     break
 
-                with self._lock:
-                    self._status["current_file"] = str(file_path)
+                chunk_files = audio_files[i:i + CHUNK_SIZE]
+                cached_metadata_items: dict[Path, dict[str, Any]] = {}
+                files_to_inspect: list[Path] = []
 
-                # Fallback path metadata
-                parent = file_path.parent
-                fallback_album = parent.name if parent != root else "Unknown Album"
-                grandparent = parent.parent
-                fallback_artist = (
-                    grandparent.name
-                    if (parent != root and grandparent != root and grandparent != parent)
-                    else "Unknown Artist"
-                )
-                fallback_title = file_path.stem
-                fallback_track_number = 1
+                for fpath in chunk_files:
+                    fpath_str = str(fpath)
+                    existing = existing_files_map.get(fpath_str)
+                    f_size = 0
+                    try:
+                        f_size = fpath.stat().st_size
+                    except OSError:
+                        pass
 
-                try:
-                    metadata = inspect_audio_file(file_path)
-                except Exception as exc:
-                    logger.warning(
-                        "LibraryScanner: Mutagen extraction failed for %s: %s. Using path fallbacks.",
-                        file_path,
-                        exc,
-                    )
-                    metadata = {
-                        "title": fallback_title,
-                        "artist": fallback_artist,
-                        "album": fallback_album,
-                        "track_number": fallback_track_number,
-                        "disc_number": 1,
-                        "codec": file_path.suffix.lstrip(".").upper() or "UNKNOWN",
-                        "bitrate": None,
-                        "sample_rate": None,
-                        "bits_per_sample": None,
-                        "duration": 0.0,
-                        "quality_full": file_path.suffix.lstrip(".").upper() or "UNKNOWN",
-                        "file_path": str(file_path),
-                    }
+                    if existing and f_size > 0 and existing.get("size_bytes") == f_size:
+                        cached_metadata_items[fpath] = {
+                            "file_path": fpath_str,
+                            "codec": existing.get("codec") or fpath.suffix.lstrip(".").upper() or "UNKNOWN",
+                            "bitrate": existing.get("bitrate"),
+                            "sample_rate": existing.get("sample_rate"),
+                            "bits_per_sample": existing.get("bits_per_sample"),
+                            "quality_full": existing.get("quality_name"),
+                            "size_bytes": f_size,
+                            "cached_track_id": existing.get("track_id"),
+                            "cached_file_id": existing.get("id"),
+                            "cutoff_met": existing.get("cutoff_met", True),
+                            "quality_name": existing.get("quality_name", "Unknown"),
+                            "from_cache": True,
+                        }
+                    else:
+                        files_to_inspect.append(fpath)
 
-                artist_name = (
-                    metadata.get("artist") or metadata.get("album_artist") or ""
-                ).strip() or fallback_artist
-                album_title = (metadata.get("album") or "").strip() or fallback_album
-                track_title = (metadata.get("title") or "").strip() or fallback_title
-                track_number = metadata.get("track_number") or fallback_track_number
-                disc_number = metadata.get("disc_number") or 1
-                duration_seconds = metadata.get("duration")
-                year = metadata.get("year")
-                total_tracks = metadata.get("total_tracks")
+                # Multi-threaded Mutagen worker pool for files needing inspection
+                inspected_metadata_items: dict[Path, dict[str, Any]] = {}
+                if files_to_inspect:
+                    max_workers = min(8, os.cpu_count() or 4)
+                    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+                        future_to_file = {
+                            executor.submit(_inspect_audio_file_worker, fp, root): fp
+                            for fp in files_to_inspect
+                        }
+                        for fut in concurrent.futures.as_completed(future_to_file):
+                            if self._stop_event.is_set():
+                                for f in future_to_file:
+                                    f.cancel()
+                                break
+                            try:
+                                fpath_res, meta_res = fut.result()
+                                inspected_metadata_items[fpath_res] = meta_res
+                            except Exception as exc:
+                                fp = future_to_file[fut]
+                                logger.warning("LibraryScanner: Worker error inspecting %s: %s", fp, exc)
 
-                # Resolve/Upsert Artist
-                artist_row = db.get_library_artist_by_name(artist_name)
-                if not artist_row:
-                    artist_id = str(uuid.uuid4())
-                    artist_path = (
-                        str(parent.parent)
+                if self._stop_event.is_set():
+                    break
+
+                # Process chunk items and prepare batched records
+                pending_files_to_batch: list[LibraryFile] = []
+                for file_path in chunk_files:
+                    if self._stop_event.is_set():
+                        break
+
+                    with self._lock:
+                        self._status["current_file"] = str(file_path)
+
+                    metadata = cached_metadata_items.get(file_path) or inspected_metadata_items.get(file_path)
+                    if not metadata:
+                        continue
+
+                    fpath_str = str(file_path)
+                    file_size = 0
+                    try:
+                        file_size = file_path.stat().st_size
+                    except OSError:
+                        pass
+
+                    parent = file_path.parent
+                    fallback_album = parent.name if parent != root else "Unknown Album"
+                    grandparent = parent.parent
+                    fallback_artist = (
+                        grandparent.name
                         if (parent != root and grandparent != root and grandparent != parent)
-                        else str(parent)
+                        else "Unknown Artist"
                     )
-                    artist_row = db.upsert_library_artist(
-                        LibraryArtist(
-                            id=artist_id,
-                            name=artist_name,
-                            path=artist_path,
-                            monitored=True,
-                        )
-                    )
-                    with self._lock:
-                        self._status["artists_created"] += 1
-                artist_id = str(artist_row["id"])
+                    fallback_title = file_path.stem
+                    fallback_track_number = 1
 
-                # Resolve/Upsert Album
-                album_row = db.get_library_album_by_title(artist_id, album_title)
-                if not album_row:
-                    album_id = str(uuid.uuid4())
-                    album_path = str(parent)
-                    album_row = db.upsert_library_album(
-                        LibraryAlbum(
-                            id=album_id,
-                            artist_id=artist_id,
-                            title=album_title,
-                            year=year,
-                            path=album_path,
-                            total_tracks=total_tracks,
-                            monitored=True,
-                        )
-                    )
-                    with self._lock:
-                        self._status["albums_created"] += 1
-                album_id = str(album_row["id"])
+                    if metadata.get("from_cache"):
+                        cached_track_id = metadata.get("cached_track_id")
+                        track_row = None
+                        if cached_track_id:
+                            track_row = track_id_cache.get(cached_track_id) or db.get_library_track(cached_track_id)
+                            if track_row:
+                                track_id_cache[cached_track_id] = track_row
 
-                # Resolve/Upsert Track
-                track_row = db.get_library_track_by_title(album_id, track_title, track_number)
-                if not track_row:
-                    track_id = str(uuid.uuid4())
-                    track_row = db.upsert_library_track(
-                        LibraryTrack(
-                            id=track_id,
-                            album_id=album_id,
-                            artist_id=artist_id,
-                            title=track_title,
-                            track_number=int(track_number),
-                            disc_number=int(disc_number),
-                            duration_seconds=duration_seconds,
-                            monitored=True,
-                        )
-                    )
-                    with self._lock:
-                        self._status["tracks_created"] += 1
-                track_id = str(track_row["id"])
+                        if track_row:
+                            track_id = str(track_row["id"])
+                            cutoff_met = bool(metadata.get("cutoff_met", True))
+                            quality_name = str(metadata.get("quality_name") or "Unknown")
+                        else:
+                            metadata["from_cache"] = False
+                            if not metadata.get("title"):
+                                metadata["title"] = fallback_title
+                                metadata["artist"] = fallback_artist
+                                metadata["album"] = fallback_album
 
-                # Quality profile & Cutoff evaluation
-                cutoff_met = True
-                quality_name = str(metadata.get("quality_full") or metadata.get("codec") or "Unknown")
-                try:
-                    qp_id = artist_row.get("quality_profile_id")
-                    profile_dict = db.get_quality_profile(qp_id) if qp_id else None
-                    if not profile_dict:
-                        profile_dict = db.get_default_quality_profile()
-                    if profile_dict:
-                        qp = _to_quality_profile(profile_dict)
-                        quality_input = (
-                            metadata.get("quality_full")
-                            or metadata.get("codec")
-                            or file_path.suffix.lstrip(".").upper()
-                        )
-                        parsed = parse_release_title(str(quality_input))
-                        if parsed.quality == "Unknown" and quality_input:
-                            parsed.quality = str(quality_input)
-                        file_size = file_path.stat().st_size if file_path.exists() else 0
-                        eval_result = evaluate_release(parsed, qp, size_bytes=file_size)
-                        cutoff_met = bool(eval_result.meets_cutoff)
-                        quality_name = eval_result.parsed_quality or str(quality_input)
-                except Exception as exc:
-                    logger.warning(
-                        "LibraryScanner: Cutoff evaluation error for %s: %s. Defaulting cutoff_met=True.",
-                        file_path,
-                        exc,
-                    )
-                    cutoff_met = True
+                    if not metadata.get("from_cache"):
+                        artist_name = (
+                            metadata.get("artist") or metadata.get("album_artist") or ""
+                        ).strip() or fallback_artist
+                        album_title = (metadata.get("album") or "").strip() or fallback_album
+                        track_title = (metadata.get("title") or "").strip() or fallback_title
+                        track_number = metadata.get("track_number") or fallback_track_number
+                        disc_number = metadata.get("disc_number") or 1
+                        duration_seconds = metadata.get("duration")
+                        year = metadata.get("year")
+                        total_tracks = metadata.get("total_tracks")
 
-                # Upsert File
-                file_size = file_path.stat().st_size if file_path.exists() else 0
-                rel_path = str(file_path.relative_to(root))
-                existing_file = db.get_library_file_by_path(str(file_path))
-                file_id = str(existing_file["id"]) if existing_file else str(uuid.uuid4())
+                        # Resolve/Upsert Artist
+                        artist_row = artist_cache.get(artist_name) or db.get_library_artist_by_name(artist_name)
+                        if not artist_row:
+                            artist_id = str(uuid.uuid4())
+                            artist_path = (
+                                str(parent.parent)
+                                if (parent != root and grandparent != root and grandparent != parent)
+                                else str(parent)
+                            )
+                            artist_row = db.upsert_library_artist(
+                                LibraryArtist(
+                                    id=artist_id,
+                                    name=artist_name,
+                                    path=artist_path,
+                                    monitored=True,
+                                )
+                            )
+                            with self._lock:
+                                self._status["artists_created"] += 1
+                        artist_cache[artist_name] = artist_row
+                        artist_id = str(artist_row["id"])
 
-                db.upsert_library_file(
-                    LibraryFile(
+                        # Resolve/Upsert Album
+                        album_key = (artist_id, album_title)
+                        album_row = album_cache.get(album_key) or db.get_library_album_by_title(artist_id, album_title)
+                        if not album_row:
+                            album_id = str(uuid.uuid4())
+                            album_path = str(parent)
+                            album_row = db.upsert_library_album(
+                                LibraryAlbum(
+                                    id=album_id,
+                                    artist_id=artist_id,
+                                    title=album_title,
+                                    year=year,
+                                    path=album_path,
+                                    total_tracks=total_tracks,
+                                    monitored=True,
+                                )
+                            )
+                            with self._lock:
+                                self._status["albums_created"] += 1
+                        album_cache[album_key] = album_row
+                        album_id = str(album_row["id"])
+
+                        # Resolve/Upsert Track
+                        track_key = (album_id, track_title, int(track_number))
+                        track_row = track_cache.get(track_key) or db.get_library_track_by_title(album_id, track_title, track_number)
+                        if not track_row:
+                            track_id = str(uuid.uuid4())
+                            track_row = db.upsert_library_track(
+                                LibraryTrack(
+                                    id=track_id,
+                                    album_id=album_id,
+                                    artist_id=artist_id,
+                                    title=track_title,
+                                    track_number=int(track_number),
+                                    disc_number=int(disc_number),
+                                    duration_seconds=duration_seconds,
+                                    monitored=True,
+                                )
+                            )
+                            with self._lock:
+                                self._status["tracks_created"] += 1
+                        track_cache[track_key] = track_row
+                        track_id_cache[str(track_row["id"])] = track_row
+                        track_id = str(track_row["id"])
+
+                        # Quality profile & Cutoff evaluation
+                        cutoff_met = True
+                        quality_name = str(metadata.get("quality_full") or metadata.get("codec") or "Unknown")
+                        try:
+                            qp_id = artist_row.get("quality_profile_id")
+                            profile_dict = quality_profile_cache.get(qp_id)
+                            if profile_dict is None:
+                                profile_dict = db.get_quality_profile(qp_id) if qp_id else None
+                                if not profile_dict:
+                                    profile_dict = db.get_default_quality_profile()
+                                quality_profile_cache[qp_id] = profile_dict
+                            if profile_dict:
+                                qp = _to_quality_profile(profile_dict)
+                                quality_input = (
+                                    metadata.get("quality_full")
+                                    or metadata.get("codec")
+                                    or file_path.suffix.lstrip(".").upper()
+                                )
+                                parsed = parse_release_title(str(quality_input))
+                                if parsed.quality == "Unknown" and quality_input:
+                                    parsed.quality = str(quality_input)
+                                eval_result = evaluate_release(parsed, qp, size_bytes=file_size)
+                                cutoff_met = bool(eval_result.meets_cutoff)
+                                quality_name = eval_result.parsed_quality or str(quality_input)
+                        except Exception as exc:
+                            logger.warning(
+                                "LibraryScanner: Cutoff evaluation error for %s: %s. Defaulting cutoff_met=True.",
+                                file_path,
+                                exc,
+                            )
+                            cutoff_met = True
+
+                    # Upsert File
+                    rel_path = str(file_path.relative_to(root))
+                    file_id = str(metadata.get("cached_file_id") or "")
+                    if not file_id:
+                        existing_file = existing_files_map.get(fpath_str) or db.get_library_file_by_path(fpath_str)
+                        file_id = str(existing_file["id"]) if existing_file else str(uuid.uuid4())
+
+                    lib_file = LibraryFile(
                         id=file_id,
                         track_id=track_id,
-                        file_path=str(file_path),
+                        file_path=fpath_str,
                         relative_path=rel_path,
                         codec=str(metadata.get("codec") or file_path.suffix.lstrip(".").upper() or "UNKNOWN"),
                         bitrate=metadata.get("bitrate"),
@@ -369,10 +495,21 @@ class LibraryScanner:
                         size_bytes=file_size,
                         cutoff_met=cutoff_met,
                     )
-                )
+                    pending_files_to_batch.append(lib_file)
+                    with self._lock:
+                        self._status["files_indexed"] += 1
+                        self._status["processed_files"] += 1
+
+                # Batched database write for this chunk
+                if pending_files_to_batch:
+                    db.upsert_library_files_batch(pending_files_to_batch)
+
+            if self._stop_event.is_set():
                 with self._lock:
-                    self._status["files_indexed"] += 1
-                    self._status["processed_files"] += 1
+                    self._status["status"] = "cancelled"
+                    self._status["is_scanning"] = False
+                    self._status["completed_at"] = datetime.now(timezone.utc).isoformat()
+                    return dict(self._status)
 
             # Step e: Prune missing files if enabled and scan was not cancelled
             if prune_missing and not self._stop_event.is_set():
