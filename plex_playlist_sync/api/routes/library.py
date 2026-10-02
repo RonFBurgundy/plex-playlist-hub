@@ -7,6 +7,7 @@ and Arr-grade token-template preview and batch-renaming engine.
 """
 
 from datetime import datetime
+import json
 import logging
 import os
 from pathlib import Path
@@ -71,6 +72,7 @@ class IngestArtistRequest(BaseModel):
 class ArtistMonitoredRequest(BaseModel):
     monitored: bool
     cascade_children: bool = True
+    monitor_option: Optional[str] = Field(default=None, pattern="^(all|albums|singles_eps|none)$")
 
 
 class AlbumMonitoredRequest(BaseModel):
@@ -220,12 +222,39 @@ def list_artists(
             artist_ids,
         )
         track_counts = dict(track_cur.fetchall())
+        cover_cur = db.conn.execute(
+            f"SELECT artist_id, cover_url FROM library_albums WHERE artist_id IN ({placeholders}) AND cover_url IS NOT NULL AND cover_url != '' GROUP BY artist_id",
+            artist_ids,
+        )
+        cover_urls = dict(cover_cur.fetchall())
 
     results: list[dict[str, Any]] = []
     for artist in artists:
         a_dict = dict(artist)
         a_dict["album_count"] = album_counts.get(artist["id"], 0)
         a_dict["track_count"] = track_counts.get(artist["id"], 0)
+
+        # Image resolution: parsed metadata_json image_url or first album cover_url
+        img: Optional[str] = None
+        if a_dict.get("metadata_json"):
+            try:
+                m = (
+                    json.loads(a_dict["metadata_json"])
+                    if isinstance(a_dict["metadata_json"], str)
+                    else a_dict["metadata_json"]
+                )
+                if isinstance(m, dict):
+                    img = (
+                        m.get("image_url")
+                        or m.get("picture_xl")
+                        or m.get("picture_large")
+                        or m.get("picture")
+                    )
+            except (ValueError, TypeError, json.JSONDecodeError):
+                pass
+        if not img:
+            img = cover_urls.get(artist["id"])
+        a_dict["image_url"] = img
         results.append(a_dict)
     return results
 
@@ -421,12 +450,37 @@ def get_artist(
     db: Database = Depends(get_db),
     _user: dict[str, Any] = Depends(require_user),
 ) -> dict[str, Any]:
-    """Retrieves a single artist by ID, including its child albums."""
+    """Retrieves a single artist by ID, including its child albums and image_url."""
     artist = db.get_library_artist(artist_id)
     if artist is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Artist not found")
     result = dict(artist)
-    result["albums"] = db.list_library_albums(artist_id=artist_id, limit=500)
+    albums = db.list_library_albums(artist_id=artist_id, limit=500)
+    result["albums"] = albums
+
+    img: Optional[str] = None
+    if result.get("metadata_json"):
+        try:
+            m = (
+                json.loads(result["metadata_json"])
+                if isinstance(result["metadata_json"], str)
+                else result["metadata_json"]
+            )
+            if isinstance(m, dict):
+                img = (
+                    m.get("image_url")
+                    or m.get("picture_xl")
+                    or m.get("picture_large")
+                    or m.get("picture")
+                )
+        except (ValueError, TypeError, json.JSONDecodeError):
+            pass
+    if not img:
+        for alb in albums:
+            if alb.get("cover_url"):
+                img = alb["cover_url"]
+                break
+    result["image_url"] = img
     return result
 
 
@@ -437,16 +491,86 @@ def set_artist_monitored(
     db: Database = Depends(get_db),
     _admin: dict[str, Any] = Depends(require_admin),
 ) -> dict[str, Any]:
-    """Updates monitoring status for an artist, optionally cascading to albums and tracks."""
+    """Updates monitoring status for an artist, optionally cascading to albums and tracks or applying a preset."""
     artist = db.get_library_artist(artist_id)
     if artist is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Artist not found")
 
-    db.set_artist_monitored(
-        artist_id=artist_id,
-        monitored=body.monitored,
-        cascade_children=body.cascade_children,
-    )
+    if body.monitor_option == "all":
+        with db._lock:
+            db.conn.execute(
+                "UPDATE library_artists SET monitored = 1, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                (str(artist_id),),
+            )
+            db.conn.execute(
+                "UPDATE library_albums SET monitored = 1, updated_at = CURRENT_TIMESTAMP WHERE artist_id = ?",
+                (str(artist_id),),
+            )
+            db.conn.execute(
+                "UPDATE library_tracks SET monitored = 1, updated_at = CURRENT_TIMESTAMP WHERE artist_id = ?",
+                (str(artist_id),),
+            )
+            db.conn.commit()
+    elif body.monitor_option == "albums":
+        with db._lock:
+            db.conn.execute(
+                "UPDATE library_artists SET monitored = 1, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                (str(artist_id),),
+            )
+            db.conn.execute(
+                "UPDATE library_albums SET monitored = CASE WHEN LOWER(COALESCE(album_type, 'album')) IN ('album', 'studio') THEN 1 ELSE 0 END, updated_at = CURRENT_TIMESTAMP WHERE artist_id = ?",
+                (str(artist_id),),
+            )
+            db.conn.execute(
+                """
+                UPDATE library_tracks SET monitored = (
+                    SELECT monitored FROM library_albums WHERE library_albums.id = library_tracks.album_id
+                ), updated_at = CURRENT_TIMESTAMP WHERE artist_id = ?
+                """,
+                (str(artist_id),),
+            )
+            db.conn.commit()
+    elif body.monitor_option == "singles_eps":
+        with db._lock:
+            db.conn.execute(
+                "UPDATE library_artists SET monitored = 1, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                (str(artist_id),),
+            )
+            db.conn.execute(
+                "UPDATE library_albums SET monitored = CASE WHEN LOWER(COALESCE(album_type, '')) IN ('single', 'ep', 'singles', 'eps') THEN 1 ELSE 0 END, updated_at = CURRENT_TIMESTAMP WHERE artist_id = ?",
+                (str(artist_id),),
+            )
+            db.conn.execute(
+                """
+                UPDATE library_tracks SET monitored = (
+                    SELECT monitored FROM library_albums WHERE library_albums.id = library_tracks.album_id
+                ), updated_at = CURRENT_TIMESTAMP WHERE artist_id = ?
+                """,
+                (str(artist_id),),
+            )
+            db.conn.commit()
+    elif body.monitor_option == "none":
+        with db._lock:
+            db.conn.execute(
+                "UPDATE library_artists SET monitored = 0, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                (str(artist_id),),
+            )
+            db.conn.execute(
+                "UPDATE library_albums SET monitored = 0, updated_at = CURRENT_TIMESTAMP WHERE artist_id = ?",
+                (str(artist_id),),
+            )
+            db.conn.execute(
+                "UPDATE library_tracks SET monitored = 0, updated_at = CURRENT_TIMESTAMP WHERE artist_id = ?",
+                (str(artist_id),),
+            )
+            db.conn.commit()
+    else:
+        db.set_artist_monitored(
+            artist_id=artist_id,
+            monitored=body.monitored,
+            cascade_children=body.cascade_children,
+        )
+
     updated = db.get_library_artist(artist_id)
     return updated or {}
 

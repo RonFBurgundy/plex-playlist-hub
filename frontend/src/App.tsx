@@ -1,5 +1,5 @@
-import React, { useState, useEffect, useCallback } from 'react';
-import { Loader2, LogIn, Disc } from 'lucide-react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
+import { Loader2, LogIn } from 'lucide-react';
 import type { Playlist, User } from '@/types/models';
 import {
   useAuth,
@@ -11,8 +11,6 @@ import {
 } from '@/hooks';
 import {
   Header,
-  Navigation,
-  MobileDrawer,
   AudioPlayerBar,
   DiscoverView,
   RequestsView,
@@ -22,6 +20,7 @@ import {
   SettingsView,
   ObsidianModal,
   TapeDeckButton,
+  MachinedCard,
 } from '@/components';
 import type { MainTab } from '@/components/layout/Navigation';
 import {
@@ -43,8 +42,8 @@ export const App: React.FC = () => {
   const queueHook = useQueue();
 
   const [activeTab, setActiveTab] = useState<MainTab>('discover');
-  const [isMobileMenuOpen, setIsMobileMenuOpen] = useState<boolean>(false);
   const [isAuthModalOpen, setIsAuthModalOpen] = useState<boolean>(false);
+  const mainRef = useRef<HTMLElement | null>(null);
 
   // Playlists & users data
   const [playlists, setPlaylists] = useState<Playlist[]>([]);
@@ -70,9 +69,17 @@ export const App: React.FC = () => {
 
   useEffect(() => {
     if (auth.isAuthenticated) {
+      setIsAuthModalOpen(false);
       loadPlaylistsAndUsers();
     }
   }, [auth.isAuthenticated, loadPlaylistsAndUsers]);
+
+  const handleTabChange = (tab: MainTab) => {
+    setActiveTab(tab);
+    if (mainRef.current) {
+      mainRef.current.scrollTo({ top: 0, behavior: 'smooth' });
+    }
+  };
 
   // Request an item from discovery
   const handleRequestItem = async (item: {
@@ -124,44 +131,23 @@ export const App: React.FC = () => {
   };
 
   return (
-    <div className="min-h-screen bg-[#0a0a0a] text-white flex flex-col selection:bg-[#e5a00d] selection:text-black">
-      {/* Header */}
+    <div className="h-screen w-screen flex flex-col overflow-hidden bg-[#0a0a0a] text-white selection:bg-[#e5a00d] selection:text-black">
+      {/* Sticky Header with integrated navigation */}
       <Header
         user={auth.user}
         quota={requestsHook.quota}
-        isMobileMenuOpen={isMobileMenuOpen}
-        onToggleMobileMenu={() => setIsMobileMenuOpen(!isMobileMenuOpen)}
+        activeTab={activeTab}
+        onTabChange={handleTabChange}
+        isAdmin={auth.isAdmin}
         onLogin={() => setIsAuthModalOpen(true)}
         onLogout={auth.logout}
       />
 
-      {/* Primary Recessed Tape Deck Navigation */}
-      <Navigation
-        activeTab={activeTab}
-        onTabChange={(tab) => {
-          setActiveTab(tab);
-          window.scrollTo({ top: 0, behavior: 'smooth' });
-        }}
-        isAdmin={auth.isAdmin}
-      />
-
-      {/* Mobile Slide-over Drawer */}
-      <MobileDrawer
-        isOpen={isMobileMenuOpen}
-        onClose={() => setIsMobileMenuOpen(false)}
-        activeTab={activeTab}
-        onTabChange={(tab) => {
-          setActiveTab(tab);
-          setIsMobileMenuOpen(false);
-          window.scrollTo({ top: 0, behavior: 'smooth' });
-        }}
-        user={auth.user}
-        quota={requestsHook.quota}
-        isAdmin={auth.isAdmin}
-      />
-
-      {/* Main Content Area */}
-      <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 py-6 pb-28">
+      {/* Main Content Area - Locked scrolling inside container */}
+      <main
+        ref={mainRef}
+        className="flex-1 min-h-0 overflow-y-auto overscroll-y-contain px-4 sm:px-6 py-4 pb-28"
+      >
         {auth.isLoading ? (
           <div className="flex flex-col items-center justify-center py-28 gap-3">
             <Loader2 className="h-8 w-8 text-[#e5a00d] animate-spin" />
@@ -169,8 +155,70 @@ export const App: React.FC = () => {
               Calibrating Analog Deck...
             </span>
           </div>
+        ) : !auth.isAuthenticated ? (
+          /* Landing Hero for Unauthenticated Visitors */
+          <div className="flex-1 min-h-full flex items-center justify-center p-4 relative">
+            <div className="absolute w-72 h-72 bg-[#e5a00d]/10 rounded-full blur-3xl pointer-events-none" />
+            <MachinedCard className="max-w-md w-full p-8 text-center space-y-6 border-[#262626] bg-[#121212] relative z-10 shadow-2xl">
+              <div className="w-20 h-20 rounded-[4px] bg-[#141414] border border-[#262626] flex items-center justify-center mx-auto shadow-xl">
+                <img
+                  src="/trackseerr-logo.svg"
+                  alt="TrackSeerr"
+                  className="w-16 h-16 object-contain"
+                  onError={(e) => {
+                    (e.currentTarget as HTMLImageElement).src = '/static/trackseerr-logo.svg';
+                  }}
+                />
+              </div>
+              <div className="space-y-1">
+                <h2 className="text-2xl font-black tracking-tight text-white uppercase font-mono">
+                  Track<span className="text-[#e5a00d]">Seerr</span>
+                </h2>
+                <p className="text-neutral-400 text-xs font-mono">Music Discovery &amp; Request Suite</p>
+              </div>
+
+              {auth.authError && (
+                <div className="p-3 bg-red-950/40 border border-red-800 text-xs text-red-300 font-mono rounded-[4px]">
+                  {auth.authError}
+                </div>
+              )}
+
+              <div className="space-y-3 pt-2">
+                {auth.isAuthenticating ? (
+                  <div className="space-y-3">
+                    <div className="flex items-center justify-center gap-2 text-xs font-mono text-[#e5a00d]">
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                      <span>Connecting to Plex...</span>
+                    </div>
+                    <p className="text-[11px] text-neutral-400 font-mono">
+                      Popup window opened. Complete sign-in in the Plex window.
+                    </p>
+                    <TapeDeckButton
+                      size="md"
+                      variant="default"
+                      onClick={auth.cancelLogin}
+                      className="w-full"
+                    >
+                      Cancel Sign In
+                    </TapeDeckButton>
+                  </div>
+                ) : (
+                  <TapeDeckButton
+                    size="lg"
+                    variant="amber"
+                    onClick={auth.loginWithPlex}
+                    icon={<LogIn className="h-5 w-5" />}
+                    className="w-full"
+                  >
+                    Sign In with Plex
+                  </TapeDeckButton>
+                )}
+              </div>
+            </MachinedCard>
+          </div>
         ) : (
-          <>
+          /* Authenticated Dashboard Views */
+          <div className="max-w-7xl mx-auto w-full">
             {activeTab === 'discover' && (
               <DiscoverView
                 discovery={discovery}
@@ -221,7 +269,7 @@ export const App: React.FC = () => {
             {activeTab === 'settings' && auth.isAdmin && (
               <SettingsView />
             )}
-          </>
+          </div>
         )}
       </main>
 
@@ -249,21 +297,28 @@ export const App: React.FC = () => {
       >
         <div className="space-y-5 text-center py-4">
           <div className="flex justify-center">
-            <div className="h-16 w-16 rounded-full bg-[#181818] border border-[#2a2a2a] flex items-center justify-center">
-              <Disc className="h-8 w-8 text-[#e5a00d]" />
+            <div className="h-16 w-16 rounded-[4px] bg-[#141414] border border-[#262626] flex items-center justify-center shadow-lg">
+              <img
+                src="/trackseerr-logo.svg"
+                alt="TrackSeerr"
+                className="h-14 w-14 object-contain mx-auto"
+                onError={(e) => {
+                  (e.currentTarget as HTMLImageElement).src = '/static/trackseerr-logo.svg';
+                }}
+              />
             </div>
           </div>
 
           <div className="space-y-1">
             <h4 className="font-bold text-base text-white">Authorize with Plex</h4>
-            <p className="text-xs text-neutral-400 max-w-sm mx-auto">
+            <p className="text-xs text-neutral-400 max-w-sm mx-auto font-mono">
               Sign in with your plex.tv credentials to manage playlists, browse recommendations,
               and submit music requests.
             </p>
           </div>
 
           {auth.authError && (
-            <div className="p-3 bg-red-950/40 border border-red-800 text-xs text-red-300 font-mono rounded">
+            <div className="p-3 bg-red-950/40 border border-red-800 text-xs text-red-300 font-mono rounded-[4px]">
               {auth.authError}
             </div>
           )}
@@ -301,3 +356,4 @@ export const App: React.FC = () => {
 };
 
 export default App;
+

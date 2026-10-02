@@ -5,6 +5,9 @@ import type {
   DownloadClientItem,
   IndexerItem,
   SystemStatusInfo,
+  MediaManagementSettings,
+  LidarrSettings,
+  LidarrTestResult,
 } from '@/types/models';
 
 export async function getGeneralSettings(): Promise<GeneralSettings> {
@@ -88,4 +91,43 @@ export async function testIndexer(indexer: Partial<IndexerItem>): Promise<{ succ
 
 export async function getSystemStatus(): Promise<SystemStatusInfo> {
   return apiRequest<SystemStatusInfo>('/api/system/status');
+}
+
+export async function getMediaManagementSettings(): Promise<MediaManagementSettings> {
+  const res = await apiRequest<{ settings: MediaManagementSettings; presets?: Record<string, unknown> }>(
+    '/api/settings/media-management'
+  );
+  return res.settings;
+}
+
+export async function updateMediaManagementSettings(
+  settings: Partial<MediaManagementSettings>
+): Promise<MediaManagementSettings> {
+  return apiRequest<MediaManagementSettings>('/api/settings/media-management', {
+    method: 'POST',
+    body: settings,
+  });
+}
+
+export async function getLidarrSettings(): Promise<LidarrSettings> {
+  return apiRequest<LidarrSettings>('/api/settings/lidarr');
+}
+
+export async function updateLidarrSettings(
+  settings: Partial<LidarrSettings>
+): Promise<LidarrSettings> {
+  return apiRequest<LidarrSettings>('/api/settings/lidarr', {
+    method: 'POST',
+    body: settings,
+  });
+}
+
+export async function testLidarrConnection(payload: {
+  url: string;
+  api_key: string;
+}): Promise<LidarrTestResult> {
+  return apiRequest<LidarrTestResult>('/api/settings/lidarr/test', {
+    method: 'POST',
+    body: payload,
+  });
 }

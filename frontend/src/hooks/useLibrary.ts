@@ -39,9 +39,9 @@ export interface UseLibraryReturn {
   setSearch: (query: string) => void;
   triggerScan: (pruneMissing?: boolean) => Promise<void>;
   cancelScan: () => Promise<void>;
-  toggleArtistMonitored: (artistId: number, monitored: boolean) => Promise<void>;
-  toggleAlbumMonitored: (albumId: number, monitored: boolean) => Promise<void>;
-  toggleTrackMonitored: (trackId: number, monitored: boolean) => Promise<void>;
+  toggleArtistMonitored: (artistId: number | string, monitored: boolean) => Promise<void>;
+  toggleAlbumMonitored: (albumId: number | string, monitored: boolean) => Promise<void>;
+  toggleTrackMonitored: (trackId: number | string, monitored: boolean) => Promise<void>;
   refresh: () => Promise<void>;
 }
 
@@ -147,7 +147,7 @@ export function useLibrary(): UseLibraryReturn {
   }, [stopScanPolling]);
 
   const toggleArtistMonitored = useCallback(
-    async (artistId: number, monitored: boolean) => {
+    async (artistId: number | string, monitored: boolean) => {
       await apiToggleArtistMonitored(artistId, monitored);
       setArtists((prev) =>
         prev.map((a) => (a.id === artistId ? { ...a, monitored } : a))
@@ -157,7 +157,7 @@ export function useLibrary(): UseLibraryReturn {
   );
 
   const toggleAlbumMonitored = useCallback(
-    async (albumId: number, monitored: boolean) => {
+    async (albumId: number | string, monitored: boolean) => {
       await apiToggleAlbumMonitored(albumId, monitored);
       setAlbums((prev) =>
         prev.map((a) => (a.id === albumId ? { ...a, monitored } : a))
@@ -167,7 +167,7 @@ export function useLibrary(): UseLibraryReturn {
   );
 
   const toggleTrackMonitored = useCallback(
-    async (trackId: number, monitored: boolean) => {
+    async (trackId: number | string, monitored: boolean) => {
       await apiToggleTrackMonitored(trackId, monitored);
       setTracks((prev) =>
         prev.map((t) => (t.id === trackId ? { ...t, monitored } : t))

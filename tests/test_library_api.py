@@ -4,6 +4,7 @@ Tests statistics, browsing, monitored toggles, cascading deletion, scanner contr
 Lidarr migration triggers, manual import pipeline, preview/batch renamer, and security traversal defenses.
 """
 
+import json
 from pathlib import Path
 import struct
 from typing import Any
@@ -108,6 +109,7 @@ def test_library_stats_and_browsing_routes(
         "title": "OK Computer",
         "clean_title": "ok computer",
         "year": 1997,
+        "cover_url": "https://example.com/okc.jpg",
         "monitored": True,
     })
     trk = test_db.upsert_library_track({
@@ -151,6 +153,7 @@ def test_library_stats_and_browsing_routes(
     assert artists[0]["name"] == "Radiohead"
     assert artists[0]["album_count"] == 1
     assert artists[0]["track_count"] == 1
+    assert artists[0]["image_url"] == "https://example.com/okc.jpg"
 
     # Search query
     resp_search = client.get("/api/library/artists?query=Radio", headers=admin_headers)
@@ -169,6 +172,7 @@ def test_library_stats_and_browsing_routes(
     assert "albums" in art_detail
     assert len(art_detail["albums"]) == 1
     assert art_detail["albums"][0]["id"] == "alb-1"
+    assert art_detail["image_url"] == "https://example.com/okc.jpg"
 
     # Artist 404
     resp_art_404 = client.get("/api/library/artists/unknown-id", headers=admin_headers)
@@ -210,6 +214,20 @@ def test_library_stats_and_browsing_routes(
     assert resp_trks_filtered.status_code == 200
     assert len(resp_trks_filtered.json()) == 1
 
+    # Verify metadata_json image_url takes precedence over child album cover_url
+    test_db.upsert_library_artist({
+        "id": "art-1",
+        "name": "Radiohead",
+        "metadata_json": {"image_url": "https://example.com/radiohead_artist.jpg"},
+    })
+    resp_art_meta = client.get("/api/library/artists/art-1", headers=admin_headers)
+    assert resp_art_meta.status_code == 200
+    assert resp_art_meta.json()["image_url"] == "https://example.com/radiohead_artist.jpg"
+
+    resp_artists_meta = client.get("/api/library/artists", headers=admin_headers)
+    assert resp_artists_meta.status_code == 200
+    assert resp_artists_meta.json()[0]["image_url"] == "https://example.com/radiohead_artist.jpg"
+
 
 # =========================================================================
 # 2. Monitored Toggle Endpoints
@@ -223,7 +241,7 @@ def test_library_monitored_toggle_endpoints(
 
     test_db.upsert_library_artist({"id": "art-1", "name": "Artist 1", "monitored": True})
     test_db.upsert_library_album({
-        "id": "alb-1", "artist_id": "art-1", "title": "Album 1", "monitored": True
+        "id": "alb-1", "artist_id": "art-1", "title": "Album 1", "album_type": "album", "monitored": True
     })
     test_db.upsert_library_track({
         "id": "trk-1", "album_id": "alb-1", "artist_id": "art-1", "title": "Track 1", "monitored": True
@@ -272,7 +290,86 @@ def test_library_monitored_toggle_endpoints(
     assert resp.json()["monitored"] is False
     assert test_db.get_library_track("trk-1")["monitored"] is False
 
-    # 5. 404 checks
+    # 5. Presets: "albums", "singles_eps", "none", "all"
+    # Seed a single/EP album alb-single with album_type="single" and a child track trk-single
+    test_db.upsert_library_album({
+        "id": "alb-single",
+        "artist_id": "art-1",
+        "title": "Single 1",
+        "album_type": "single",
+        "monitored": True,
+    })
+    test_db.upsert_library_track({
+        "id": "trk-single",
+        "album_id": "alb-single",
+        "artist_id": "art-1",
+        "title": "Single Track 1",
+        "monitored": True,
+    })
+
+    # Test preset "albums"
+    resp_preset_albums = client.put(
+        "/api/library/artists/art-1/monitored",
+        json={"monitored": True, "monitor_option": "albums"},
+        headers=admin_headers,
+    )
+    assert resp_preset_albums.status_code == 200
+    assert resp_preset_albums.json()["monitored"] is True
+    assert test_db.get_library_artist("art-1")["monitored"] is True
+    # Verify studio album alb-1 is monitored (1), track trk-1 is monitored (1)
+    assert test_db.get_library_album("alb-1")["monitored"] is True
+    assert test_db.get_library_track("trk-1")["monitored"] is True
+    # but alb-single is unmonitored (0) and trk-single is unmonitored (0)
+    assert test_db.get_library_album("alb-single")["monitored"] is False
+    assert test_db.get_library_track("trk-single")["monitored"] is False
+
+    # Test preset "singles_eps"
+    resp_preset_singles = client.put(
+        "/api/library/artists/art-1/monitored",
+        json={"monitored": True, "monitor_option": "singles_eps"},
+        headers=admin_headers,
+    )
+    assert resp_preset_singles.status_code == 200
+    assert resp_preset_singles.json()["monitored"] is True
+    assert test_db.get_library_artist("art-1")["monitored"] is True
+    # Verify alb-single and trk-single are monitored (1)
+    assert test_db.get_library_album("alb-single")["monitored"] is True
+    assert test_db.get_library_track("trk-single")["monitored"] is True
+    # but alb-1 and trk-1 are unmonitored (0)
+    assert test_db.get_library_album("alb-1")["monitored"] is False
+    assert test_db.get_library_track("trk-1")["monitored"] is False
+
+    # Test preset "none"
+    resp_preset_none = client.put(
+        "/api/library/artists/art-1/monitored",
+        json={"monitored": False, "monitor_option": "none"},
+        headers=admin_headers,
+    )
+    assert resp_preset_none.status_code == 200
+    assert resp_preset_none.json()["monitored"] is False
+    # Verify artist, all albums, and all tracks are unmonitored (0)
+    assert test_db.get_library_artist("art-1")["monitored"] is False
+    assert test_db.get_library_album("alb-1")["monitored"] is False
+    assert test_db.get_library_track("trk-1")["monitored"] is False
+    assert test_db.get_library_album("alb-single")["monitored"] is False
+    assert test_db.get_library_track("trk-single")["monitored"] is False
+
+    # Test preset "all"
+    resp_preset_all = client.put(
+        "/api/library/artists/art-1/monitored",
+        json={"monitored": True, "monitor_option": "all"},
+        headers=admin_headers,
+    )
+    assert resp_preset_all.status_code == 200
+    assert resp_preset_all.json()["monitored"] is True
+    # Verify artist, all albums, and all tracks are monitored (1)
+    assert test_db.get_library_artist("art-1")["monitored"] is True
+    assert test_db.get_library_album("alb-1")["monitored"] is True
+    assert test_db.get_library_track("trk-1")["monitored"] is True
+    assert test_db.get_library_album("alb-single")["monitored"] is True
+    assert test_db.get_library_track("trk-single")["monitored"] is True
+
+    # 6. 404 checks
     assert client.put(
         "/api/library/artists/unknown/monitored", json={"monitored": True}, headers=admin_headers
     ).status_code == 404

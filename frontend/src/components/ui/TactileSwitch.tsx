@@ -6,6 +6,7 @@ export interface TactileSwitchProps {
   label?: string;
   disabled?: boolean;
   className?: string;
+  title?: string;
 }
 
 export const TactileSwitch: React.FC<TactileSwitchProps> = ({
@@ -14,9 +15,11 @@ export const TactileSwitch: React.FC<TactileSwitchProps> = ({
   label,
   disabled = false,
   className = '',
+  title,
 }) => {
   return (
     <label
+      title={title}
       className={`inline-flex items-center gap-3 select-none cursor-pointer ${
         disabled ? 'opacity-50 cursor-not-allowed' : ''
       } ${className}`}

@@ -47,6 +47,7 @@ export interface DiscoveryItem {
   source?: string;
   requested?: boolean;
   in_library?: boolean;
+  status?: 'in_library' | 'available' | 'requested' | 'pending' | 'processing' | 'rejected' | 'none';
 }
 
 export interface RequestItem {
@@ -86,7 +87,7 @@ export interface MissingTrack {
 }
 
 export interface ArtistItem {
-  id: number;
+  id: number | string;
   name: string;
   monitored: boolean;
   overview?: string;
@@ -94,13 +95,14 @@ export interface ArtistItem {
   disambiguation?: string;
   genres?: string[];
   images?: Array<{ cover_type: string; url: string }>;
+  image_url?: string;
   album_count?: number;
   track_count?: number;
 }
 
 export interface AlbumItem {
-  id: number;
-  artist_id: number;
+  id: number | string;
+  artist_id: number | string;
   artist_name?: string;
   title: string;
   monitored: boolean;
@@ -108,13 +110,14 @@ export interface AlbumItem {
   album_type?: string;
   genres?: string[];
   images?: Array<{ cover_type: string; url: string }>;
+  cover_url?: string;
   track_count?: number;
 }
 
 export interface TrackItem {
-  id: number;
-  album_id: number;
-  artist_id: number;
+  id: number | string;
+  album_id: number | string;
+  artist_id: number | string;
   title: string;
   track_number?: number;
   disc_number?: number;
@@ -123,6 +126,17 @@ export interface TrackItem {
   file_path?: string;
   has_file?: boolean;
   preview_url?: string;
+  quality?: string;
+  file?: {
+    id?: string;
+    file_path?: string;
+    format?: string;
+    bitrate?: number;
+    sample_rate?: number;
+    bits_per_sample?: number;
+    size_bytes?: number;
+    cutoff_met?: boolean;
+  } | null;
 }
 
 export interface LibraryStats {
@@ -227,4 +241,42 @@ export interface GeneralSettings {
   lidarr_url?: string;
   lidarr_api_key?: string;
   music_directory?: string;
+}
+
+export interface MediaManagementSettings {
+  artist_folder_format: string;
+  album_folder_format: string;
+  standard_track_format: string;
+  compilation_track_format?: string;
+  multi_disc_folder_format?: string;
+  root_folder_path: string;
+  staging_folder_path: string;
+  import_mode: 'move' | 'hardlink' | 'copy';
+  write_audio_tags: boolean;
+  embed_artwork: boolean;
+  save_cover_art_file?: boolean;
+  delete_completed_transfers?: boolean;
+  enable_quality_upgrades?: boolean;
+  library_mode?: string;
+  colon_replacement_format?: string;
+  clean_artist_names?: boolean;
+}
+
+export interface LidarrSettings {
+  url?: string;
+  api_key?: string;
+  auto_search: boolean;
+  root_folder?: string;
+  quality_profile_id?: number;
+  metadata_profile_id?: number;
+  trickle_rate_seconds: number;
+  trickle_batch_size: number;
+  auto_trickle: boolean;
+  auto_trickle_interval_minutes?: number;
+}
+
+export interface LidarrTestResult {
+  online: boolean;
+  version?: string;
+  error?: string;
 }

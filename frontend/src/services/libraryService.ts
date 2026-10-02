@@ -21,13 +21,13 @@ export async function getArtists(query?: string, monitoredOnly: boolean = false)
   return res || [];
 }
 
-export async function getArtistDetail(artistId: number): Promise<ArtistItem & { albums?: AlbumItem[] }> {
+export async function getArtistDetail(artistId: number | string): Promise<ArtistItem & { albums?: AlbumItem[] }> {
   return apiRequest<ArtistItem & { albums?: AlbumItem[] }>(`/api/library/artists/${artistId}`);
 }
 
-export async function getAlbums(artistId?: number, query?: string, monitoredOnly: boolean = false): Promise<AlbumItem[]> {
+export async function getAlbums(artistId?: number | string, query?: string, monitoredOnly: boolean = false): Promise<AlbumItem[]> {
   const params = new URLSearchParams();
-  if (artistId) params.set('artist_id', String(artistId));
+  if (artistId !== undefined) params.set('artist_id', String(artistId));
   if (query) params.set('query', query);
   if (monitoredOnly) params.set('monitored_only', 'true');
   params.set('limit', '500');
@@ -35,38 +35,63 @@ export async function getAlbums(artistId?: number, query?: string, monitoredOnly
   return res || [];
 }
 
-export async function getAlbumDetail(albumId: number): Promise<AlbumItem & { tracks?: TrackItem[] }> {
+export async function getAlbumDetail(albumId: number | string): Promise<AlbumItem & { tracks?: TrackItem[] }> {
   return apiRequest<AlbumItem & { tracks?: TrackItem[] }>(`/api/library/albums/${albumId}`);
 }
 
-export async function getTracks(albumId?: number, artistId?: number, query?: string): Promise<TrackItem[]> {
+export async function getTracks(albumId?: number | string, artistId?: number | string, query?: string): Promise<TrackItem[]> {
   const params = new URLSearchParams();
-  if (albumId) params.set('album_id', String(albumId));
-  if (artistId) params.set('artist_id', String(artistId));
+  if (albumId !== undefined) params.set('album_id', String(albumId));
+  if (artistId !== undefined) params.set('artist_id', String(artistId));
   if (query) params.set('query', query);
   params.set('limit', '500');
   const res = await apiRequest<TrackItem[]>(`/api/library/tracks?${params.toString()}`);
   return res || [];
 }
 
-export async function toggleArtistMonitored(artistId: number, monitored: boolean): Promise<void> {
+export async function toggleArtistMonitored(artistId: number | string, monitored: boolean): Promise<void> {
   await apiRequest<void>(`/api/library/artists/${artistId}/monitored`, {
     method: 'PUT',
     body: { monitored },
   });
 }
 
-export async function toggleAlbumMonitored(albumId: number, monitored: boolean): Promise<void> {
+export async function toggleAlbumMonitored(albumId: number | string, monitored: boolean): Promise<void> {
   await apiRequest<void>(`/api/library/albums/${albumId}/monitored`, {
     method: 'PUT',
     body: { monitored },
   });
 }
 
-export async function toggleTrackMonitored(trackId: number, monitored: boolean): Promise<void> {
+export async function toggleTrackMonitored(trackId: number | string, monitored: boolean): Promise<void> {
   await apiRequest<void>(`/api/library/tracks/${trackId}/monitored`, {
     method: 'PUT',
     body: { monitored },
+  });
+}
+
+export async function refreshArtist(
+  artistId: number | string
+): Promise<{ success: boolean; artist_id: string; refreshed_at?: string }> {
+  return apiRequest<{ success: boolean; artist_id: string; refreshed_at?: string }>(
+    `/api/library/artists/${artistId}/refresh`,
+    {
+      method: 'POST',
+    }
+  );
+}
+
+export async function setArtistMonitoringPreset(
+  artistId: number | string,
+  option: 'all' | 'albums' | 'singles_eps' | 'none'
+): Promise<void> {
+  await apiRequest<void>(`/api/library/artists/${artistId}/monitored`, {
+    method: 'PUT',
+    body: {
+      monitored: option !== 'none',
+      cascade_children: true,
+      monitor_option: option,
+    },
   });
 }
 

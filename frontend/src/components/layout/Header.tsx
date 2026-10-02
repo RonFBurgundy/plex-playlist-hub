@@ -1,30 +1,54 @@
 import React from 'react';
-import { Menu, X, LogIn, LogOut, Shield } from 'lucide-react';
+import {
+  Compass,
+  Inbox,
+  Library,
+  ListMusic,
+  Activity,
+  Settings,
+  LogIn,
+  LogOut,
+  Shield,
+} from 'lucide-react';
 import type { User, UserQuota } from '@/types/models';
-import { TapeDeckButton, QuotaBadge } from '@/components/ui';
+import type { MainTab } from './Navigation';
+import { TapeDeckButton, TapeTransportBay, QuotaBadge } from '@/components/ui';
 
 export interface HeaderProps {
   user: User | null;
   quota: UserQuota | null;
-  isMobileMenuOpen: boolean;
-  onToggleMobileMenu: () => void;
+  isMobileMenuOpen?: boolean;
+  onToggleMobileMenu?: () => void;
   onLogin: () => void;
   onLogout: () => void;
+  activeTab?: MainTab;
+  onTabChange?: (tab: MainTab) => void;
+  isAdmin?: boolean;
 }
 
 export const Header: React.FC<HeaderProps> = ({
   user,
   quota,
-  isMobileMenuOpen,
-  onToggleMobileMenu,
   onLogin,
   onLogout,
+  activeTab,
+  onTabChange,
+  isAdmin = false,
 }) => {
+  const navItems: Array<{ id: MainTab; label: string; icon: React.ReactNode; adminOnly?: boolean }> = [
+    { id: 'discover', label: 'Discover', icon: <Compass className="h-4 w-4" /> },
+    { id: 'requests', label: 'Requests', icon: <Inbox className="h-4 w-4" /> },
+    { id: 'library', label: 'Library', icon: <Library className="h-4 w-4" /> },
+    { id: 'playlists', label: 'Playlists', icon: <ListMusic className="h-4 w-4" /> },
+    { id: 'activity', label: 'Activity', icon: <Activity className="h-4 w-4" /> },
+    { id: 'settings', label: 'Settings', icon: <Settings className="h-4 w-4" />, adminOnly: true },
+  ];
+
   return (
-    <header className="sticky top-0 z-40 w-full bg-[#0a0a0a]/90 backdrop-blur-md border-b border-[#1f1f1f] pt-safe">
+    <header className="sticky top-0 z-40 w-full flex-shrink-0 bg-[#0a0a0a]/95 backdrop-blur-md border-b border-[#1f1f1f] pt-safe">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 h-16 flex items-center justify-between gap-4">
         {/* Brand / Logo */}
-        <div className="flex items-center gap-3 select-none">
+        <div className="flex items-center gap-3 select-none flex-shrink-0">
           <img
             src="/trackseerr-logo.svg"
             alt="TrackSeerr"
@@ -33,18 +57,40 @@ export const Header: React.FC<HeaderProps> = ({
               (e.currentTarget as HTMLImageElement).src = '/static/trackseerr-logo.svg';
             }}
           />
-          <div className="flex flex-col">
-            <span className="text-base sm:text-lg font-black tracking-wider uppercase text-white font-mono leading-none">
-              Track<span className="text-[#e5a00d]">Seerr</span>
-            </span>
-            <span className="text-[10px] text-neutral-400 font-mono tracking-widest uppercase">
-              Analog Precision Sync
-            </span>
-          </div>
+          <span className="text-base sm:text-lg font-black tracking-wider uppercase text-white font-mono leading-none">
+            Track<span className="text-[#e5a00d]">Seerr</span>
+          </span>
         </div>
 
+        {/* Desktop Sticky Navigation Buttons */}
+        {user && activeTab && onTabChange && (
+          <div className="hidden md:flex items-center gap-1">
+            <TapeTransportBay className="p-1">
+              <div className="flex items-center gap-1">
+                {navItems
+                  .filter((item) => !item.adminOnly || isAdmin)
+                  .map((item) => {
+                    const isActive = activeTab === item.id;
+                    return (
+                      <TapeDeckButton
+                        key={item.id}
+                        size="sm"
+                        active={isActive}
+                        onClick={() => onTabChange(item.id)}
+                        icon={item.icon}
+                        className="rounded-[3px]"
+                      >
+                        {item.label}
+                      </TapeDeckButton>
+                    );
+                  })}
+              </div>
+            </TapeTransportBay>
+          </div>
+        )}
+
         {/* User Status / Actions */}
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-3 flex-shrink-0">
           {user && <QuotaBadge quota={quota} className="hidden sm:inline-flex" />}
 
           {user ? (
@@ -75,18 +121,32 @@ export const Header: React.FC<HeaderProps> = ({
               Sign In
             </TapeDeckButton>
           )}
-
-          {/* Mobile Menu Toggle */}
-          <button
-            type="button"
-            onClick={onToggleMobileMenu}
-            className="sm:hidden flex items-center justify-center min-h-[44px] min-w-[44px] text-neutral-300 hover:text-white"
-            aria-label="Toggle navigation menu"
-          >
-            {isMobileMenuOpen ? <X className="h-6 w-6" /> : <Menu className="h-6 w-6" />}
-          </button>
         </div>
       </div>
+
+      {/* Mobile Sticky Horizontal Button Carousel */}
+      {user && activeTab && onTabChange && (
+        <div className="md:hidden overflow-x-auto no-scrollbar py-1.5 px-3 border-t border-[#181818] bg-[#0a0a0a]/95 flex items-center gap-1.5">
+          {navItems
+            .filter((item) => !item.adminOnly || isAdmin)
+            .map((item) => {
+              const isActive = activeTab === item.id;
+              return (
+                <TapeDeckButton
+                  key={item.id}
+                  size="sm"
+                  active={isActive}
+                  onClick={() => onTabChange(item.id)}
+                  icon={item.icon}
+                  className="flex-shrink-0 text-xs rounded-none"
+                >
+                  {item.label}
+                </TapeDeckButton>
+              );
+            })}
+        </div>
+      )}
     </header>
   );
 };
+

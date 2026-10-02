@@ -19,6 +19,8 @@ import type {
   DownloadClientItem,
   IndexerItem,
   SystemStatusInfo,
+  MediaManagementSettings,
+  LidarrSettings,
 } from '@/types/models';
 import {
   TapeTransportBay,
@@ -41,6 +43,11 @@ import {
   deleteIndexer,
   testIndexer,
   getSystemStatus,
+  getMediaManagementSettings,
+  updateMediaManagementSettings,
+  getLidarrSettings,
+  updateLidarrSettings,
+  testLidarrConnection,
 } from '@/services/settingsService';
 
 export type SettingsTab =
@@ -55,6 +62,8 @@ export type SettingsTab =
 export const SettingsView: React.FC = () => {
   const [activeTab, setActiveTab] = useState<SettingsTab>('general');
   const [generalSettings, setGeneralSettings] = useState<GeneralSettings | null>(null);
+  const [mediaSettings, setMediaSettings] = useState<MediaManagementSettings | null>(null);
+  const [lidarrSettings, setLidarrSettings] = useState<LidarrSettings | null>(null);
   const [qualityProfiles, setQualityProfiles] = useState<QualityProfile[]>([]);
   const [clients, setClients] = useState<DownloadClientItem[]>([]);
   const [indexers, setIndexers] = useState<IndexerItem[]>([]);
@@ -62,6 +71,7 @@ export const SettingsView: React.FC = () => {
 
   const [isLoading, setIsLoading] = useState<boolean>(false);
   const [isSaving, setIsSaving] = useState<boolean>(false);
+  const [isTestingLidarr, setIsTestingLidarr] = useState<boolean>(false);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
 
   // New item form states
@@ -85,14 +95,18 @@ export const SettingsView: React.FC = () => {
   const loadData = async () => {
     setIsLoading(true);
     try {
-      const [gen, prof, cli, idx, sys] = await Promise.all([
+      const [gen, med, lid, prof, cli, idx, sys] = await Promise.all([
         getGeneralSettings().catch(() => null),
+        getMediaManagementSettings().catch(() => null),
+        getLidarrSettings().catch(() => null),
         getQualityProfiles().catch(() => []),
         getClientSettings().catch(() => []),
         getIndexerSettings().catch(() => []),
         getSystemStatus().catch(() => null),
       ]);
       if (gen) setGeneralSettings(gen);
+      if (med) setMediaSettings(med);
+      if (lid) setLidarrSettings(lid);
       setQualityProfiles(prof);
       setClients(cli);
       setIndexers(idx);
@@ -112,11 +126,78 @@ export const SettingsView: React.FC = () => {
     setIsSaving(true);
     try {
       await updateGeneralSettings(generalSettings);
-      showToast('Settings saved successfully');
+      showToast('General settings saved successfully');
     } catch {
       showToast('Failed to save settings');
     } finally {
       setIsSaving(false);
+    }
+  };
+
+  const handleSaveMedia = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!mediaSettings) return;
+    setIsSaving(true);
+    try {
+      const updated = await updateMediaManagementSettings(mediaSettings);
+      setMediaSettings(updated);
+      showToast('Media management settings saved');
+    } catch {
+      showToast('Failed to save media management settings');
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  const handleSaveLidarr = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!lidarrSettings) return;
+    setIsSaving(true);
+    try {
+      const updated = await updateLidarrSettings(lidarrSettings);
+      setLidarrSettings(updated);
+      showToast('Lidarr settings saved');
+    } catch {
+      showToast('Failed to save Lidarr settings');
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  const handleTestLidarr = async () => {
+    if (!lidarrSettings?.url) {
+      showToast('Lidarr URL is required to test');
+      return;
+    }
+    setIsTestingLidarr(true);
+    try {
+      const res = await testLidarrConnection({
+        url: lidarrSettings.url,
+        api_key: lidarrSettings.api_key || '',
+      });
+      if (res.online) {
+        showToast(`Lidarr online! Version: ${res.version || 'OK'}`);
+      } else {
+        showToast(`Connection failed: ${res.error || 'Offline'}`);
+      }
+    } catch {
+      showToast('Error testing Lidarr connection');
+    } finally {
+      setIsTestingLidarr(false);
+    }
+  };
+
+  const handleToggleUpgradeAllowed = async (profile: QualityProfile) => {
+    const newAllowed = !profile.upgrade_allowed;
+    setQualityProfiles((prev) =>
+      prev.map((pr) => (pr.id === profile.id ? { ...pr, upgrade_allowed: newAllowed } : pr))
+    );
+    try {
+      await saveQualityProfile({ ...profile, upgrade_allowed: newAllowed });
+      showToast(`Updated ${profile.name}`);
+    } catch {
+      showToast('Failed to update quality profile');
+      loadData();
     }
   };
 
@@ -344,19 +425,167 @@ export const SettingsView: React.FC = () => {
 
       {/* Media Management Subtab */}
       {!isLoading && activeTab === 'media' && (
-        <MachinedCard className="p-6 max-w-2xl space-y-4">
-          <h4 className="text-sm font-bold uppercase font-mono text-white">Media Folders</h4>
-          <div>
-            <label className="block text-xs uppercase font-mono tracking-wider text-neutral-400 mb-1">
-              Music Library Path
-            </label>
-            <input
-              type="text"
-              readOnly
-              value={generalSettings?.music_directory || '/data/media/music'}
-              className="w-full bg-[#0d0d0d] border border-[#222222] rounded-[3px] px-3 py-2 text-sm text-neutral-400 font-mono"
-            />
+        <MachinedCard className="p-6 max-w-2xl space-y-5">
+          <div className="border-b border-[#222222] pb-3">
+            <h4 className="text-sm font-bold uppercase font-mono text-white">Media Management &amp; Token Templates</h4>
+            <p className="text-xs text-neutral-400 font-mono mt-0.5">Configure library paths, naming templates, and audio tagging</p>
           </div>
+
+          <form onSubmit={handleSaveMedia} className="space-y-4">
+            <div>
+              <label className="block text-xs uppercase font-mono tracking-wider text-neutral-300 mb-1.5">
+                Root Music Folder
+              </label>
+              <input
+                type="text"
+                value={mediaSettings?.root_folder_path || ''}
+                onChange={(e) =>
+                  setMediaSettings((prev) =>
+                    prev ? { ...prev, root_folder_path: e.target.value } : null
+                  )
+                }
+                placeholder="/data/media/music"
+                className="w-full bg-[#0d0d0d] border border-[#2a2a2a] rounded-[3px] px-3 py-2 text-sm text-white focus:outline-none focus:border-[#e5a00d] font-mono"
+              />
+            </div>
+
+            <div>
+              <label className="block text-xs uppercase font-mono tracking-wider text-neutral-300 mb-1.5">
+                Staging / Downloads Folder
+              </label>
+              <input
+                type="text"
+                value={mediaSettings?.staging_folder_path || ''}
+                onChange={(e) =>
+                  setMediaSettings((prev) =>
+                    prev ? { ...prev, staging_folder_path: e.target.value } : null
+                  )
+                }
+                placeholder="/data/downloads"
+                className="w-full bg-[#0d0d0d] border border-[#2a2a2a] rounded-[3px] px-3 py-2 text-sm text-white focus:outline-none focus:border-[#e5a00d] font-mono"
+              />
+            </div>
+
+            <div>
+              <label className="block text-xs uppercase font-mono tracking-wider text-neutral-300 mb-1.5">
+                Artist Folder Format
+              </label>
+              <input
+                type="text"
+                value={mediaSettings?.artist_folder_format || ''}
+                onChange={(e) =>
+                  setMediaSettings((prev) =>
+                    prev ? { ...prev, artist_folder_format: e.target.value } : null
+                  )
+                }
+                placeholder="{Artist CleanName}"
+                className="w-full bg-[#0d0d0d] border border-[#2a2a2a] rounded-[3px] px-3 py-2 text-sm text-white focus:outline-none focus:border-[#e5a00d] font-mono"
+              />
+            </div>
+
+            <div>
+              <label className="block text-xs uppercase font-mono tracking-wider text-neutral-300 mb-1.5">
+                Album Folder Format
+              </label>
+              <input
+                type="text"
+                value={mediaSettings?.album_folder_format || ''}
+                onChange={(e) =>
+                  setMediaSettings((prev) =>
+                    prev ? { ...prev, album_folder_format: e.target.value } : null
+                  )
+                }
+                placeholder="{Album Title} ({Release Year})"
+                className="w-full bg-[#0d0d0d] border border-[#2a2a2a] rounded-[3px] px-3 py-2 text-sm text-white focus:outline-none focus:border-[#e5a00d] font-mono"
+              />
+            </div>
+
+            <div>
+              <label className="block text-xs uppercase font-mono tracking-wider text-neutral-300 mb-1.5">
+                Standard Track Format
+              </label>
+              <input
+                type="text"
+                value={mediaSettings?.standard_track_format || ''}
+                onChange={(e) =>
+                  setMediaSettings((prev) =>
+                    prev ? { ...prev, standard_track_format: e.target.value } : null
+                  )
+                }
+                placeholder="{Track:02} - {Track Title}"
+                className="w-full bg-[#0d0d0d] border border-[#2a2a2a] rounded-[3px] px-3 py-2 text-sm text-white focus:outline-none focus:border-[#e5a00d] font-mono"
+              />
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 pt-2 border-t border-[#1f1f1f]">
+              <div>
+                <label className="block text-xs uppercase font-mono tracking-wider text-neutral-300 mb-1.5">
+                  Import Mode
+                </label>
+                <select
+                  value={mediaSettings?.import_mode || 'move'}
+                  onChange={(e) =>
+                    setMediaSettings((prev) =>
+                      prev ? { ...prev, import_mode: e.target.value as 'move' | 'hardlink' | 'copy' } : null
+                    )
+                  }
+                  className="w-full bg-[#0d0d0d] border border-[#2a2a2a] rounded-[3px] px-3 py-2 text-sm text-white focus:outline-none focus:border-[#e5a00d]"
+                >
+                  <option value="move">Move</option>
+                  <option value="hardlink">Hardlink</option>
+                  <option value="copy">Copy</option>
+                </select>
+              </div>
+
+              <div className="flex flex-col justify-end">
+                <div className="flex items-center justify-between pb-2">
+                  <span className="text-xs font-mono text-neutral-300">Normalize Audio Tags</span>
+                  <TactileSwitch
+                    checked={mediaSettings?.write_audio_tags ?? true}
+                    onChange={(val) =>
+                      setMediaSettings((prev) =>
+                        prev ? { ...prev, write_audio_tags: val } : null
+                      )
+                    }
+                    label="Write Tags"
+                  />
+                </div>
+              </div>
+
+              <div className="flex flex-col justify-end">
+                <div className="flex items-center justify-between pb-2">
+                  <span className="text-xs font-mono text-neutral-300">Embed Artwork</span>
+                  <TactileSwitch
+                    checked={mediaSettings?.embed_artwork ?? true}
+                    onChange={(val) =>
+                      setMediaSettings((prev) =>
+                        prev ? { ...prev, embed_artwork: val } : null
+                      )
+                    }
+                    label="Embed Artwork"
+                  />
+                </div>
+              </div>
+            </div>
+
+            <div className="flex justify-end pt-3">
+              <TapeDeckButton
+                type="submit"
+                variant="amber"
+                size="md"
+                disabled={isSaving}
+                icon={
+                  isSaving ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : (
+                    <Save className="h-4 w-4" />
+                  )
+                }
+              >
+                Save Media Settings
+              </TapeDeckButton>
+            </div>
+          </form>
         </MachinedCard>
       )}
 
@@ -563,53 +792,163 @@ export const SettingsView: React.FC = () => {
 
       {/* Lidarr Subtab */}
       {!isLoading && activeTab === 'lidarr' && (
-        <MachinedCard className="p-6 max-w-2xl space-y-4">
-          <h4 className="text-sm font-bold uppercase font-mono text-white">Lidarr Integration</h4>
-          <div>
-            <label className="block text-xs uppercase font-mono tracking-wider text-neutral-300 mb-1.5">
-              Lidarr URL
-            </label>
-            <input
-              type="text"
-              value={generalSettings?.lidarr_url || ''}
-              onChange={(e) =>
-                setGeneralSettings((prev) =>
-                  prev ? { ...prev, lidarr_url: e.target.value } : null
-                )
-              }
-              placeholder="http://localhost:8686"
-              className="w-full bg-[#0d0d0d] border border-[#2a2a2a] rounded-[3px] px-3 py-2 text-sm text-white focus:outline-none focus:border-[#e5a00d]"
-            />
-          </div>
-
-          <div>
-            <label className="block text-xs uppercase font-mono tracking-wider text-neutral-300 mb-1.5">
-              Lidarr API Key
-            </label>
-            <input
-              type="password"
-              value={generalSettings?.lidarr_api_key || ''}
-              onChange={(e) =>
-                setGeneralSettings((prev) =>
-                  prev ? { ...prev, lidarr_api_key: e.target.value } : null
-                )
-              }
-              className="w-full bg-[#0d0d0d] border border-[#2a2a2a] rounded-[3px] px-3 py-2 text-sm text-white focus:outline-none focus:border-[#e5a00d]"
-            />
-          </div>
-
-          <div className="flex justify-end pt-3">
+        <MachinedCard className="p-6 max-w-2xl space-y-5">
+          <div className="flex items-center justify-between border-b border-[#222222] pb-3">
+            <div>
+              <h4 className="text-sm font-bold uppercase font-mono text-white">Lidarr Integration</h4>
+              <p className="text-xs text-neutral-400 font-mono mt-0.5">Automated music acquisition &amp; trickle sync</p>
+            </div>
             <TapeDeckButton
               type="button"
-              variant="amber"
-              size="md"
-              onClick={handleSaveGeneral}
-              disabled={isSaving}
-              icon={<Save className="h-4 w-4" />}
+              size="sm"
+              disabled={isTestingLidarr || !lidarrSettings?.url}
+              onClick={handleTestLidarr}
+              icon={isTestingLidarr ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : undefined}
             >
-              Save Lidarr Config
+              Test Connection
             </TapeDeckButton>
           </div>
+
+          <form onSubmit={handleSaveLidarr} className="space-y-4">
+            <div>
+              <label className="block text-xs uppercase font-mono tracking-wider text-neutral-300 mb-1.5">
+                Lidarr Host URL
+              </label>
+              <input
+                type="text"
+                value={lidarrSettings?.url || ''}
+                onChange={(e) =>
+                  setLidarrSettings((prev) =>
+                    prev
+                      ? { ...prev, url: e.target.value }
+                      : {
+                          url: e.target.value,
+                          auto_search: true,
+                          auto_trickle: false,
+                          trickle_rate_seconds: 3.0,
+                          trickle_batch_size: 25,
+                        }
+                  )
+                }
+                placeholder="http://localhost:8686"
+                className="w-full bg-[#0d0d0d] border border-[#2a2a2a] rounded-[3px] px-3 py-2 text-sm text-white focus:outline-none focus:border-[#e5a00d]"
+              />
+            </div>
+
+            <div>
+              <label className="block text-xs uppercase font-mono tracking-wider text-neutral-300 mb-1.5">
+                Lidarr API Key
+              </label>
+              <input
+                type="password"
+                value={lidarrSettings?.api_key || ''}
+                onChange={(e) =>
+                  setLidarrSettings((prev) =>
+                    prev
+                      ? { ...prev, api_key: e.target.value }
+                      : {
+                          url: '',
+                          api_key: e.target.value,
+                          auto_search: true,
+                          auto_trickle: false,
+                          trickle_rate_seconds: 3.0,
+                          trickle_batch_size: 25,
+                        }
+                  )
+                }
+                placeholder="Leave blank or masked to keep current key"
+                className="w-full bg-[#0d0d0d] border border-[#2a2a2a] rounded-[3px] px-3 py-2 text-sm text-white focus:outline-none focus:border-[#e5a00d]"
+              />
+            </div>
+
+            <div className="pt-2 border-t border-[#1f1f1f] space-y-4">
+              <div className="flex items-center justify-between">
+                <div>
+                  <span className="text-xs font-mono font-medium text-white block">Automatic Search</span>
+                  <span className="text-[11px] text-neutral-400 font-mono">Trigger search in Lidarr when releases are requested</span>
+                </div>
+                <TactileSwitch
+                  checked={lidarrSettings?.auto_search ?? true}
+                  onChange={(val) =>
+                    setLidarrSettings((prev) =>
+                      prev ? { ...prev, auto_search: val } : null
+                    )
+                  }
+                  label="Auto Search"
+                />
+              </div>
+
+              <div className="flex items-center justify-between">
+                <div>
+                  <span className="text-xs font-mono font-medium text-white block">Auto Trickle Sync</span>
+                  <span className="text-[11px] text-neutral-400 font-mono">Pace artist ingest calls to prevent Lidarr rate-limiting</span>
+                </div>
+                <TactileSwitch
+                  checked={lidarrSettings?.auto_trickle ?? false}
+                  onChange={(val) =>
+                    setLidarrSettings((prev) =>
+                      prev ? { ...prev, auto_trickle: val } : null
+                    )
+                  }
+                  label="Auto Trickle"
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-3 pt-2">
+                <div>
+                  <label className="block text-[11px] font-mono text-neutral-300 mb-1">
+                    Trickle Rate (Seconds)
+                  </label>
+                  <input
+                    type="number"
+                    step="0.5"
+                    min="0.5"
+                    value={lidarrSettings?.trickle_rate_seconds ?? 3.0}
+                    onChange={(e) =>
+                      setLidarrSettings((prev) =>
+                        prev ? { ...prev, trickle_rate_seconds: parseFloat(e.target.value) || 3.0 } : null
+                      )
+                    }
+                    className="w-full bg-[#0d0d0d] border border-[#2a2a2a] rounded-[3px] px-2.5 py-1.5 text-xs text-white"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[11px] font-mono text-neutral-300 mb-1">
+                    Trickle Batch Size
+                  </label>
+                  <input
+                    type="number"
+                    min="1"
+                    value={lidarrSettings?.trickle_batch_size ?? 25}
+                    onChange={(e) =>
+                      setLidarrSettings((prev) =>
+                        prev ? { ...prev, trickle_batch_size: parseInt(e.target.value, 10) || 25 } : null
+                      )
+                    }
+                    className="w-full bg-[#0d0d0d] border border-[#2a2a2a] rounded-[3px] px-2.5 py-1.5 text-xs text-white"
+                  />
+                </div>
+              </div>
+            </div>
+
+            <div className="flex justify-end pt-3">
+              <TapeDeckButton
+                type="submit"
+                variant="amber"
+                size="md"
+                disabled={isSaving}
+                icon={
+                  isSaving ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : (
+                    <Save className="h-4 w-4" />
+                  )
+                }
+              >
+                Save Lidarr Settings
+              </TapeDeckButton>
+            </div>
+          </form>
         </MachinedCard>
       )}
 
@@ -629,7 +968,7 @@ export const SettingsView: React.FC = () => {
                 <div className="flex items-center gap-2">
                   <TactileSwitch
                     checked={Boolean(p.upgrade_allowed)}
-                    onChange={() => {}}
+                    onChange={() => handleToggleUpgradeAllowed(p)}
                     label="Upgrade"
                   />
                   <TapeDeckButton
