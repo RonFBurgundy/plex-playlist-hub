@@ -3,18 +3,23 @@
 Extracts tags, stream metrics, and codecs via Mutagen with cross-platform collision detection.
 """
 
+import base64
+import logging
 import re
 from pathlib import Path
 from typing import Any
 
 import mutagen
-from mutagen.flac import FLAC
+from mutagen.flac import FLAC, Picture
+from mutagen.id3 import APIC, ID3, TALB, TDRC, TIT2, TPOS, TPE1, TPE2, TRCK
 from mutagen.mp3 import MP3
-from mutagen.mp4 import MP4
+from mutagen.mp4 import MP4, MP4Cover
 from mutagen.oggopus import OggOpus
 from mutagen.oggvorbis import OggVorbis
 
 from plex_playlist_sync.naming import format_quality
+
+logger = logging.getLogger(__name__)
 
 
 def _parse_int(val: Any) -> int | None:
@@ -252,3 +257,209 @@ def resolve_collision(
         if not detect_path_collision(candidate, existing_paths):
             return candidate
         counter += 1
+
+
+def write_audio_tags(
+    file_path: str | Path,
+    tags: dict[str, Any],
+    cover_art_bytes: bytes | None = None,
+) -> bool:
+    """Writes normalized audio metadata tags and optional cover artwork to an audio file.
+
+    Supports FLAC, MP3 (ID3v2.4), M4A/AAC/MP4, and Ogg/Opus containers.
+    Returns True on success, or False if the file is invalid or tagging encounters an error.
+    """
+    try:
+        path = Path(file_path).resolve()
+        if not path.is_file():
+            logger.warning("Tag writing target is not a regular file: %s", file_path)
+            return False
+
+        suffix = path.suffix.lower()
+
+        # Extract normalized tag values with sensible aliases
+        t_title = tags.get("title")
+        t_artist = tags.get("artist")
+        t_album = tags.get("album")
+        t_album_artist = tags.get("albumartist") or tags.get("album_artist") or tags.get("artist")
+        t_date = tags.get("date") or tags.get("release_date") or tags.get("year")
+        t_track = tags.get("tracknumber") or tags.get("track_number")
+        t_total_tracks = tags.get("totaltracks") or tags.get("total_tracks")
+        t_disc = tags.get("discnumber") or tags.get("disc_number")
+        t_total_discs = tags.get("totaldiscs") or tags.get("total_discs")
+
+        # 1. FLAC
+        if suffix == ".flac":
+            audio = FLAC(str(path))
+            if audio.tags is None:
+                audio.add_tags()
+
+            if t_title is not None:
+                audio["title"] = [str(t_title)]
+            if t_artist is not None:
+                audio["artist"] = [str(t_artist)]
+            if t_album is not None:
+                audio["album"] = [str(t_album)]
+            if t_album_artist is not None:
+                audio["albumartist"] = [str(t_album_artist)]
+            if t_date is not None:
+                audio["date"] = [str(t_date)]
+            if t_track is not None:
+                audio["tracknumber"] = [str(t_track)]
+            if t_total_tracks is not None:
+                audio["totaltracks"] = [str(t_total_tracks)]
+            if t_disc is not None:
+                audio["discnumber"] = [str(t_disc)]
+            if t_total_discs is not None:
+                audio["totaldiscs"] = [str(t_total_discs)]
+
+            if cover_art_bytes:
+                pic = Picture()
+                pic.type = 3  # Cover (front)
+                pic.mime = "image/png" if cover_art_bytes.startswith(b"\x89PNG") else "image/jpeg"
+                pic.data = cover_art_bytes
+                audio.clear_pictures()
+                audio.add_picture(pic)
+
+            audio.save()
+            return True
+
+        # 2. MP3
+        elif suffix == ".mp3":
+            audio = MP3(str(path))
+            if audio.tags is None:
+                audio.add_tags()
+
+            if t_title is not None:
+                audio.tags.setall("TIT2", [TIT2(encoding=3, text=[str(t_title)])])
+            if t_artist is not None:
+                audio.tags.setall("TPE1", [TPE1(encoding=3, text=[str(t_artist)])])
+            if t_album is not None:
+                audio.tags.setall("TALB", [TALB(encoding=3, text=[str(t_album)])])
+            if t_album_artist is not None:
+                audio.tags.setall("TPE2", [TPE2(encoding=3, text=[str(t_album_artist)])])
+            if t_date is not None:
+                audio.tags.setall("TDRC", [TDRC(encoding=3, text=[str(t_date)])])
+            if t_track is not None:
+                track_val = f"{t_track}/{t_total_tracks}" if t_total_tracks else str(t_track)
+                audio.tags.setall("TRCK", [TRCK(encoding=3, text=[track_val])])
+            if t_disc is not None:
+                disc_val = f"{t_disc}/{t_total_discs}" if t_total_discs else str(t_disc)
+                audio.tags.setall("TPOS", [TPOS(encoding=3, text=[disc_val])])
+
+            if cover_art_bytes:
+                mime = "image/png" if cover_art_bytes.startswith(b"\x89PNG") else "image/jpeg"
+                audio.tags.setall(
+                    "APIC",
+                    [APIC(encoding=3, mime=mime, type=3, desc="Cover", data=cover_art_bytes)],
+                )
+
+            audio.save(v2_version=4)
+            return True
+
+        # 3. MP4 / M4A / AAC
+        elif suffix in (".m4a", ".aac", ".mp4"):
+            audio = MP4(str(path))
+            if audio.tags is None:
+                audio.add_tags()
+
+            if t_title is not None:
+                audio["\xa9nam"] = [str(t_title)]
+            if t_artist is not None:
+                audio["\xa9ART"] = [str(t_artist)]
+            if t_album is not None:
+                audio["\xa9alb"] = [str(t_album)]
+            if t_album_artist is not None:
+                audio["aART"] = [str(t_album_artist)]
+            if t_date is not None:
+                audio["\xa9day"] = [str(t_date)]
+
+            if t_track is not None:
+                try:
+                    trkn_num = int(t_track)
+                    trkn_total = int(t_total_tracks) if t_total_tracks else 0
+                    audio["trkn"] = [(trkn_num, trkn_total)]
+                except (ValueError, TypeError):
+                    pass
+
+            if t_disc is not None:
+                try:
+                    disc_num = int(t_disc)
+                    disc_total = int(t_total_discs) if t_total_discs else 0
+                    audio["disk"] = [(disc_num, disc_total)]
+                except (ValueError, TypeError):
+                    pass
+
+            if cover_art_bytes:
+                img_fmt = (
+                    MP4Cover.FORMAT_PNG
+                    if cover_art_bytes.startswith(b"\x89PNG")
+                    else MP4Cover.FORMAT_JPEG
+                )
+                audio["covr"] = [MP4Cover(cover_art_bytes, imageformat=img_fmt)]
+
+            audio.save()
+            return True
+
+        # 4. Ogg Vorbis or Ogg Opus
+        elif suffix in (".ogg", ".opus"):
+            if suffix == ".opus":
+                audio = OggOpus(str(path))
+            else:
+                audio = OggVorbis(str(path))
+
+            if audio.tags is None:
+                audio.add_tags()
+
+            if t_title is not None:
+                audio["title"] = [str(t_title)]
+            if t_artist is not None:
+                audio["artist"] = [str(t_artist)]
+            if t_album is not None:
+                audio["album"] = [str(t_album)]
+            if t_album_artist is not None:
+                audio["albumartist"] = [str(t_album_artist)]
+            if t_date is not None:
+                audio["date"] = [str(t_date)]
+            if t_track is not None:
+                audio["tracknumber"] = [str(t_track)]
+            if t_total_tracks is not None:
+                audio["totaltracks"] = [str(t_total_tracks)]
+            if t_disc is not None:
+                audio["discnumber"] = [str(t_disc)]
+            if t_total_discs is not None:
+                audio["totaldiscs"] = [str(t_total_discs)]
+
+            if cover_art_bytes:
+                pic = Picture()
+                pic.type = 3
+                pic.mime = "image/png" if cover_art_bytes.startswith(b"\x89PNG") else "image/jpeg"
+                pic.data = cover_art_bytes
+                audio["metadata_block_picture"] = [base64.b64encode(pic.write()).decode("ascii")]
+
+            audio.save()
+            return True
+
+        else:
+            logger.warning("Unsupported audio container for tag writing: %s", suffix)
+            return False
+
+    except (mutagen.MutagenError, OSError) as e:
+        logger.warning("Error writing audio tags to %s: %s", file_path, e)
+        return False
+    except Exception as e:
+        logger.warning("Unexpected error writing audio tags to %s: %s", file_path, e)
+        return False
+
+
+def embed_album_artwork(file_path: str | Path, image_data: bytes) -> bool:
+    """Embeds cover artwork directly into an audio file without changing existing tags.
+
+    Supports FLAC, MP3, M4A/AAC/MP4, and Ogg/Opus containers.
+    Returns True on success, or False if embedding encounters an error.
+    """
+    if not image_data:
+        logger.warning("Cannot embed empty image data into %s", file_path)
+        return False
+    return write_audio_tags(file_path=file_path, tags={}, cover_art_bytes=image_data)
+

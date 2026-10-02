@@ -157,7 +157,9 @@ document.addEventListener('alpine:init', () => {
         this.isMissingModalOpen ||
         this.isMatchModalOpen ||
         this.isClientModalOpen ||
-        this.isIndexerModalOpen
+        this.isIndexerModalOpen ||
+        this.isProfileModalOpen ||
+        this.isSearchModalOpen
       );
     },
 
@@ -239,6 +241,10 @@ document.addEventListener('alpine:init', () => {
 
     // Media Management & Arr Settings State
     settingsSubTab: 'media', // 'media' | 'status'
+    systemStatus: null,
+    isLoadingSystemStatus: false,
+    systemStatusError: null,
+    systemStatusLastUpdated: null,
     settingsState: {
       mediaManagement: {
         artist_folder_format: '{Artist Name}',
@@ -250,7 +256,10 @@ document.addEventListener('alpine:init', () => {
         staging_folder_path: '/data/downloads',
         import_mode: 'move',
         colon_replacement_format: ' - ',
-        clean_artist_names: true
+        clean_artist_names: true,
+        write_audio_tags: true,
+        embed_artwork: true,
+        save_cover_art_file: true
       },
       lidarrSettings: {
         url: '',
@@ -292,6 +301,8 @@ document.addEventListener('alpine:init', () => {
       password: '',
       priority: 1,
       enabled: true,
+      category: 'music',
+      remote_path_mappings_text: '',
       extra_settings_json: '',
     },
     clientTesting: false,
@@ -314,6 +325,40 @@ document.addEventListener('alpine:init', () => {
     indexerTesting: false,
     indexerTestResult: null,
     indexerSaving: false,
+
+    // Quality Profiles & Evaluator State
+    qualityProfiles: [],
+    isProfilesLoading: false,
+    isProfileModalOpen: false,
+    profileSaving: false,
+    profileForm: {
+      id: null,
+      name: '',
+      cutoff: 'FLAC 16bit',
+      items: [],
+      preferred_tags: [],
+      ignored_tags: [],
+      min_size_mb: null,
+      max_size_mb: null,
+      is_default: false,
+    },
+    preferredTagsInput: '',
+    ignoredTagsInput: '',
+    testerInput: '',
+    testerProfileId: '',
+    testerResult: null,
+    isTestingTitle: false,
+
+    // Interactive Manual Search & Release Browser State
+    isSearchModalOpen: false,
+    searchItem: null, // { artist, title, album, item_type, request_id }
+    selectedSearchProfileId: null,
+    searchResults: [],
+    isSearchingReleases: false,
+    searchFilter: 'all', // 'all' | 'acceptable'
+    searchSort: 'score', // 'score' | 'seeders' | 'size'
+    grabbingReleaseId: null,
+    searchError: null,
 
     // Toast Notifications
     toasts: [],
@@ -346,6 +391,8 @@ document.addEventListener('alpine:init', () => {
         this.$watch('isMatchModalOpen', syncBodyModalLock);
         this.$watch('isClientModalOpen', syncBodyModalLock);
         this.$watch('isIndexerModalOpen', syncBodyModalLock);
+        this.$watch('isProfileModalOpen', syncBodyModalLock);
+        this.$watch('isSearchModalOpen', syncBodyModalLock);
         this.$watch('activeTab', () => {
           this.isMobileMenuOpen = false;
         });
@@ -362,6 +409,8 @@ document.addEventListener('alpine:init', () => {
           if (this.isMatchModalOpen) this.closeManualMatchModal();
           if (this.isClientModalOpen) this.closeClientModal();
           if (this.isIndexerModalOpen) this.closeIndexerModal();
+          if (this.isProfileModalOpen) this.closeProfileModal();
+          if (this.isSearchModalOpen) this.closeInteractiveSearchModal();
         }
       });
 
@@ -1893,6 +1942,9 @@ document.addEventListener('alpine:init', () => {
             import_mode: data.settings.import_mode || 'move',
             colon_replacement_format: data.settings.colon_replacement_format || ' - ',
             clean_artist_names: Boolean(data.settings.clean_artist_names),
+            write_audio_tags: data.settings.write_audio_tags !== undefined ? Boolean(data.settings.write_audio_tags) : true,
+            embed_artwork: data.settings.embed_artwork !== undefined ? Boolean(data.settings.embed_artwork) : true,
+            save_cover_art_file: data.settings.save_cover_art_file !== undefined ? Boolean(data.settings.save_cover_art_file) : true,
           };
         }
         if (data && data.presets) {
@@ -1902,6 +1954,8 @@ document.addEventListener('alpine:init', () => {
         await this.loadLidarrSettings();
         this.loadDownloadClients();
         this.loadIndexers();
+        this.loadQualityProfiles();
+        this.loadSystemStatus();
       } catch (err) {
         console.error('Failed to load media management settings:', err);
       } finally {
@@ -1911,6 +1965,47 @@ document.addEventListener('alpine:init', () => {
 
     async loadMediaManagementSettings() {
       return this.loadSettings();
+    },
+
+    async loadSystemStatus() {
+      if (!this.currentUser?.is_admin) return;
+      this.isLoadingSystemStatus = true;
+      this.systemStatusError = null;
+      try {
+        const headers = { 'Accept': 'application/json' };
+        if (this.authToken) {
+          headers['Authorization'] = `Bearer ${this.authToken}`;
+        }
+        const res = await fetch('/api/system/status', {
+          credentials: 'same-origin',
+          headers
+        });
+        if (res.ok) {
+          this.systemStatus = await res.json();
+          this.systemStatusLastUpdated = new Date().toLocaleTimeString();
+        } else {
+          const err = await res.json().catch(() => ({}));
+          this.systemStatusError = err.detail || 'Failed to load system diagnostics';
+        }
+      } catch (err) {
+        console.error('Error fetching system status:', err);
+        this.systemStatusError = 'Network error loading system diagnostics';
+      } finally {
+        this.isLoadingSystemStatus = false;
+      }
+    },
+
+    formatUptime(seconds) {
+      if (!seconds || seconds <= 0) return '0s';
+      const s = Math.floor(seconds);
+      const days = Math.floor(s / 86400);
+      const hours = Math.floor((s % 86400) / 3600);
+      const mins = Math.floor((s % 3600) / 60);
+      const secs = s % 60;
+      if (days > 0) return `${days}d ${hours}h ${mins}m`;
+      if (hours > 0) return `${hours}h ${mins}m ${secs}s`;
+      if (mins > 0) return `${mins}m ${secs}s`;
+      return `${secs}s`;
     },
 
     async loadLidarrSettings() {
@@ -2143,6 +2238,8 @@ document.addEventListener('alpine:init', () => {
         password: '',
         priority: 1,
         enabled: true,
+        category: 'music',
+        remote_path_mappings_text: '',
         extra_settings_json: '',
       };
       this.clientTestResult = null;
@@ -2150,6 +2247,24 @@ document.addEventListener('alpine:init', () => {
     },
 
     openEditClientModal(client) {
+      let category = client.category || 'music';
+      let mappingsText = '';
+      if (Array.isArray(client.remote_path_mappings)) {
+        mappingsText = client.remote_path_mappings
+          .map(m => `${m.remote_path} -> ${m.local_path}`)
+          .join('\n');
+      } else if (client.extra_settings_json) {
+        try {
+          const extra = JSON.parse(client.extra_settings_json);
+          if (extra.category) category = extra.category;
+          if (Array.isArray(extra.remote_path_mappings)) {
+            mappingsText = extra.remote_path_mappings
+              .map(m => `${m.remote_path} -> ${m.local_path}`)
+              .join('\n');
+          }
+        } catch (e) {}
+      }
+
       this.clientForm = {
         id: client.id,
         name: client.name,
@@ -2160,6 +2275,8 @@ document.addEventListener('alpine:init', () => {
         password: client.password || '',
         priority: client.priority ?? 1,
         enabled: Boolean(client.enabled),
+        category: category,
+        remote_path_mappings_text: mappingsText,
         extra_settings_json: client.extra_settings_json || '',
       };
       this.clientTestResult = null;
@@ -2171,19 +2288,66 @@ document.addEventListener('alpine:init', () => {
       this.clientTestResult = null;
     },
 
+    getClientPayload() {
+      let extra = {};
+      if (this.clientForm.extra_settings_json) {
+        try {
+          extra = JSON.parse(this.clientForm.extra_settings_json);
+        } catch (e) {
+          extra = {};
+        }
+      }
+      extra.category = this.clientForm.category || 'music';
+
+      const mappings = [];
+      if (this.clientForm.remote_path_mappings_text) {
+        const lines = this.clientForm.remote_path_mappings_text.split('\n');
+        for (const line of lines) {
+          const trimmed = line.trim();
+          if (!trimmed) continue;
+          if (trimmed.includes('->')) {
+            const [r, l] = trimmed.split('->');
+            mappings.push({ remote_path: r.trim(), local_path: l.trim() });
+          } else if (trimmed.includes(',')) {
+            const [r, l] = trimmed.split(',');
+            mappings.push({ remote_path: r.trim(), local_path: l.trim() });
+          }
+        }
+      }
+      extra.remote_path_mappings = mappings;
+
+      return {
+        id: this.clientForm.id,
+        name: this.clientForm.name,
+        driver_type: this.clientForm.driver_type,
+        host_url: this.clientForm.host_url,
+        api_key: this.clientForm.api_key,
+        username: this.clientForm.username,
+        password: this.clientForm.password,
+        priority: this.clientForm.priority,
+        enabled: this.clientForm.enabled,
+        category: extra.category,
+        remote_path_mappings: mappings,
+        extra_settings_json: JSON.stringify(extra),
+      };
+    },
+
     async testDownloadClient() {
       this.clientTesting = true;
       this.clientTestResult = null;
       try {
+        const payload = this.getClientPayload();
         const res = await this.apiRequest('/api/settings/download-clients/test', {
           method: 'POST',
           body: {
-            driver_type: this.clientForm.driver_type,
-            host_url: this.clientForm.host_url,
-            api_key: this.clientForm.api_key,
-            username: this.clientForm.username,
-            password: this.clientForm.password,
-            extra_settings_json: this.clientForm.extra_settings_json,
+            driver_type: payload.driver_type,
+            host_url: payload.host_url,
+            api_key: payload.api_key,
+            username: payload.username,
+            password: payload.password,
+            category: payload.category,
+            remote_path_mappings: payload.remote_path_mappings,
+            extra_settings_json: payload.extra_settings_json,
           }
         });
         this.clientTestResult = res;
@@ -2197,9 +2361,10 @@ document.addEventListener('alpine:init', () => {
     async saveDownloadClient() {
       this.clientSaving = true;
       try {
+        const payload = this.getClientPayload();
         await this.apiRequest('/api/settings/download-clients', {
           method: 'POST',
-          body: this.clientForm
+          body: payload
         });
         this.showToast('Download client saved', 'success');
         this.closeClientModal();
@@ -2356,6 +2521,312 @@ document.addEventListener('alpine:init', () => {
         await this.loadIndexers();
       } catch (err) {
         this.showToast(err.message || 'Failed to update indexer status', 'error');
+      }
+    },
+
+    // -----------------------------------------------------------------------
+    // Quality Profiles & Release Evaluator Methods
+    // -----------------------------------------------------------------------
+    async loadQualityProfiles() {
+      if (!this.currentUser?.is_admin) return;
+      this.isProfilesLoading = true;
+      try {
+        const data = await this.apiRequest('/api/settings/quality-profiles');
+        this.qualityProfiles = Array.isArray(data) ? data : [];
+        if (!this.testerProfileId && this.qualityProfiles.length > 0) {
+          const def = this.qualityProfiles.find(p => p.is_default) || this.qualityProfiles[0];
+          this.testerProfileId = def.id;
+        }
+      } catch (err) {
+        console.error('Failed to load quality profiles:', err);
+      } finally {
+        this.isProfilesLoading = false;
+      }
+    },
+
+    openAddProfileModal() {
+      const defaultItems = [
+        { quality: 'FLAC 24bit', allowed: true, weight: 1000 },
+        { quality: 'FLAC 16bit', allowed: true, weight: 900 },
+        { quality: 'MP3 320', allowed: false, weight: 800 },
+        { quality: 'AAC 256', allowed: false, weight: 700 },
+        { quality: 'MP3 V0', allowed: false, weight: 600 },
+        { quality: 'MP3 192', allowed: false, weight: 500 },
+        { quality: 'MP3 V2', allowed: false, weight: 400 },
+        { quality: 'Unknown', allowed: false, weight: 100 },
+      ];
+      this.profileForm = {
+        id: null,
+        name: '',
+        cutoff: 'FLAC 16bit',
+        items: defaultItems,
+        preferred_tags: ['cd', 'web'],
+        ignored_tags: ['live', 'bootleg'],
+        min_size_mb: null,
+        max_size_mb: null,
+        is_default: false,
+      };
+      this.preferredTagsInput = 'cd, web';
+      this.ignoredTagsInput = 'live, bootleg';
+      this.isProfileModalOpen = true;
+    },
+
+    openEditProfileModal(profile) {
+      const standardQualities = [
+        { quality: 'FLAC 24bit', defaultAllowed: true, defaultWeight: 1000 },
+        { quality: 'FLAC 16bit', defaultAllowed: true, defaultWeight: 900 },
+        { quality: 'MP3 320', defaultAllowed: false, defaultWeight: 800 },
+        { quality: 'AAC 256', defaultAllowed: false, defaultWeight: 700 },
+        { quality: 'MP3 V0', defaultAllowed: false, defaultWeight: 600 },
+        { quality: 'MP3 192', defaultAllowed: false, defaultWeight: 500 },
+        { quality: 'MP3 V2', defaultAllowed: false, defaultWeight: 400 },
+        { quality: 'Unknown', defaultAllowed: false, defaultWeight: 100 },
+      ];
+      const existingItems = Array.isArray(profile.items) ? profile.items : [];
+      const mergedItems = standardQualities.map(sq => {
+        const found = existingItems.find(i => i.quality === sq.quality);
+        if (found) {
+          return {
+            quality: found.quality,
+            allowed: Boolean(found.allowed),
+            weight: found.weight || sq.defaultWeight,
+          };
+        }
+        return {
+          quality: sq.quality,
+          allowed: sq.defaultAllowed,
+          weight: sq.defaultWeight,
+        };
+      });
+
+      this.profileForm = {
+        id: profile.id,
+        name: profile.name,
+        cutoff: profile.cutoff,
+        items: mergedItems,
+        preferred_tags: Array.isArray(profile.preferred_tags) ? [...profile.preferred_tags] : [],
+        ignored_tags: Array.isArray(profile.ignored_tags) ? [...profile.ignored_tags] : [],
+        min_size_mb: profile.min_size_mb,
+        max_size_mb: profile.max_size_mb,
+        is_default: Boolean(profile.is_default),
+      };
+      this.preferredTagsInput = (this.profileForm.preferred_tags || []).join(', ');
+      this.ignoredTagsInput = (this.profileForm.ignored_tags || []).join(', ');
+      this.isProfileModalOpen = true;
+    },
+
+    closeProfileModal() {
+      this.isProfileModalOpen = false;
+      this.profileForm = {
+        id: null,
+        name: '',
+        cutoff: 'FLAC 16bit',
+        items: [],
+        preferred_tags: [],
+        ignored_tags: [],
+        min_size_mb: null,
+        max_size_mb: null,
+        is_default: false,
+      };
+      this.preferredTagsInput = '';
+      this.ignoredTagsInput = '';
+    },
+
+    async saveQualityProfile() {
+      if (!this.profileForm.name || !this.profileForm.cutoff) {
+        this.showToast('Name and cutoff format are required', 'error');
+        return;
+      }
+      this.profileSaving = true;
+      try {
+        const preferred = this.preferredTagsInput
+          .split(',')
+          .map(t => t.trim().toLowerCase())
+          .filter(Boolean);
+        const ignored = this.ignoredTagsInput
+          .split(',')
+          .map(t => t.trim().toLowerCase())
+          .filter(Boolean);
+
+        const payload = {
+          id: this.profileForm.id || undefined,
+          name: this.profileForm.name.trim(),
+          cutoff: this.profileForm.cutoff.trim(),
+          items: this.profileForm.items,
+          preferred_tags: preferred,
+          ignored_tags: ignored,
+          min_size_mb: this.profileForm.min_size_mb ? parseFloat(this.profileForm.min_size_mb) : null,
+          max_size_mb: this.profileForm.max_size_mb ? parseFloat(this.profileForm.max_size_mb) : null,
+          is_default: Boolean(this.profileForm.is_default),
+        };
+
+        await this.apiRequest('/api/settings/quality-profiles', {
+          method: 'POST',
+          body: payload,
+        });
+
+        this.showToast('Quality profile saved successfully', 'success');
+        this.closeProfileModal();
+        await this.loadQualityProfiles();
+      } catch (err) {
+        this.showToast(err.message || 'Failed to save quality profile', 'error');
+      } finally {
+        this.profileSaving = false;
+      }
+    },
+
+    async deleteQualityProfile(profileId) {
+      if (!confirm('Are you sure you want to delete this quality profile?')) return;
+      try {
+        await this.apiRequest(`/api/settings/quality-profiles/${profileId}`, {
+          method: 'DELETE',
+        });
+        this.showToast('Quality profile deleted', 'info');
+        await this.loadQualityProfiles();
+      } catch (err) {
+        this.showToast(err.message || 'Failed to delete quality profile', 'error');
+      }
+    },
+
+    async testReleaseTitle() {
+      if (!this.testerInput || !this.testerInput.trim()) {
+        this.showToast('Please enter a release title to evaluate', 'error');
+        return;
+      }
+      this.isTestingTitle = true;
+      this.testerResult = null;
+      try {
+        const payload = {
+          title: this.testerInput.trim(),
+          profile_id: this.testerProfileId || null,
+        };
+        const res = await this.apiRequest('/api/settings/quality-profiles/evaluate', {
+          method: 'POST',
+          body: payload,
+        });
+        this.testerResult = res;
+      } catch (err) {
+        this.showToast(err.message || 'Failed to evaluate release title', 'error');
+      } finally {
+        this.isTestingTitle = false;
+      }
+    },
+
+    // -----------------------------------------------------------------------
+    // Interactive Manual Search & Release Browser Methods (Phase 4)
+    // -----------------------------------------------------------------------
+    openInteractiveSearchModal(item) {
+      if (!this.qualityProfiles || this.qualityProfiles.length === 0) {
+        this.loadQualityProfiles();
+      }
+      this.searchItem = item;
+      const defaultProf = this.qualityProfiles.find((p) => p.is_default) || this.qualityProfiles[0];
+      this.selectedSearchProfileId = defaultProf ? defaultProf.id : null;
+      this.searchResults = [];
+      this.searchError = null;
+      this.searchFilter = 'all';
+      this.searchSort = 'score';
+      this.grabbingReleaseId = null;
+      this.isSearchModalOpen = true;
+      this.executeInteractiveSearch();
+    },
+
+    closeInteractiveSearchModal() {
+      this.isSearchModalOpen = false;
+      this.searchItem = null;
+      this.searchResults = [];
+      this.isSearchingReleases = false;
+      this.searchError = null;
+      this.grabbingReleaseId = null;
+    },
+
+    async executeInteractiveSearch() {
+      if (!this.searchItem) return;
+      this.isSearchingReleases = true;
+      this.searchError = null;
+      this.searchResults = [];
+      try {
+        const payload = {
+          artist: this.searchItem.artist || '',
+          title: this.searchItem.title || null,
+          album: this.searchItem.album || null,
+          item_type: this.searchItem.item_type || 'track',
+          quality_profile_id: this.selectedSearchProfileId || null,
+        };
+        const res = await this.apiRequest('/api/acquisition/search', {
+          method: 'POST',
+          body: payload,
+        });
+        if (res && Array.isArray(res.results)) {
+          this.searchResults = res.results;
+        } else {
+          this.searchResults = [];
+        }
+      } catch (err) {
+        console.error('Interactive search error:', err);
+        this.searchError = err?.message || 'Failed to search releases across indexers';
+      } finally {
+        this.isSearchingReleases = false;
+      }
+    },
+
+    filteredSearchResults() {
+      let list = [...this.searchResults];
+      if (this.searchFilter === 'acceptable') {
+        list = list.filter((r) => Boolean(r.is_acceptable));
+      }
+      list.sort((a, b) => {
+        if (this.searchSort === 'seeders') {
+          return (Number(b.seeders) || 0) - (Number(a.seeders) || 0);
+        } else if (this.searchSort === 'size') {
+          return (Number(a.size_bytes) || 0) - (Number(b.size_bytes) || 0);
+        } else {
+          // Default: 'score'
+          if (Boolean(a.is_acceptable) !== Boolean(b.is_acceptable)) {
+            return a.is_acceptable ? -1 : 1;
+          }
+          if (b.score !== a.score) {
+            return b.score - a.score;
+          }
+          return (Number(b.seeders) || 0) - (Number(a.seeders) || 0);
+        }
+      });
+      return list;
+    },
+
+    async grabRelease(release) {
+      if (!release || !this.searchItem) return;
+      this.grabbingReleaseId = release.id;
+      try {
+        const payload = {
+          release: release,
+          artist: this.searchItem.artist,
+          title: this.searchItem.title || release.title,
+          album: this.searchItem.album || null,
+          item_type: this.searchItem.item_type || 'track',
+          request_id: this.searchItem.request_id || (this.searchItem.id && this.searchItem.status ? this.searchItem.id : null),
+        };
+        const res = await this.apiRequest('/api/acquisition/grab', {
+          method: 'POST',
+          body: payload,
+        });
+        if (res && res.success) {
+          release._grabbed = true;
+          this.showToast(res.message || `Successfully enqueued '${release.title}'`, 'success');
+          if (typeof this.loadRequests === 'function') {
+            this.loadRequests();
+          }
+          if (typeof this.loadQueue === 'function') {
+            this.loadQueue(true);
+          }
+        } else {
+          this.showToast(res?.message || 'Failed to enqueue release', 'error');
+        }
+      } catch (err) {
+        console.error('Error grabbing release:', err);
+        this.showToast(err?.message || 'Failed to grab release', 'error');
+      } finally {
+        this.grabbingReleaseId = null;
       }
     }
   }));

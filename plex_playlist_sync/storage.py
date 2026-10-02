@@ -16,6 +16,8 @@ from plex_playlist_sync.models import (
     IndexerConfig,
     MusicRequest,
     Playlist,
+    QualityProfile,
+    QualityProfileItem,
     RequestStatus,
     Track,
 )
@@ -139,6 +141,8 @@ class Database:
                 (7, self._migration_v7),
                 (8, self._migration_v8),
                 (9, self._migration_v9),
+                (10, self._migration_v10),
+                (11, self._migration_v11),
             ]
 
             for version, migration_fn in migrations:
@@ -411,6 +415,139 @@ class Database:
         cur.execute(
             """
             INSERT OR IGNORE INTO lidarr_settings (id) VALUES (1);
+            """
+        )
+
+    def _migration_v10(self, cur: sqlite3.Cursor) -> None:
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS quality_profiles (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL UNIQUE,
+                cutoff TEXT NOT NULL,
+                items_json TEXT NOT NULL,
+                preferred_tags_json TEXT NOT NULL DEFAULT '[]',
+                ignored_tags_json TEXT NOT NULL DEFAULT '[]',
+                min_size_mb REAL,
+                max_size_mb REAL,
+                is_default INTEGER NOT NULL DEFAULT 0,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+            """
+        )
+
+        cur.execute("SELECT COUNT(*) FROM quality_profiles")
+        row = cur.fetchone()
+        count = row[0] if (row and row[0] is not None) else 0
+        if count == 0:
+            # Seed Profile 1: Lossless (FLAC)
+            p1_items = [
+                {"quality": "FLAC 24bit", "allowed": True, "weight": 1000},
+                {"quality": "FLAC 16bit", "allowed": True, "weight": 900},
+                {"quality": "MP3 320", "allowed": False, "weight": 800},
+                {"quality": "AAC 256", "allowed": False, "weight": 700},
+                {"quality": "MP3 V0", "allowed": False, "weight": 600},
+                {"quality": "MP3 192", "allowed": False, "weight": 500},
+                {"quality": "MP3 V2", "allowed": False, "weight": 400},
+                {"quality": "Unknown", "allowed": False, "weight": 100},
+            ]
+            cur.execute(
+                """
+                INSERT INTO quality_profiles (
+                    id, name, cutoff, items_json, preferred_tags_json, ignored_tags_json,
+                    min_size_mb, max_size_mb, is_default
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    "profile-lossless",
+                    "Lossless (FLAC)",
+                    "FLAC 16bit",
+                    json.dumps(p1_items),
+                    json.dumps(["cd", "web", "vinyl", "remaster"]),
+                    json.dumps(["live", "bootleg", "tribute", "karaoke"]),
+                    None,
+                    None,
+                    1,
+                ),
+            )
+
+            # Seed Profile 2: High Quality (Any)
+            p2_items = [
+                {"quality": "FLAC 24bit", "allowed": True, "weight": 1000},
+                {"quality": "FLAC 16bit", "allowed": True, "weight": 900},
+                {"quality": "MP3 320", "allowed": True, "weight": 800},
+                {"quality": "AAC 256", "allowed": True, "weight": 700},
+                {"quality": "MP3 V0", "allowed": True, "weight": 600},
+                {"quality": "MP3 192", "allowed": False, "weight": 500},
+                {"quality": "MP3 V2", "allowed": False, "weight": 400},
+                {"quality": "Unknown", "allowed": False, "weight": 100},
+            ]
+            cur.execute(
+                """
+                INSERT INTO quality_profiles (
+                    id, name, cutoff, items_json, preferred_tags_json, ignored_tags_json,
+                    min_size_mb, max_size_mb, is_default
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    "profile-high-quality",
+                    "High Quality (Any)",
+                    "FLAC 16bit",
+                    json.dumps(p2_items),
+                    json.dumps(["cd", "web"]),
+                    json.dumps(["live", "bootleg"]),
+                    None,
+                    None,
+                    0,
+                ),
+            )
+
+            # Seed Profile 3: Standard MP3
+            p3_items = [
+                {"quality": "FLAC 24bit", "allowed": False, "weight": 1000},
+                {"quality": "FLAC 16bit", "allowed": False, "weight": 900},
+                {"quality": "MP3 320", "allowed": True, "weight": 800},
+                {"quality": "MP3 V0", "allowed": True, "weight": 700},
+                {"quality": "AAC 256", "allowed": True, "weight": 600},
+                {"quality": "MP3 192", "allowed": True, "weight": 500},
+                {"quality": "MP3 V2", "allowed": False, "weight": 400},
+                {"quality": "Unknown", "allowed": False, "weight": 100},
+            ]
+            cur.execute(
+                """
+                INSERT INTO quality_profiles (
+                    id, name, cutoff, items_json, preferred_tags_json, ignored_tags_json,
+                    min_size_mb, max_size_mb, is_default
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    "profile-standard-mp3",
+                    "Standard MP3",
+                    "MP3 320",
+                    json.dumps(p3_items),
+                    json.dumps([]),
+                    json.dumps(["live", "bootleg"]),
+                    None,
+                    None,
+                    0,
+                ),
+            )
+
+    def _migration_v11(self, cur: sqlite3.Cursor) -> None:
+        cur.execute(
+            """
+            ALTER TABLE media_management_settings ADD COLUMN write_audio_tags INTEGER NOT NULL DEFAULT 1
+            """
+        )
+        cur.execute(
+            """
+            ALTER TABLE media_management_settings ADD COLUMN embed_artwork INTEGER NOT NULL DEFAULT 1
+            """
+        )
+        cur.execute(
+            """
+            ALTER TABLE media_management_settings ADD COLUMN save_cover_art_file INTEGER NOT NULL DEFAULT 1
             """
         )
 
@@ -741,6 +878,20 @@ class Database:
                     """
                 )
             return [dict(row) for row in cur.fetchall()]
+
+    def get_missing_track(self, track_id: int) -> Optional[dict[str, Any]]:
+        """Retrieves a single missing track by ID."""
+        with self._lock:
+            cur = self.conn.execute(
+                """
+                SELECT id, playlist_id, title, artist, album, url, lidarr_status, created_at
+                FROM missing_tracks
+                WHERE id = ?
+                """,
+                (int(track_id),),
+            )
+            row = cur.fetchone()
+            return dict(row) if row else None
 
     def update_missing_track_lidarr_status(self, track_id: int, status: str) -> bool:
         """Updates the Lidarr monitoring status for a specific missing track."""
@@ -1078,6 +1229,9 @@ class Database:
                 row = cur.fetchone()
             res = dict(row)
             res["clean_artist_names"] = bool(res.get("clean_artist_names", 1))
+            res["write_audio_tags"] = bool(res.get("write_audio_tags", 1))
+            res["embed_artwork"] = bool(res.get("embed_artwork", 1))
+            res["save_cover_art_file"] = bool(res.get("save_cover_art_file", 1))
             res["staging_folder_path"] = str(res.get("staging_folder_path") or "/data/downloads")
             res["import_mode"] = str(res.get("import_mode") or "move")
             return res
@@ -1095,11 +1249,14 @@ class Database:
             "clean_artist_names",
             "staging_folder_path",
             "import_mode",
+            "write_audio_tags",
+            "embed_artwork",
+            "save_cover_art_file",
         }
         updates: dict[str, Any] = {}
         for k, v in settings.items():
             if k in allowed_keys and v is not None:
-                if k == "clean_artist_names":
+                if k in ("clean_artist_names", "write_audio_tags", "embed_artwork", "save_cover_art_file"):
                     updates[k] = 1 if v else 0
                 else:
                     updates[k] = str(v)
@@ -1618,5 +1775,175 @@ class Database:
             )
             self.conn.commit()
             return cur.rowcount > 0
+
+    # -------------------------------------------------------------------------
+    # Quality Profiles CRUD
+    # -------------------------------------------------------------------------
+
+    def _format_quality_profile_row(self, row: sqlite3.Row) -> dict[str, Any]:
+        res = dict(row)
+        res["is_default"] = bool(res.get("is_default", 0))
+        res["min_size_mb"] = (
+            float(res["min_size_mb"]) if res.get("min_size_mb") is not None else None
+        )
+        res["max_size_mb"] = (
+            float(res["max_size_mb"]) if res.get("max_size_mb") is not None else None
+        )
+
+        try:
+            res["items"] = json.loads(res.get("items_json") or "[]")
+        except (json.JSONDecodeError, TypeError):
+            res["items"] = []
+
+        try:
+            res["preferred_tags"] = json.loads(res.get("preferred_tags_json") or "[]")
+        except (json.JSONDecodeError, TypeError):
+            res["preferred_tags"] = []
+
+        try:
+            res["ignored_tags"] = json.loads(res.get("ignored_tags_json") or "[]")
+        except (json.JSONDecodeError, TypeError):
+            res["ignored_tags"] = []
+
+        return res
+
+    def list_quality_profiles(self) -> list[dict[str, Any]]:
+        """Lists all quality profiles ordered by default first, then name."""
+        with self._lock:
+            cur = self.conn.execute(
+                "SELECT * FROM quality_profiles ORDER BY is_default DESC, name ASC"
+            )
+            rows = cur.fetchall()
+            return [self._format_quality_profile_row(r) for r in rows]
+
+    def get_quality_profile(self, profile_id: str) -> Optional[dict[str, Any]]:
+        """Retrieves a single quality profile by ID."""
+        with self._lock:
+            cur = self.conn.execute(
+                "SELECT * FROM quality_profiles WHERE id = ?", (str(profile_id),)
+            )
+            row = cur.fetchone()
+            if not row:
+                return None
+            return self._format_quality_profile_row(row)
+
+    def get_default_quality_profile(self) -> dict[str, Any]:
+        """Retrieves the default quality profile."""
+        with self._lock:
+            cur = self.conn.execute(
+                "SELECT * FROM quality_profiles WHERE is_default = 1 LIMIT 1"
+            )
+            row = cur.fetchone()
+            if not row:
+                cur = self.conn.execute(
+                    "SELECT * FROM quality_profiles ORDER BY name ASC LIMIT 1"
+                )
+                row = cur.fetchone()
+            if not row:
+                raise ValueError("No quality profiles configured in the database")
+            return self._format_quality_profile_row(row)
+
+    def upsert_quality_profile(
+        self, profile: Union[QualityProfile, dict[str, Any]]
+    ) -> dict[str, Any]:
+        """Creates or updates a quality profile. If is_default=True, clears is_default on all others."""
+        if isinstance(profile, QualityProfile):
+            p_id = profile.id
+            name = profile.name
+            cutoff = profile.cutoff
+            items = [
+                i.to_dict() if hasattr(i, "to_dict") else i for i in profile.items
+            ]
+            preferred_tags = profile.preferred_tags
+            ignored_tags = profile.ignored_tags
+            min_size_mb = profile.min_size_mb
+            max_size_mb = profile.max_size_mb
+            is_default = bool(profile.is_default)
+        else:
+            p_id = str(profile.get("id"))
+            name = str(profile.get("name"))
+            cutoff = str(profile.get("cutoff"))
+            items = profile.get("items", [])
+            items = [
+                i.to_dict() if hasattr(i, "to_dict") else i for i in items
+            ]
+            preferred_tags = profile.get("preferred_tags", [])
+            ignored_tags = profile.get("ignored_tags", [])
+            min_size_mb = profile.get("min_size_mb")
+            max_size_mb = profile.get("max_size_mb")
+            is_default = bool(profile.get("is_default", False))
+
+        with self._lock:
+            if is_default:
+                self.conn.execute(
+                    "UPDATE quality_profiles SET is_default = 0 WHERE id != ?", (p_id,)
+                )
+
+            self.conn.execute(
+                """
+                INSERT INTO quality_profiles (
+                    id, name, cutoff, items_json, preferred_tags_json, ignored_tags_json,
+                    min_size_mb, max_size_mb, is_default, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                ON CONFLICT(id) DO UPDATE SET
+                    name = excluded.name,
+                    cutoff = excluded.cutoff,
+                    items_json = excluded.items_json,
+                    preferred_tags_json = excluded.preferred_tags_json,
+                    ignored_tags_json = excluded.ignored_tags_json,
+                    min_size_mb = excluded.min_size_mb,
+                    max_size_mb = excluded.max_size_mb,
+                    is_default = excluded.is_default,
+                    updated_at = CURRENT_TIMESTAMP
+                """,
+                (
+                    p_id,
+                    name,
+                    cutoff,
+                    json.dumps(items),
+                    json.dumps(preferred_tags),
+                    json.dumps(ignored_tags),
+                    min_size_mb,
+                    max_size_mb,
+                    1 if is_default else 0,
+                ),
+            )
+
+            # Ensure at least one profile is marked default
+            cur = self.conn.execute(
+                "SELECT COUNT(*) FROM quality_profiles WHERE is_default = 1"
+            )
+            count = cur.fetchone()[0]
+            if count == 0:
+                self.conn.execute(
+                    "UPDATE quality_profiles SET is_default = 1 WHERE id = ?", (p_id,)
+                )
+
+            self.conn.commit()
+
+        result = self.get_quality_profile(p_id)
+        if not result:
+            raise sqlite3.OperationalError(f"Failed to retrieve upserted profile {p_id}")
+        return result
+
+    def delete_quality_profile(self, profile_id: str) -> bool:
+        """Deletes a quality profile. Raises ValueError if the profile is default."""
+        with self._lock:
+            cur = self.conn.execute(
+                "SELECT is_default FROM quality_profiles WHERE id = ?",
+                (str(profile_id),),
+            )
+            row = cur.fetchone()
+            if not row:
+                return False
+            if bool(row[0]):
+                raise ValueError("Cannot delete the default quality profile")
+
+            cur = self.conn.execute(
+                "DELETE FROM quality_profiles WHERE id = ?", (str(profile_id),)
+            )
+            self.conn.commit()
+            return cur.rowcount > 0
+
 
 

@@ -734,6 +734,17 @@
                       </div>
                     </template>
 
+                    <!-- Admin Interactive Search -->
+                    <template x-if="currentUser?.is_admin">
+                      <button @click="openInteractiveSearchModal({ artist: req.artist, title: req.title, album: req.album, item_type: req.item_type, request_id: req.id })"
+                              title="Interactive Release Search"
+                              class="p-1 rounded bg-slate-800 hover:bg-sky-500 hover:text-white text-slate-300 transition flex items-center space-x-1">
+                        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0zM10 7v3m0 0v3m0-3h3m-3 0H7"></path>
+                        </svg>
+                      </button>
+                    </template>
+
                     <!-- User Delete / Cancel Request -->
                     <template x-if="currentUser?.is_admin || (req.user_id === currentUser?.id && req.status === 'pending')">
                       <button @click="deleteRequest(req.id)"
@@ -1322,7 +1333,13 @@
                 <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3"></path></svg>
                 <span>Lidarr Automation</span>
               </button>
-              <button @click="settingsSubTab = 'status'"
+              <button @click="settingsSubTab = 'profiles'; loadQualityProfiles()"
+                      :class="settingsSubTab === 'profiles' ? 'bg-[#e5a00d] text-slate-950 font-bold' : 'text-slate-400 hover:text-slate-200'"
+                      class="px-3.5 py-1.5 rounded-lg text-xs transition flex items-center space-x-1.5 whitespace-nowrap">
+                <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6V4m0 2a2 2 0 100 4m0-4a2 2 0 110 4m-6 8a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4m6 6v10m6-2a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4"></path></svg>
+                <span>Quality Profiles</span>
+              </button>
+              <button @click="settingsSubTab = 'status'; loadSystemStatus()"
                       :class="settingsSubTab === 'status' ? 'bg-[#e5a00d] text-slate-950 font-bold' : 'text-slate-400 hover:text-slate-200'"
                       class="px-3.5 py-1.5 rounded-lg text-xs transition flex items-center space-x-1.5 whitespace-nowrap">
                 <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z"></path></svg>
@@ -1440,6 +1457,37 @@
                       <span class="text-xs text-slate-300 font-medium">Clean Artist Names</span>
                     </label>
                     <p class="text-[11px] text-slate-500">Strip leading 'The', 'A', 'An'</p>
+                  </div>
+                </div>
+
+                <!-- Tagging & Artwork Embedding Options -->
+                <div class="pt-2 border-t border-slate-800/80 space-y-2">
+                  <label class="text-xs font-semibold text-slate-300 block">Tagging &amp; Artwork Embedding Options</label>
+                  <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                    <div class="space-y-1">
+                      <label class="flex items-center space-x-2.5 p-2 rounded-lg bg-slate-950/60 border border-slate-800 cursor-pointer hover:border-slate-700 transition">
+                        <input type="checkbox" x-model="settingsState.mediaManagement.write_audio_tags"
+                               class="rounded bg-slate-900 border-slate-700 text-amber-500 focus:ring-0">
+                        <span class="text-xs text-slate-300 font-medium">Normalize Audio Tags</span>
+                      </label>
+                      <p class="text-[11px] text-slate-500">Write standardized ID3v2.4 / Vorbis tags on import</p>
+                    </div>
+                    <div class="space-y-1">
+                      <label class="flex items-center space-x-2.5 p-2 rounded-lg bg-slate-950/60 border border-slate-800 cursor-pointer hover:border-slate-700 transition">
+                        <input type="checkbox" x-model="settingsState.mediaManagement.embed_artwork"
+                               class="rounded bg-slate-900 border-slate-700 text-amber-500 focus:ring-0">
+                        <span class="text-xs text-slate-300 font-medium">Embed Cover Artwork</span>
+                      </label>
+                      <p class="text-[11px] text-slate-500">Embed high-res artwork directly into audio files</p>
+                    </div>
+                    <div class="space-y-1">
+                      <label class="flex items-center space-x-2.5 p-2 rounded-lg bg-slate-950/60 border border-slate-800 cursor-pointer hover:border-slate-700 transition">
+                        <input type="checkbox" x-model="settingsState.mediaManagement.save_cover_art_file"
+                               class="rounded bg-slate-900 border-slate-700 text-amber-500 focus:ring-0">
+                        <span class="text-xs text-slate-300 font-medium">Save Album Cover File</span>
+                      </label>
+                      <p class="text-[11px] text-slate-500">Save cover.jpg in destination album folder</p>
+                    </div>
                   </div>
                 </div>
 
@@ -1840,87 +1888,564 @@
             </div>
           </div>
 
+          <!-- ================= SUB-TAB: QUALITY PROFILES ================= -->
+          <div x-show="settingsSubTab === 'profiles'" class="space-y-6">
+            <!-- Header Bar -->
+            <div class="glass-panel rounded-xl p-4 border border-slate-800 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+              <div>
+                <h3 class="text-base font-bold text-white">Quality Profiles</h3>
+                <p class="text-xs text-slate-400">Manage Arr-grade audio format selection, quality cutoffs, and tag filters</p>
+              </div>
+              <div class="flex items-center space-x-2">
+                <button type="button" @click="openAddProfileModal()"
+                        class="flex items-center space-x-2 px-3.5 py-1.5 rounded-lg text-xs font-semibold bg-[#e5a00d] hover:bg-[#cc8f0c] text-slate-950 transition shadow-md shadow-[#e5a00d]/15">
+                  <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"></path></svg>
+                  <span>Add Profile</span>
+                </button>
+              </div>
+            </div>
+
+            <!-- Empty State -->
+            <div x-show="qualityProfiles.length === 0" class="glass-panel rounded-xl p-8 text-center border border-slate-800">
+              <p class="text-xs text-slate-400">No quality profiles found. Click "Add Profile" to create one.</p>
+            </div>
+
+            <!-- Profiles Grid -->
+            <div x-show="qualityProfiles.length > 0" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+              <template x-for="profile in qualityProfiles" :key="profile.id">
+                <div class="glass-panel rounded-xl p-4 border border-slate-800 flex flex-col justify-between space-y-4 hover:border-slate-700 transition">
+                  <div class="space-y-2">
+                    <div class="flex items-start justify-between">
+                      <div class="space-y-0.5">
+                        <div class="flex items-center space-x-2">
+                          <h4 class="text-sm font-bold text-white" x-text="profile.name"></h4>
+                          <span x-show="profile.is_default" class="px-2 py-0.5 rounded text-[9px] font-bold uppercase tracking-wider bg-amber-500/20 text-[#e5a00d] border border-amber-500/30">DEFAULT</span>
+                        </div>
+                        <div class="text-[11px] text-slate-400">
+                          <span>Cutoff: </span>
+                          <span class="font-semibold text-emerald-400 font-mono" x-text="profile.cutoff"></span>
+                        </div>
+                      </div>
+                    </div>
+
+                    <!-- Allowed formats pills -->
+                    <div class="space-y-1">
+                      <span class="text-[10px] uppercase font-bold tracking-wider text-slate-500">Allowed Formats:</span>
+                      <div class="flex flex-wrap gap-1.5">
+                        <template x-for="item in (profile.items || []).filter(i => i.allowed)" :key="item.quality">
+                          <span class="px-2 py-0.5 rounded text-[10px] font-mono font-medium bg-emerald-500/10 text-emerald-300 border border-emerald-500/20" x-text="item.quality"></span>
+                        </template>
+                      </div>
+                    </div>
+
+                    <!-- Preferred & Ignored Tags -->
+                    <div class="space-y-1.5 pt-1 text-[11px]">
+                      <div x-show="profile.preferred_tags && profile.preferred_tags.length > 0" class="flex flex-wrap items-center gap-1">
+                        <span class="text-[10px] text-slate-500 font-bold uppercase">Preferred:</span>
+                        <template x-for="tag in profile.preferred_tags" :key="tag">
+                          <span class="px-1.5 py-0.5 rounded text-[10px] font-mono bg-cyan-500/10 text-cyan-300 border border-cyan-500/20" x-text="'+' + tag"></span>
+                        </template>
+                      </div>
+                      <div x-show="profile.ignored_tags && profile.ignored_tags.length > 0" class="flex flex-wrap items-center gap-1">
+                        <span class="text-[10px] text-slate-500 font-bold uppercase">Ignored:</span>
+                        <template x-for="tag in profile.ignored_tags" :key="tag">
+                          <span class="px-1.5 py-0.5 rounded text-[10px] font-mono bg-rose-500/10 text-rose-300 border border-rose-500/20" x-text="'-' + tag"></span>
+                        </template>
+                      </div>
+                    </div>
+
+                    <!-- Size Constraints -->
+                    <div x-show="profile.min_size_mb || profile.max_size_mb" class="text-[11px] text-slate-400 font-mono">
+                      <span>Size: </span>
+                      <span x-text="(profile.min_size_mb ? profile.min_size_mb + 'MB' : '0MB') + ' - ' + (profile.max_size_mb ? profile.max_size_mb + 'MB' : '∞')"></span>
+                    </div>
+                  </div>
+
+                  <!-- Actions footer -->
+                  <div class="pt-3 border-t border-slate-800/80 flex items-center justify-end space-x-2">
+                    <button type="button" @click="openEditProfileModal(profile)"
+                            class="px-2.5 py-1 rounded text-xs text-slate-300 hover:text-white hover:bg-slate-800 transition flex items-center space-x-1">
+                      <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"></path></svg>
+                      <span>Edit</span>
+                    </button>
+                    <button type="button" @click="deleteQualityProfile(profile.id)"
+                            x-show="!profile.is_default"
+                            class="px-2.5 py-1 rounded text-xs text-rose-400 hover:text-rose-300 hover:bg-rose-500/10 transition flex items-center space-x-1">
+                      <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path></svg>
+                      <span>Delete</span>
+                    </button>
+                  </div>
+                </div>
+              </template>
+            </div>
+
+            <!-- Live Release Title Tester Widget -->
+            <div class="glass-panel rounded-2xl p-5 border border-slate-800 space-y-4">
+              <div class="flex items-center space-x-3">
+                <div class="w-8 h-8 rounded-lg bg-amber-500/10 border border-amber-500/20 text-[#e5a00d] flex items-center justify-center">
+                  <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4"></path></svg>
+                </div>
+                <div>
+                  <h3 class="text-sm font-bold text-white">Live Release Title Tester</h3>
+                  <p class="text-xs text-slate-400">Evaluate sample scene and P2P release titles against quality profiles in real time</p>
+                </div>
+              </div>
+
+              <div class="grid grid-cols-1 md:grid-cols-12 gap-3">
+                <div class="md:col-span-8">
+                  <input type="text"
+                         x-model="testerInput"
+                         @keydown.enter.prevent="testReleaseTitle()"
+                         placeholder="e.g. Daft Punk - Discovery (2001) [FLAC 24-96] [WEB]"
+                         class="w-full px-3.5 py-2 bg-slate-900 border border-slate-700/80 rounded-lg text-xs font-mono text-white placeholder-slate-500 focus:outline-none focus:border-[#e5a00d] transition">
+                </div>
+                <div class="md:col-span-3">
+                  <select x-model="testerProfileId"
+                          class="w-full px-3 py-2 bg-slate-900 border border-slate-700/80 rounded-lg text-xs text-white focus:outline-none focus:border-[#e5a00d] transition">
+                    <template x-for="p in qualityProfiles" :key="p.id">
+                      <option :value="p.id" x-text="p.name + (p.is_default ? ' (Default)' : '')"></option>
+                    </template>
+                  </select>
+                </div>
+                <div class="md:col-span-1">
+                  <button type="button"
+                          @click="testReleaseTitle()"
+                          :disabled="isTestingTitle || !testerInput"
+                          class="w-full px-3 py-2 rounded-lg bg-[#e5a00d] hover:bg-[#cc8f0c] text-slate-950 text-xs font-bold transition flex items-center justify-center disabled:opacity-50 shadow-md">
+                    <svg x-show="isTestingTitle" class="w-3.5 h-3.5 animate-spin mr-1" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>
+                    <span x-text="isTestingTitle ? '...' : 'Evaluate'"></span>
+                  </button>
+                </div>
+              </div>
+
+              <!-- Tester Evaluation Result -->
+              <div x-show="testerResult" class="p-4 rounded-xl border bg-slate-950/60 space-y-3"
+                   :class="testerResult?.evaluation?.is_acceptable ? 'border-emerald-500/40' : 'border-rose-500/40'">
+                <div class="flex flex-wrap items-center justify-between gap-2">
+                  <div class="flex items-center space-x-2">
+                    <span class="px-2.5 py-1 rounded text-xs font-bold uppercase tracking-wider"
+                          :class="testerResult?.evaluation?.is_acceptable ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/40' : 'bg-rose-500/20 text-rose-400 border border-rose-500/40'"
+                          x-text="testerResult?.evaluation?.is_acceptable ? 'ACCEPTED' : 'REJECTED'"></span>
+                    <span class="px-2.5 py-1 rounded text-xs font-mono font-bold bg-slate-800 text-amber-400 border border-slate-700"
+                          x-text="'Score: ' + (testerResult?.evaluation?.score ?? 0)"></span>
+                    <span class="px-2 py-0.5 rounded text-[10px] font-mono"
+                          :class="testerResult?.evaluation?.meets_cutoff ? 'bg-emerald-500/10 text-emerald-300 border border-emerald-500/20' : 'bg-amber-500/10 text-amber-300 border border-amber-500/20'"
+                          x-text="testerResult?.evaluation?.meets_cutoff ? 'Meets Cutoff' : 'Below Cutoff'"></span>
+                  </div>
+
+                  <!-- Parsed format badge -->
+                  <div class="flex items-center space-x-2 text-xs font-mono text-slate-300">
+                    <span class="text-slate-500">Quality:</span>
+                    <span class="font-bold text-white px-2 py-0.5 rounded bg-slate-800" x-text="testerResult?.parsed?.quality"></span>
+                  </div>
+                </div>
+
+                <!-- Parsed Release Details -->
+                <div class="grid grid-cols-2 sm:grid-cols-4 gap-2 pt-2 border-t border-slate-800/80 text-xs font-mono text-slate-400">
+                  <div>
+                    <span class="text-slate-500 text-[10px] block uppercase">Artist:</span>
+                    <span class="text-slate-200" x-text="testerResult?.parsed?.artist || '—'"></span>
+                  </div>
+                  <div>
+                    <span class="text-slate-500 text-[10px] block uppercase">Album:</span>
+                    <span class="text-slate-200" x-text="testerResult?.parsed?.album || '—'"></span>
+                  </div>
+                  <div>
+                    <span class="text-slate-500 text-[10px] block uppercase">Year:</span>
+                    <span class="text-slate-200" x-text="testerResult?.parsed?.year || '—'"></span>
+                  </div>
+                  <div>
+                    <span class="text-slate-500 text-[10px] block uppercase">Source:</span>
+                    <span class="text-slate-200" x-text="testerResult?.parsed?.source || '—'"></span>
+                  </div>
+                </div>
+
+                <!-- Tags & Rejections -->
+                <div class="space-y-2 pt-1 text-xs">
+                  <div x-show="testerResult?.parsed?.tags && testerResult.parsed.tags.length > 0" class="flex items-center space-x-1.5 flex-wrap">
+                    <span class="text-[10px] font-bold uppercase text-slate-500">Detected Tags:</span>
+                    <template x-for="t in testerResult.parsed.tags" :key="t">
+                      <span class="px-1.5 py-0.5 rounded text-[10px] font-mono bg-cyan-500/10 text-cyan-300 border border-cyan-500/20" x-text="t"></span>
+                    </template>
+                  </div>
+
+                  <div x-show="testerResult?.evaluation?.rejection_reasons && testerResult.evaluation.rejection_reasons.length > 0" class="space-y-1">
+                    <span class="text-[10px] font-bold uppercase text-rose-400">Rejection Reasons:</span>
+                    <ul class="list-disc list-inside space-y-0.5 text-[11px] text-rose-300">
+                      <template x-for="reason in testerResult.evaluation.rejection_reasons" :key="reason">
+                        <li x-text="reason"></li>
+                      </template>
+                    </ul>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
           <!-- ================= SUB-TAB 2: SYSTEM STATUS ================= -->
           <div x-show="settingsSubTab === 'status'" class="space-y-6">
-            <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
-              <!-- Plex Server Card -->
-              <div class="glass-panel rounded-xl p-5 border border-slate-800 space-y-4">
-                <div class="flex items-center space-x-3">
-                  <div class="w-10 h-10 rounded-lg bg-amber-500/10 border border-amber-500/20 text-[#e5a00d] flex items-center justify-center">
-                    <svg class="w-5 h-5" fill="currentColor" viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 14.5v-9l6 4.5-6 4.5z"/></svg>
-                  </div>
-                  <div>
-                    <h3 class="text-sm font-bold text-white">Plex Media Server</h3>
-                    <span class="text-xs text-emerald-400 font-medium">Connected</span>
-                  </div>
-                </div>
-                <div class="space-y-2 text-xs text-slate-300">
-                  <div class="flex justify-between py-1 border-b border-slate-800">
-                    <span class="text-slate-500">Plex Home Users:</span>
-                    <span class="font-mono text-slate-200" x-text="users.length"></span>
-                  </div>
-                  <div class="flex justify-between py-1 border-b border-slate-800">
-                    <span class="text-slate-500">Tracked Playlists:</span>
-                    <span class="font-mono text-slate-200" x-text="playlists.length"></span>
-                  </div>
-                </div>
-              </div>
 
-              <!-- Lidarr Card -->
-              <div class="glass-panel rounded-xl p-5 border border-slate-800 space-y-4">
-                <div class="flex items-center space-x-3">
-                  <div class="w-10 h-10 rounded-lg bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 flex items-center justify-center">
-                    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path></svg>
-                  </div>
-                  <div>
-                    <h3 class="text-sm font-bold text-white">Lidarr Integration</h3>
-                    <span class="text-xs" :class="lidarrConfig.configured ? 'text-emerald-400' : 'text-slate-500'" x-text="lidarrConfig.configured ? 'Active' : 'Unconfigured'"></span>
-                  </div>
-                </div>
-                <div class="space-y-2 text-xs text-slate-300">
-                  <div class="flex justify-between py-1 border-b border-slate-800">
-                    <span class="text-slate-500">Queue Status:</span>
-                    <span class="font-mono text-slate-200" x-text="lidarrQueue.is_running ? 'Trickling' : 'Idle'"></span>
-                  </div>
-                  <div class="flex justify-between py-1 border-b border-slate-800">
-                    <span class="text-slate-500">Pacing Delay:</span>
-                    <span class="font-mono text-slate-200" x-text="lidarrQueue.delay_seconds + 's'"></span>
-                  </div>
-                </div>
+            <!-- Top Action Bar -->
+            <div class="glass-panel rounded-2xl p-5 border border-slate-800 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+              <div>
+                <h2 class="text-lg font-bold text-white flex items-center space-x-2">
+                  <svg class="w-5 h-5 text-[#e5a00d]" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z"></path></svg>
+                  <span>System Diagnostics & Telemetry</span>
+                </h2>
+                <p class="text-xs text-slate-400 mt-1">Real-time health, storage utilization, service ping tests, and worker heartbeats</p>
               </div>
-
-              <!-- Storage Card -->
-              <div class="glass-panel rounded-xl p-5 border border-slate-800 space-y-4">
-                <div class="flex items-center space-x-3">
-                  <div class="w-10 h-10 rounded-lg bg-blue-500/10 border border-blue-500/20 text-blue-400 flex items-center justify-center">
-                    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z"></path></svg>
-                  </div>
-                  <div>
-                    <h3 class="text-sm font-bold text-white">Storage & Sandboxing</h3>
-                    <span class="text-xs text-emerald-400 font-medium">Isolated</span>
-                  </div>
-                </div>
-                <div class="space-y-2 text-xs text-slate-300">
-                  <div class="flex justify-between py-1 border-b border-slate-800">
-                    <span class="text-slate-500">Raw Media Mount:</span>
-                    <span class="text-slate-400 font-mono">None (Zero Raw Mount)</span>
-                  </div>
-                  <div class="flex justify-between py-1 border-b border-slate-800">
-                    <span class="text-slate-500">App Database:</span>
-                    <span class="text-slate-400 font-mono">/data/sync_db.sqlite</span>
-                  </div>
-                </div>
+              <div class="flex items-center space-x-3">
+                <template x-if="systemStatusLastUpdated">
+                  <span class="text-xs text-slate-400 font-mono" x-text="'Refreshed: ' + systemStatusLastUpdated"></span>
+                </template>
+                <button @click="loadSystemStatus()"
+                        :disabled="isLoadingSystemStatus"
+                        class="px-4 py-2 bg-slate-800 hover:bg-slate-700 disabled:opacity-50 text-slate-200 text-xs font-semibold rounded-xl border border-slate-700/80 transition flex items-center space-x-2">
+                  <svg :class="isLoadingSystemStatus ? 'animate-spin' : ''" class="w-4 h-4 text-[#e5a00d]" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path></svg>
+                  <span x-text="isLoadingSystemStatus ? 'Probing Services...' : 'Refresh Diagnostics'"></span>
+                </button>
               </div>
             </div>
 
-            <!-- Arr-Style Naming Schemes Preview -->
-            <div class="glass-panel rounded-xl p-5 border border-slate-800 space-y-3">
-              <h3 class="text-sm font-bold text-white">Arr-Style Naming Scheme Preview</h3>
-              <p class="text-xs text-slate-400">TrackSeerr interfaces with Lidarr using standard Arr directory hierarchy conventions:</p>
-              <div class="p-3 bg-slate-950 rounded-lg border border-slate-800 font-mono text-xs text-amber-400 select-all">
-                {Artist Name}/{Album Title} ({Release Year})/{track:00} - {Track Title}
-              </div>
+            <!-- Error Banner -->
+            <div x-show="systemStatusError" class="p-4 rounded-xl bg-rose-500/10 border border-rose-500/20 text-rose-300 text-xs flex items-center space-x-3">
+              <svg class="w-5 h-5 flex-shrink-0 text-rose-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"></path></svg>
+              <div class="flex-1" x-text="systemStatusError"></div>
+              <button @click="loadSystemStatus()" class="px-2.5 py-1 bg-rose-500/20 hover:bg-rose-500/30 text-rose-200 rounded font-medium text-xs">Retry</button>
             </div>
+
+            <!-- Loading Skeleton -->
+            <div x-show="isLoadingSystemStatus && !systemStatus" class="glass-panel rounded-2xl p-12 border border-slate-800 text-center space-y-3">
+              <div class="inline-block animate-spin rounded-full h-8 w-8 border-t-2 border-b-2 border-[#e5a00d]"></div>
+              <p class="text-sm text-slate-400">Probing local storage mounts, Plex server, download clients, and indexers...</p>
+            </div>
+
+            <template x-if="systemStatus">
+              <div class="space-y-6">
+
+                <!-- 1. Environment & Runtime Grid -->
+                <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+                  <!-- App Version & Role -->
+                  <div class="glass-panel rounded-xl p-4 border border-slate-800 space-y-2">
+                    <div class="flex items-center justify-between">
+                      <span class="text-xs font-semibold uppercase tracking-wider text-slate-400">TrackSeerr App</span>
+                      <span class="px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider bg-amber-500/20 text-[#e5a00d] border border-amber-500/30" x-text="systemStatus.environment.role"></span>
+                    </div>
+                    <div class="text-xl font-bold font-mono text-white" x-text="'v' + systemStatus.environment.version"></div>
+                    <div class="text-[11px] text-slate-400 truncate" :title="systemStatus.environment.platform" x-text="systemStatus.environment.platform"></div>
+                  </div>
+
+                  <!-- Python & SQLite Runtime -->
+                  <div class="glass-panel rounded-xl p-4 border border-slate-800 space-y-2">
+                    <div class="flex items-center justify-between">
+                      <span class="text-xs font-semibold uppercase tracking-wider text-slate-400">Engines</span>
+                      <span class="px-2 py-0.5 rounded text-[10px] font-medium bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">Python 3.12</span>
+                    </div>
+                    <div class="flex justify-between text-xs text-slate-300 pt-1">
+                      <span class="text-slate-400">Python:</span>
+                      <span class="font-mono text-white" x-text="systemStatus.environment.python_version"></span>
+                    </div>
+                    <div class="flex justify-between text-xs text-slate-300">
+                      <span class="text-slate-400">SQLite:</span>
+                      <span class="font-mono text-white" x-text="systemStatus.database.sqlite_version"></span>
+                    </div>
+                  </div>
+
+                  <!-- Container Uptime -->
+                  <div class="glass-panel rounded-xl p-4 border border-slate-800 space-y-2">
+                    <div class="flex items-center justify-between">
+                      <span class="text-xs font-semibold uppercase tracking-wider text-slate-400">Uptime</span>
+                      <span class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
+                    </div>
+                    <div class="text-xl font-bold font-mono text-white" x-text="formatUptime(systemStatus.environment.uptime_seconds)"></div>
+                    <div class="text-[11px] text-slate-400 font-mono" x-text="systemStatus.environment.uptime_seconds + 's total'"></div>
+                  </div>
+
+                  <!-- Database Storage -->
+                  <div class="glass-panel rounded-xl p-4 border border-slate-800 space-y-2">
+                    <div class="flex items-center justify-between">
+                      <span class="text-xs font-semibold uppercase tracking-wider text-slate-400">Database</span>
+                      <span class="font-mono text-xs font-bold text-white" x-text="formatBytes(systemStatus.database.size_bytes)"></span>
+                    </div>
+                    <div class="text-[11px] text-slate-400 font-mono truncate" :title="systemStatus.database.path" x-text="systemStatus.database.path"></div>
+                    <div class="text-[11px] text-slate-400 flex flex-wrap gap-x-2 gap-y-0.5">
+                      <span><b class="text-slate-200" x-text="systemStatus.database.table_counts.users || 0"></b> users</span>
+                      <span>•</span>
+                      <span><b class="text-slate-200" x-text="systemStatus.database.table_counts.playlists || 0"></b> lists</span>
+                      <span>•</span>
+                      <span><b class="text-slate-200" x-text="systemStatus.database.table_counts.requests || 0"></b> reqs</span>
+                    </div>
+                  </div>
+                </div>
+
+                <!-- 2. Storage & Mounts Utilization -->
+                <div class="glass-panel rounded-2xl p-5 border border-slate-800 space-y-4">
+                  <div class="flex items-center justify-between">
+                    <div class="flex items-center space-x-3">
+                      <div class="w-8 h-8 rounded-lg bg-blue-500/10 border border-blue-500/20 text-blue-400 flex items-center justify-center">
+                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z"></path></svg>
+                      </div>
+                      <div>
+                        <h3 class="text-sm font-bold text-white">Storage Volumes & Mounts</h3>
+                        <p class="text-xs text-slate-400">Live disk capacity, usage, and available free space</p>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <template x-for="item in systemStatus.storage" :key="item.path">
+                      <div class="p-4 rounded-xl bg-slate-900/60 border border-slate-800 space-y-2">
+                        <div class="flex items-center justify-between">
+                          <span class="text-xs font-semibold text-white" x-text="item.label"></span>
+                          <span class="text-xs font-mono font-bold"
+                                :class="item.percent_used >= 90 ? 'text-rose-400' : (item.percent_used >= 80 ? 'text-amber-400' : 'text-emerald-400')"
+                                x-text="item.percent_used + '%'"></span>
+                        </div>
+                        <div class="text-[11px] font-mono text-slate-400 truncate" :title="item.path" x-text="item.path"></div>
+                        <!-- Progress bar -->
+                        <div class="w-full bg-slate-800 rounded-full h-2 overflow-hidden">
+                          <div class="h-2 rounded-full transition-all duration-500"
+                               :style="'width: ' + Math.min(item.percent_used, 100) + '%'"
+                               :class="item.percent_used >= 90 ? 'bg-rose-500' : (item.percent_used >= 80 ? 'bg-amber-500' : 'bg-emerald-500')"></div>
+                        </div>
+                        <div class="flex justify-between text-[11px] text-slate-400 font-mono">
+                          <span x-text="formatBytes(item.used_bytes) + ' used / ' + formatBytes(item.total_bytes)"></span>
+                          <span class="text-slate-300" x-text="formatBytes(item.free_bytes) + ' free'"></span>
+                        </div>
+                      </div>
+                    </template>
+                  </div>
+                </div>
+
+                <!-- 3. Services Connectivity: Plex, Clients, Indexers -->
+                <div class="space-y-4">
+                  <h3 class="text-sm font-bold uppercase tracking-wider text-slate-400">Services & Infrastructure</h3>
+                  
+                  <!-- Plex Server Card -->
+                  <div class="glass-panel rounded-2xl p-5 border border-slate-800 space-y-4">
+                    <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                      <div class="flex items-center space-x-3">
+                        <div class="w-10 h-10 rounded-xl bg-amber-500/10 border border-amber-500/20 text-[#e5a00d] flex items-center justify-center">
+                          <svg class="w-6 h-6" fill="currentColor" viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 14.5v-9l6 4.5-6 4.5z"/></svg>
+                        </div>
+                        <div>
+                          <div class="flex items-center space-x-2">
+                            <h4 class="text-sm font-bold text-white">Plex Media Server</h4>
+                            <span class="px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider"
+                                  :class="systemStatus.plex.online ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30' : 'bg-rose-500/20 text-rose-400 border border-rose-500/30'"
+                                  x-text="systemStatus.plex.online ? 'Online' : 'Offline'"></span>
+                          </div>
+                          <span class="text-xs font-mono text-slate-400" x-text="systemStatus.plex.url || 'Not configured'"></span>
+                        </div>
+                      </div>
+                      <div class="flex items-center space-x-4 text-xs">
+                        <template x-if="systemStatus.plex.latency_ms !== null && systemStatus.plex.latency_ms !== undefined">
+                          <div class="flex items-center space-x-1.5 bg-slate-900/80 px-2.5 py-1 rounded-lg border border-slate-800">
+                            <span class="text-slate-400">Latency:</span>
+                            <span class="font-mono font-semibold text-emerald-400" x-text="systemStatus.plex.latency_ms + ' ms'"></span>
+                          </div>
+                        </template>
+                      </div>
+                    </div>
+                    
+                    <div class="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
+                      <div class="p-3 bg-slate-900/50 rounded-xl border border-slate-800/80">
+                        <span class="text-slate-400 block text-[11px]">Music Section</span>
+                        <span class="font-medium text-slate-200" x-text="systemStatus.plex.music_section || 'Default'"></span>
+                      </div>
+                      <div class="p-3 bg-slate-900/50 rounded-xl border border-slate-800/80">
+                        <span class="text-slate-400 block text-[11px]">Home Users</span>
+                        <span class="font-mono font-bold text-white" x-text="systemStatus.plex.user_count"></span>
+                      </div>
+                      <div class="p-3 bg-slate-900/50 rounded-xl border border-slate-800/80">
+                        <span class="text-slate-400 block text-[11px]">Sync Playlists</span>
+                        <span class="font-mono font-bold text-white" x-text="systemStatus.plex.playlist_count"></span>
+                      </div>
+                      <div class="p-3 bg-slate-900/50 rounded-xl border border-slate-800/80">
+                        <span class="text-slate-400 block text-[11px]">Health Message</span>
+                        <span class="text-slate-300 truncate block" :title="systemStatus.plex.message" x-text="systemStatus.plex.message || 'OK'"></span>
+                      </div>
+                    </div>
+                  </div>
+
+                  <!-- Download Clients Grid -->
+                  <div class="glass-panel rounded-2xl p-5 border border-slate-800 space-y-4">
+                    <div class="flex items-center justify-between">
+                      <div class="flex items-center space-x-3">
+                        <div class="w-8 h-8 rounded-lg bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 flex items-center justify-center">
+                          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"></path></svg>
+                        </div>
+                        <div>
+                          <h4 class="text-sm font-bold text-white">Download Clients (Acquisition Drivers)</h4>
+                          <p class="text-xs text-slate-400">Live pings to slskd, SABnzbd, qBittorrent, and Lidarr</p>
+                        </div>
+                      </div>
+                      <span class="text-xs text-slate-400 font-mono" x-text="systemStatus.download_clients.length + ' configured'"></span>
+                    </div>
+
+                    <div x-show="systemStatus.download_clients.length === 0" class="p-4 rounded-xl bg-slate-900/40 border border-slate-800 text-center text-xs text-slate-400">
+                      No download clients configured. Add slskd, SABnzbd, or qBittorrent in the Clients tab.
+                    </div>
+
+                    <div x-show="systemStatus.download_clients.length > 0" class="overflow-x-auto">
+                      <table class="w-full text-left text-xs">
+                        <thead>
+                          <tr class="border-b border-slate-800 text-slate-400 uppercase tracking-wider text-[10px]">
+                            <th class="pb-2">Client / Driver</th>
+                            <th class="pb-2">Host URL</th>
+                            <th class="pb-2">Status</th>
+                            <th class="pb-2">Latency</th>
+                            <th class="pb-2">Message</th>
+                          </tr>
+                        </thead>
+                        <tbody class="divide-y divide-slate-800/60 font-mono">
+                          <template x-for="c in systemStatus.download_clients" :key="c.id">
+                            <tr class="hover:bg-slate-800/30">
+                              <td class="py-2.5 font-sans">
+                                <div class="font-bold text-white" x-text="c.name"></div>
+                                <span class="px-1.5 py-0.5 rounded text-[10px] uppercase font-mono bg-slate-800 text-slate-300" x-text="c.service_type"></span>
+                              </td>
+                              <td class="py-2.5 text-slate-300 text-[11px]" x-text="c.host_url"></td>
+                              <td class="py-2.5 font-sans">
+                                <template x-if="!c.enabled">
+                                  <span class="px-2 py-0.5 rounded text-[10px] font-bold uppercase bg-slate-800 text-slate-400 border border-slate-700">Disabled</span>
+                                </template>
+                                <template x-if="c.enabled">
+                                  <span class="px-2 py-0.5 rounded text-[10px] font-bold uppercase"
+                                        :class="c.online ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30' : 'bg-rose-500/20 text-rose-400 border border-rose-500/30'"
+                                        x-text="c.online ? 'Online' : 'Offline'"></span>
+                                </template>
+                              </td>
+                              <td class="py-2.5 text-slate-300 text-[11px]" x-text="c.latency_ms !== null ? c.latency_ms + ' ms' : '—'"></td>
+                              <td class="py-2.5 text-slate-400 text-[11px] font-sans truncate max-w-xs" :title="c.message" x-text="c.message"></td>
+                            </tr>
+                          </template>
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+
+                  <!-- Indexers Grid -->
+                  <div class="glass-panel rounded-2xl p-5 border border-slate-800 space-y-4">
+                    <div class="flex items-center justify-between">
+                      <div class="flex items-center space-x-3">
+                        <div class="w-8 h-8 rounded-lg bg-indigo-500/10 border border-indigo-500/20 text-indigo-400 flex items-center justify-center">
+                          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"></path></svg>
+                        </div>
+                        <div>
+                          <h4 class="text-sm font-bold text-white">Indexers (Torznab / Newznab)</h4>
+                          <p class="text-xs text-slate-400">Live capability & connectivity tests against upstream search indexers</p>
+                        </div>
+                      </div>
+                      <span class="text-xs text-slate-400 font-mono" x-text="systemStatus.indexers.length + ' configured'"></span>
+                    </div>
+
+                    <div x-show="systemStatus.indexers.length === 0" class="p-4 rounded-xl bg-slate-900/40 border border-slate-800 text-center text-xs text-slate-400">
+                      No indexers configured. Add Torznab or Newznab indexers in the Indexers tab.
+                    </div>
+
+                    <div x-show="systemStatus.indexers.length > 0" class="overflow-x-auto">
+                      <table class="w-full text-left text-xs">
+                        <thead>
+                          <tr class="border-b border-slate-800 text-slate-400 uppercase tracking-wider text-[10px]">
+                            <th class="pb-2">Indexer / Protocol</th>
+                            <th class="pb-2">Host URL</th>
+                            <th class="pb-2">Status</th>
+                            <th class="pb-2">Latency</th>
+                            <th class="pb-2">Message</th>
+                          </tr>
+                        </thead>
+                        <tbody class="divide-y divide-slate-800/60 font-mono">
+                          <template x-for="idx in systemStatus.indexers" :key="idx.id">
+                            <tr class="hover:bg-slate-800/30">
+                              <td class="py-2.5 font-sans">
+                                <div class="font-bold text-white" x-text="idx.name"></div>
+                                <span class="px-1.5 py-0.5 rounded text-[10px] uppercase font-mono bg-slate-800 text-slate-300" x-text="idx.service_type"></span>
+                              </td>
+                              <td class="py-2.5 text-slate-300 text-[11px]" x-text="idx.host_url"></td>
+                              <td class="py-2.5 font-sans">
+                                <template x-if="!idx.enabled">
+                                  <span class="px-2 py-0.5 rounded text-[10px] font-bold uppercase bg-slate-800 text-slate-400 border border-slate-700">Disabled</span>
+                                </template>
+                                <template x-if="idx.enabled">
+                                  <span class="px-2 py-0.5 rounded text-[10px] font-bold uppercase"
+                                        :class="idx.online ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30' : 'bg-rose-500/20 text-rose-400 border border-rose-500/30'"
+                                        x-text="idx.online ? 'Online' : 'Offline'"></span>
+                                </template>
+                              </td>
+                              <td class="py-2.5 text-slate-300 text-[11px]" x-text="idx.latency_ms !== null ? idx.latency_ms + ' ms' : '—'"></td>
+                              <td class="py-2.5 text-slate-400 text-[11px] font-sans truncate max-w-xs" :title="idx.message" x-text="idx.message"></td>
+                            </tr>
+                          </template>
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                </div>
+
+                <!-- 4. Background Workers Heartbeat -->
+                <div class="glass-panel rounded-2xl p-5 border border-slate-800 space-y-4">
+                  <div class="flex items-center space-x-3">
+                    <div class="w-8 h-8 rounded-lg bg-cyan-500/10 border border-cyan-500/20 text-cyan-400 flex items-center justify-center">
+                      <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path></svg>
+                    </div>
+                    <div>
+                      <h3 class="text-sm font-bold text-white">Background Workers & Daemons</h3>
+                      <p class="text-xs text-slate-400">Live operational state of acquisition worker, Lidarr trickle daemon, and sync coordinator</p>
+                    </div>
+                  </div>
+
+                  <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                    <!-- Acquisition Worker -->
+                    <div class="p-4 rounded-xl bg-slate-900/60 border border-slate-800 space-y-3">
+                      <div class="flex items-center justify-between">
+                        <span class="text-xs font-bold text-white">Acquisition Worker</span>
+                        <span class="px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider"
+                              :class="systemStatus.workers.acquisition_worker.running ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30' : 'bg-slate-800 text-slate-400 border border-slate-700'"
+                              x-text="systemStatus.workers.acquisition_worker.running ? 'Running' : 'Stopped'"></span>
+                      </div>
+                      <p class="text-[11px] text-slate-400">Continuous download progress polling and atomic staging import daemon.</p>
+                      <div class="text-[11px] text-slate-300 flex justify-between pt-1 border-t border-slate-800/80">
+                        <span class="text-slate-500">Service:</span>
+                        <span class="font-mono text-slate-200">poll_loop (5s)</span>
+                      </div>
+                    </div>
+
+                    <!-- Lidarr Worker -->
+                    <div class="p-4 rounded-xl bg-slate-900/60 border border-slate-800 space-y-3">
+                      <div class="flex items-center justify-between">
+                        <span class="text-xs font-bold text-white">Lidarr Trickle Worker</span>
+                        <span class="px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider"
+                              :class="systemStatus.workers.lidarr_worker.is_running ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30' : (systemStatus.workers.lidarr_worker.is_paused ? 'bg-amber-500/20 text-amber-400 border border-amber-500/30' : 'bg-slate-800 text-slate-400 border border-slate-700')"
+                              x-text="systemStatus.workers.lidarr_worker.is_running ? 'Trickling' : (systemStatus.workers.lidarr_worker.is_paused ? 'Paused' : 'Idle')"></span>
+                      </div>
+                      <p class="text-[11px] text-slate-400">Paced Lidarr injection queue preventing rate-limiting.</p>
+                      <div class="text-[11px] text-slate-300 flex justify-between pt-1 border-t border-slate-800/80">
+                        <span class="text-slate-500">Queue Depth:</span>
+                        <span class="font-mono text-slate-200" x-text="(systemStatus.workers.lidarr_worker.queue_size || 0) + ' items'"></span>
+                      </div>
+                    </div>
+
+                    <!-- Sync Coordinator -->
+                    <div class="p-4 rounded-xl bg-slate-900/60 border border-slate-800 space-y-3">
+                      <div class="flex items-center justify-between">
+                        <span class="text-xs font-bold text-white">Sync Coordinator</span>
+                        <span class="px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider"
+                              :class="systemStatus.workers.sync_coordinator.is_syncing ? 'bg-amber-500/20 text-amber-400 border border-amber-500/30 animate-pulse' : 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30'"
+                              x-text="systemStatus.workers.sync_coordinator.is_syncing ? 'Syncing' : 'Ready'"></span>
+                      </div>
+                      <p class="text-[11px] text-slate-400">Playlist synchronization and differential track tracking pipeline.</p>
+                      <div class="text-[11px] text-slate-300 flex justify-between pt-1 border-t border-slate-800/80">
+                        <span class="text-slate-500">Last Sync:</span>
+                        <span class="font-mono text-slate-200 truncate max-w-[120px]" :title="systemStatus.workers.sync_coordinator.last_run_at" x-text="systemStatus.workers.sync_coordinator.last_run_at || 'Never'"></span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+              </div>
+            </template>
+
           </div>
         </div>
 
@@ -2760,6 +3285,18 @@
                       <span>Match</span>
                     </button>
 
+                    <!-- Interactive Release Search Button for Admins -->
+                    <template x-if="currentUser?.is_admin">
+                      <button @click="openInteractiveSearchModal({ artist: track.artist, title: track.title, album: track.album, item_type: 'track' })"
+                              title="Interactive Release Search across Indexers and Soulseek"
+                              class="inline-flex items-center space-x-1 text-[11px] text-sky-400 hover:text-sky-300 font-semibold">
+                        <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0zM10 7v3m0 0v3m0-3h3m-3 0H7"></path>
+                        </svg>
+                        <span>Find</span>
+                      </button>
+                    </template>
+
                     <template x-if="lidarrConfig && lidarrConfig.configured">
                       <span class="inline-flex items-center">
                         <template x-if="track.lidarr_status === 'monitored'">
@@ -3034,6 +3571,26 @@
             </div>
           </div>
 
+          <!-- Category -->
+          <div class="space-y-1">
+            <label class="block text-xs font-semibold uppercase tracking-wider text-slate-400">Category</label>
+            <input type="text" 
+                   x-model="clientForm.category" 
+                   placeholder="music" 
+                   class="w-full px-3 py-2 bg-slate-900 border border-slate-700/80 rounded-lg text-xs text-white placeholder-slate-500 focus:outline-none focus:border-[#e5a00d] transition">
+            <p class="text-[11px] text-slate-500">Download category or label applied in the client (defaults to "music")</p>
+          </div>
+
+          <!-- Remote Path Mappings -->
+          <div class="space-y-1">
+            <label class="block text-xs font-semibold uppercase tracking-wider text-slate-400">Remote Path Mappings</label>
+            <textarea x-model="clientForm.remote_path_mappings_text" 
+                      rows="2" 
+                      placeholder="/downloads/qbittorrent -> /downloads" 
+                      class="w-full p-2 bg-slate-900 border border-slate-700/80 rounded-lg text-xs font-mono text-slate-200 placeholder-slate-600 focus:outline-none focus:border-[#e5a00d] transition"></textarea>
+            <p class="text-[11px] text-slate-500">Translate cross-container or remote download paths to local mount paths (e.g. <code>/remote/path -&gt; /local/path</code>, one per line)</p>
+          </div>
+
           <!-- Advanced Extra Settings JSON (Collapsible/Optional) -->
           <div class="space-y-1 pt-1">
             <details class="group text-xs text-slate-400">
@@ -3251,6 +3808,414 @@
           </div>
         </div>
       </form>
+    </div>
+  </div>
+
+  <!-- ================= ADD / EDIT QUALITY PROFILE MODAL ================= -->
+  <div x-show="isProfileModalOpen"
+       x-transition.opacity.duration.200ms
+       class="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 md:p-6 bg-slate-950/80 backdrop-blur-sm overflow-hidden"
+       style="display: none;">
+    <div @click.away="closeProfileModal()"
+         class="glass-modal rounded-2xl w-full max-w-xl max-h-[90dvh] sm:max-h-[85vh] flex flex-col shadow-2xl border border-slate-700/80 overflow-hidden">
+
+      <!-- Fixed Header: flex-shrink-0 -->
+      <div class="flex items-center justify-between border-b border-slate-800 p-4 sm:p-5 flex-shrink-0">
+        <div>
+          <h3 class="text-base sm:text-lg font-bold text-white flex items-center space-x-2">
+            <span x-text="profileForm.id ? 'Edit Quality Profile' : 'Add Quality Profile'"></span>
+          </h3>
+          <p class="text-xs text-slate-400">Configure Arr-grade audio format preferences, cutoff, and scoring</p>
+        </div>
+        <button @click="closeProfileModal()" class="p-1.5 rounded-lg text-slate-400 hover:text-white transition flex-shrink-0">
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
+          </svg>
+        </button>
+      </div>
+
+      <!-- Modal Body / Form -->
+      <form @submit.prevent="saveQualityProfile()" class="flex flex-col min-h-0 flex-1 overflow-hidden">
+        <!-- Scrollable Body: flex-1 min-h-0 overflow-y-auto overscroll-contain -->
+        <div class="p-4 sm:p-6 overflow-y-auto overscroll-contain flex-1 min-h-0 space-y-4 modal-body-scroll">
+          <!-- Profile Name -->
+          <div class="space-y-1">
+            <label class="block text-xs font-semibold uppercase tracking-wider text-slate-400">Name</label>
+            <input type="text"
+                   x-model="profileForm.name"
+                   required
+                   placeholder="e.g. Lossless (FLAC), Standard MP3"
+                   class="w-full px-3 py-2 bg-slate-900 border border-slate-700/80 rounded-lg text-xs text-white placeholder-slate-500 focus:outline-none focus:border-[#e5a00d] transition">
+          </div>
+
+          <!-- Cutoff Format & Default Toggle -->
+          <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div class="space-y-1">
+              <label class="block text-xs font-semibold uppercase tracking-wider text-slate-400">Cutoff Format</label>
+              <select x-model="profileForm.cutoff"
+                      required
+                      class="w-full px-3 py-2 bg-slate-900 border border-slate-700/80 rounded-lg text-xs text-white focus:outline-none focus:border-[#e5a00d] transition">
+                <option value="FLAC 24bit">FLAC 24bit</option>
+                <option value="FLAC 16bit">FLAC 16bit</option>
+                <option value="MP3 320">MP3 320</option>
+                <option value="AAC 256">AAC 256</option>
+                <option value="MP3 V0">MP3 V0</option>
+                <option value="MP3 192">MP3 192</option>
+                <option value="MP3 V2">MP3 V2</option>
+              </select>
+              <p class="text-[11px] text-slate-500">TrackSeerr stops upgrading releases once this format is matched.</p>
+            </div>
+            <div class="flex items-center pt-5">
+              <label class="flex items-center space-x-2 cursor-pointer select-none">
+                <input type="checkbox"
+                       x-model="profileForm.is_default"
+                       class="w-4 h-4 rounded bg-slate-900 border-slate-700 text-[#e5a00d] focus:ring-[#e5a00d] focus:ring-offset-slate-950">
+                <span class="text-xs text-slate-200">Default Profile</span>
+              </label>
+            </div>
+          </div>
+
+          <!-- Formats Checklist -->
+          <div class="space-y-2">
+            <label class="block text-xs font-semibold uppercase tracking-wider text-slate-400">Allowed Formats & Weights</label>
+            <div class="divide-y divide-slate-800 rounded-lg border border-slate-800 bg-slate-900/60 p-2">
+              <template x-for="(item, idx) in profileForm.items" :key="item.quality">
+                <div class="py-2 px-1 flex items-center justify-between">
+                  <label class="flex items-center space-x-2.5 cursor-pointer">
+                    <input type="checkbox"
+                           x-model="item.allowed"
+                           class="w-4 h-4 rounded bg-slate-900 border-slate-700 text-[#e5a00d] focus:ring-[#e5a00d]">
+                    <span class="text-xs font-mono font-medium text-slate-200" x-text="item.quality"></span>
+                  </label>
+                  <div class="flex items-center space-x-2">
+                    <span class="text-[10px] text-slate-500 uppercase">Weight:</span>
+                    <input type="number"
+                           x-model.number="item.weight"
+                           min="0"
+                           max="2000"
+                           class="w-20 px-2 py-1 bg-slate-950 border border-slate-800 rounded text-xs font-mono text-right text-slate-200 focus:outline-none focus:border-[#e5a00d]">
+                  </div>
+                </div>
+              </template>
+            </div>
+          </div>
+
+          <!-- Preferred Tags -->
+          <div class="space-y-1">
+            <label class="block text-xs font-semibold uppercase tracking-wider text-slate-400">Preferred Tags (Comma-separated)</label>
+            <input type="text"
+                   x-model="preferredTagsInput"
+                   placeholder="cd, web, vinyl, remaster"
+                   class="w-full px-3 py-2 bg-slate-900 border border-slate-700/80 rounded-lg text-xs font-mono text-white placeholder-slate-500 focus:outline-none focus:border-[#e5a00d] transition">
+            <p class="text-[11px] text-slate-500">+50 score bonus for each preferred keyword present in release title</p>
+          </div>
+
+          <!-- Ignored Tags -->
+          <div class="space-y-1">
+            <label class="block text-xs font-semibold uppercase tracking-wider text-slate-400">Ignored / Rejected Tags (Comma-separated)</label>
+            <input type="text"
+                   x-model="ignoredTagsInput"
+                   placeholder="live, bootleg, tribute, karaoke"
+                   class="w-full px-3 py-2 bg-slate-900 border border-slate-700/80 rounded-lg text-xs font-mono text-white placeholder-slate-500 focus:outline-none focus:border-[#e5a00d] transition">
+            <p class="text-[11px] text-slate-500">Releases matching any of these keywords will be rejected</p>
+          </div>
+
+          <!-- Size Limits -->
+          <div class="grid grid-cols-2 gap-3">
+            <div class="space-y-1">
+              <label class="block text-xs font-semibold uppercase tracking-wider text-slate-400">Min Size (MB)</label>
+              <input type="number"
+                     step="0.1"
+                     x-model.number="profileForm.min_size_mb"
+                     placeholder="e.g. 10"
+                     class="w-full px-3 py-2 bg-slate-900 border border-slate-700/80 rounded-lg text-xs font-mono text-white focus:outline-none focus:border-[#e5a00d] transition">
+            </div>
+            <div class="space-y-1">
+              <label class="block text-xs font-semibold uppercase tracking-wider text-slate-400">Max Size (MB)</label>
+              <input type="number"
+                     step="0.1"
+                     x-model.number="profileForm.max_size_mb"
+                     placeholder="e.g. 500"
+                     class="w-full px-3 py-2 bg-slate-900 border border-slate-700/80 rounded-lg text-xs font-mono text-white focus:outline-none focus:border-[#e5a00d] transition">
+            </div>
+          </div>
+        </div>
+
+        <!-- Modal Footer Actions: flex-shrink-0 -->
+        <div class="border-t border-slate-800 p-4 sm:p-5 bg-slate-900/70 flex items-center justify-end space-x-2 flex-shrink-0">
+          <button type="button"
+                  @click="closeProfileModal()"
+                  class="px-4 py-2 text-xs font-semibold rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white border border-slate-700 transition">
+            Cancel
+          </button>
+          <button type="submit"
+                  :disabled="profileSaving"
+                  class="flex items-center space-x-1.5 px-4 py-2 text-xs font-semibold rounded-lg bg-[#e5a00d] hover:bg-[#cc8f0c] text-slate-950 transition disabled:opacity-50 shadow-md">
+            <svg x-show="profileSaving" class="w-3.5 h-3.5 animate-spin text-slate-950" fill="none" viewBox="0 0 24 24">
+              <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+              <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+            </svg>
+            <span x-text="profileSaving ? 'Saving...' : 'Save Profile'"></span>
+          </button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- ================= INTERACTIVE RELEASE BROWSER MODAL (PHASE 4) ================= -->
+  <div x-show="isSearchModalOpen"
+       x-transition.opacity.duration.200ms
+       class="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 md:p-6 bg-slate-950/80 backdrop-blur-sm overflow-hidden"
+       style="display: none;">
+    <div @click.away="closeInteractiveSearchModal()"
+         class="glass-modal rounded-2xl w-full max-w-4xl max-h-[90dvh] sm:max-h-[85vh] flex flex-col shadow-2xl border border-slate-700/80 overflow-hidden">
+
+      <!-- Fixed Header: flex-shrink-0 -->
+      <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between border-b border-slate-800 p-4 sm:p-5 gap-3 flex-shrink-0 bg-slate-900/50">
+        <div class="min-w-0">
+          <h3 class="text-base sm:text-lg font-bold text-white flex items-center space-x-2">
+            <svg class="w-5 h-5 text-sky-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0zM10 7v3m0 0v3m0-3h3m-3 0H7"></path>
+            </svg>
+            <span>Interactive Release Search</span>
+          </h3>
+          <p class="text-xs text-slate-400 truncate mt-0.5" x-show="searchItem">
+            Searching for: <span class="font-semibold text-white" x-text="searchItem?.artist"></span> — <span class="text-slate-200" x-text="searchItem?.title || searchItem?.album"></span>
+            <span class="text-[10px] uppercase font-bold tracking-wider px-1.5 py-0.5 rounded bg-slate-800 text-slate-300 ml-1.5" x-text="searchItem?.item_type || 'track'"></span>
+          </p>
+        </div>
+
+        <!-- Quality Profile Selector & Re-search & Close -->
+        <div class="flex items-center space-x-2 flex-shrink-0">
+          <div class="flex items-center space-x-1.5">
+            <span class="text-[11px] text-slate-400 hidden md:inline">Profile:</span>
+            <select x-model="selectedSearchProfileId"
+                    @change="executeInteractiveSearch()"
+                    class="px-2.5 py-1.5 bg-slate-900 border border-slate-700/80 rounded-lg text-xs text-white focus:outline-none focus:border-sky-500 transition">
+              <template x-for="p in qualityProfiles" :key="p.id">
+                <option :value="p.id" x-text="p.name + (p.is_default ? ' (Default)' : '')"></option>
+              </template>
+            </select>
+          </div>
+
+          <button @click="executeInteractiveSearch()"
+                  :disabled="isSearchingReleases"
+                  title="Re-run Search"
+                  class="flex items-center space-x-1 px-3 py-1.5 text-xs font-semibold rounded-lg bg-sky-600 hover:bg-sky-500 text-white transition disabled:opacity-50 shadow">
+            <svg class="w-3.5 h-3.5" :class="isSearchingReleases ? 'animate-spin' : ''" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path>
+            </svg>
+            <span class="hidden sm:inline">Re-search</span>
+          </button>
+
+          <button @click="closeInteractiveSearchModal()"
+                  class="p-1.5 rounded-lg text-slate-400 hover:text-white transition flex-shrink-0">
+            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
+            </svg>
+          </button>
+        </div>
+      </div>
+
+      <!-- Filter & Sort Bar: flex-shrink-0 -->
+      <div class="px-4 py-2.5 bg-slate-900/80 border-b border-slate-800 flex flex-wrap items-center justify-between gap-2 flex-shrink-0 text-xs">
+        <!-- Filter pills -->
+        <div class="flex items-center space-x-1.5">
+          <span class="text-slate-500 text-[11px] mr-1">Filter:</span>
+          <button @click="searchFilter = 'all'"
+                  :class="searchFilter === 'all' ? 'bg-sky-500 text-slate-950 font-bold' : 'bg-slate-800 text-slate-400 hover:text-slate-200'"
+                  class="px-2.5 py-1 rounded-md text-[11px] transition">
+            All Releases (<span x-text="searchResults.length"></span>)
+          </button>
+          <button @click="searchFilter = 'acceptable'"
+                  :class="searchFilter === 'acceptable' ? 'bg-emerald-500 text-slate-950 font-bold' : 'bg-slate-800 text-slate-400 hover:text-slate-200'"
+                  class="px-2.5 py-1 rounded-md text-[11px] transition">
+            Acceptable Only (<span x-text="searchResults.filter(r => r.is_acceptable).length"></span>)
+          </button>
+        </div>
+
+        <!-- Sort options -->
+        <div class="flex items-center space-x-1.5">
+          <span class="text-slate-500 text-[11px]">Sort:</span>
+          <select x-model="searchSort"
+                  class="px-2 py-1 bg-slate-950 border border-slate-700/80 rounded-md text-[11px] text-slate-200 focus:outline-none focus:border-sky-500">
+            <option value="score">Highest Score</option>
+            <option value="seeders">Most Seeders</option>
+            <option value="size">Smallest Size</option>
+          </select>
+        </div>
+      </div>
+
+      <!-- Scrollable Body: modal-body-scroll overscroll-contain flex-1 min-h-0 p-4 space-y-3 -->
+      <div class="p-4 overflow-y-auto overscroll-contain flex-1 min-h-0 space-y-3 modal-body-scroll">
+        <!-- Loading Spinner -->
+        <div x-show="isSearchingReleases" class="py-16 flex flex-col items-center justify-center space-y-3">
+          <svg class="w-8 h-8 text-sky-400 animate-spin" fill="none" viewBox="0 0 24 24">
+            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+          </svg>
+          <div class="text-slate-400 text-xs font-medium">Querying configured Indexers and slskd clients...</div>
+        </div>
+
+        <!-- Error Banner -->
+        <div x-show="!isSearchingReleases && searchError"
+             class="p-4 rounded-xl bg-rose-500/10 border border-rose-500/30 text-rose-300 text-xs flex items-start space-x-2">
+          <svg class="w-4 h-4 text-rose-400 flex-shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+          </svg>
+          <div class="flex-1" x-text="searchError"></div>
+        </div>
+
+        <!-- Empty State -->
+        <div x-show="!isSearchingReleases && !searchError && filteredSearchResults().length === 0"
+             class="py-16 text-center space-y-2">
+          <svg class="w-8 h-8 text-slate-500 mx-auto" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.172 16.172a4 4 0 015.656 0M9 10h.01M15 10h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+          </svg>
+          <div class="font-medium text-white text-sm">No releases found</div>
+          <p class="text-xs text-slate-500">No matching candidates were returned by active indexers or download clients.</p>
+        </div>
+
+        <!-- Card List for Releases -->
+        <div x-show="!isSearchingReleases && filteredSearchResults().length > 0" class="space-y-3">
+          <template x-for="rel in filteredSearchResults()" :key="rel.id">
+            <div class="glass-panel rounded-xl p-3.5 border transition"
+                 :class="rel.is_acceptable ? 'border-slate-800 hover:border-slate-700 bg-slate-900/60' : 'border-rose-900/30 bg-slate-950/40 opacity-75 hover:opacity-100'">
+
+              <!-- Top row: Release title, format badge, protocol badge, indexer source badge -->
+              <div class="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-2">
+                <div class="flex-1 min-w-0">
+                  <div class="text-xs font-bold text-white break-words" x-text="rel.title"></div>
+                  <div class="flex flex-wrap items-center gap-1.5 mt-1.5">
+                    <!-- Format Quality Badge -->
+                    <span :class="{
+                            'bg-emerald-500/20 text-emerald-300 border-emerald-500/40': rel.parsed_quality.includes('FLAC'),
+                            'bg-amber-500/20 text-amber-300 border-amber-500/40': rel.parsed_quality.includes('MP3') || rel.parsed_quality.includes('320'),
+                            'bg-sky-500/20 text-sky-300 border-sky-500/40': rel.parsed_quality.includes('AAC'),
+                            'bg-slate-800 text-slate-400 border-slate-700': rel.parsed_quality === 'Unknown'
+                          }"
+                          class="px-2 py-0.5 rounded text-[10px] font-mono font-bold border"
+                          x-text="rel.parsed_quality"></span>
+
+                    <!-- Protocol Badge -->
+                    <template x-if="rel.protocol === 'torrent'">
+                      <span class="px-2 py-0.5 rounded text-[10px] font-medium bg-sky-500/20 text-sky-300 border border-sky-500/40 flex items-center space-x-1">
+                        <span>Torrent</span>
+                        <template x-if="rel.seeders !== null && rel.seeders !== undefined">
+                          <span class="font-mono" x-text="'(' + rel.seeders + 'S)'"></span>
+                        </template>
+                      </span>
+                    </template>
+                    <template x-if="rel.protocol === 'usenet'">
+                      <span class="px-2 py-0.5 rounded text-[10px] font-medium bg-purple-500/20 text-purple-300 border border-purple-500/40">
+                        Usenet
+                      </span>
+                    </template>
+                    <template x-if="rel.protocol === 'slskd' || rel.protocol === 'p2p'">
+                      <span class="px-2 py-0.5 rounded text-[10px] font-medium bg-indigo-500/20 text-indigo-300 border border-indigo-500/40">
+                        Soulseek
+                      </span>
+                    </template>
+
+                    <!-- Indexer Source Badge -->
+                    <span class="px-1.5 py-0.5 rounded text-[10px] bg-slate-800 text-slate-400 border border-slate-700"
+                          x-text="rel.indexer_name"></span>
+
+                    <!-- Source Tag (e.g. WEB, CD) -->
+                    <template x-if="rel.source">
+                      <span class="px-1.5 py-0.5 rounded text-[10px] bg-slate-800/80 text-slate-300"
+                            x-text="rel.source"></span>
+                    </template>
+
+                    <!-- Extra Tags -->
+                    <template x-for="tag in (rel.tags || [])" :key="tag">
+                      <span class="px-1.5 py-0.5 rounded text-[9px] bg-slate-800 text-slate-400 uppercase tracking-wider"
+                            x-text="tag"></span>
+                    </template>
+                  </div>
+                </div>
+
+                <!-- Action Button: Grab Release -->
+                <div class="flex-shrink-0 self-end sm:self-center mt-2 sm:mt-0">
+                  <button @click="grabRelease(rel)"
+                          :disabled="grabbingReleaseId === rel.id || rel._grabbed"
+                          :class="{
+                            'bg-slate-800 text-emerald-400 border border-emerald-500/40 cursor-default': rel._grabbed,
+                            'bg-sky-600 hover:bg-sky-500 text-white shadow-md': !rel._grabbed && rel.is_acceptable,
+                            'bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700': !rel._grabbed && !rel.is_acceptable
+                          }"
+                          class="px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center space-x-1.5 transition disabled:opacity-60">
+                    <!-- Spinner when grabbing -->
+                    <svg x-show="grabbingReleaseId === rel.id" class="w-3.5 h-3.5 animate-spin" fill="none" viewBox="0 0 24 24">
+                      <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                      <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                    </svg>
+                    <!-- Download Icon -->
+                    <svg x-show="grabbingReleaseId !== rel.id && !rel._grabbed" class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"></path>
+                    </svg>
+                    <!-- Queued Icon -->
+                    <svg x-show="rel._grabbed" class="w-3.5 h-3.5 text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path>
+                    </svg>
+                    <span x-text="rel._grabbed ? 'Queued' : (grabbingReleaseId === rel.id ? 'Grabbing...' : 'Grab Release')"></span>
+                  </button>
+                </div>
+              </div>
+
+              <!-- Middle row: Size formatted, release score badge, acceptance status -->
+              <div class="mt-2.5 pt-2 border-t border-slate-800/80 flex flex-wrap items-center justify-between gap-2 text-[11px]">
+                <div class="flex items-center space-x-3 text-slate-400">
+                  <span class="font-mono" x-text="formatBytes(rel.size_bytes)"></span>
+                  <span>•</span>
+                  <span class="flex items-center space-x-1">
+                    <span class="text-slate-500">Score:</span>
+                    <span class="font-mono font-bold"
+                          :class="rel.score > 0 ? 'text-emerald-400' : (rel.score < 0 ? 'text-rose-400' : 'text-slate-300')"
+                          x-text="rel.score"></span>
+                  </span>
+                  <template x-if="rel.meets_cutoff">
+                    <span class="px-1.5 py-0.5 rounded text-[10px] bg-emerald-500/10 text-emerald-400 border border-emerald-500/30">
+                      Meets Cutoff
+                    </span>
+                  </template>
+                </div>
+
+                <!-- Acceptance or Rejection reasons -->
+                <div>
+                  <template x-if="rel.is_acceptable">
+                    <span class="inline-flex items-center space-x-1 text-emerald-400 font-semibold">
+                      <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path>
+                      </svg>
+                      <span>Acceptable</span>
+                    </span>
+                  </template>
+                  <template x-if="!rel.is_acceptable">
+                    <div class="inline-flex items-center space-x-1 text-rose-400">
+                      <svg class="w-3.5 h-3.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"></path>
+                      </svg>
+                      <span class="text-[10px]" x-text="(rel.rejection_reasons || []).join('; ') || 'Rejected by profile'"></span>
+                    </div>
+                  </template>
+                </div>
+              </div>
+
+            </div>
+          </template>
+        </div>
+      </div>
+
+      <!-- Fixed Footer: flex-shrink-0 p-4 border-t border-slate-800 bg-slate-900/70 flex justify-end -->
+      <div class="flex-shrink-0 p-4 border-t border-slate-800 bg-slate-900/70 flex justify-end">
+        <button type="button"
+                @click="closeInteractiveSearchModal()"
+                class="px-4 py-2 text-xs font-semibold rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white border border-slate-700 transition">
+          Close
+        </button>
+      </div>
+
     </div>
   </div>
 

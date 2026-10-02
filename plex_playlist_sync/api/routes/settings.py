@@ -97,6 +97,9 @@ class MediaManagementSettingsModel(BaseModel):
     clean_artist_names: bool = Field(True, description="Whether to strip leading articles from artist names")
     staging_folder_path: str = Field("/data/downloads", description="Path for staging/downloads folder")
     import_mode: str = Field("move", description="Import mode: move or hardlink")
+    write_audio_tags: bool = Field(True, description="Whether to normalize audio tags on import")
+    embed_artwork: bool = Field(True, description="Whether to embed cover artwork in audio files")
+    save_cover_art_file: bool = Field(True, description="Whether to save cover.jpg in album directory")
     updated_at: str | None = None
 
 
@@ -111,6 +114,9 @@ class MediaManagementUpdateModel(BaseModel):
     clean_artist_names: bool | None = None
     staging_folder_path: str | None = None
     import_mode: str | None = None
+    write_audio_tags: bool | None = None
+    embed_artwork: bool | None = None
+    save_cover_art_file: bool | None = None
 
 
 class PreviewRequestModel(BaseModel):

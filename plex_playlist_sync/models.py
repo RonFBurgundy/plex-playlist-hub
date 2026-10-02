@@ -243,6 +243,19 @@ class AcquisitionSearchResult:
     magnet_url: Optional[str] = None
     source: str = ""
     extra: Optional[dict[str, Any]] = None
+    protocol: str = ""
+
+    def __post_init__(self) -> None:
+        if not self.protocol:
+            src = (self.source or "").lower()
+            if src in ("torznab", "torrent") or bool(self.magnet_url):
+                self.protocol = "torrent"
+            elif src in ("newznab", "usenet"):
+                self.protocol = "usenet"
+            elif src in ("slskd", "soulseek"):
+                self.protocol = "slskd"
+            else:
+                self.protocol = "torrent"
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -261,6 +274,110 @@ class AcquisitionSearchResult:
             "magnet_url": self.magnet_url,
             "source": self.source,
             "extra": self.extra,
+            "protocol": self.protocol,
         }
+
+
+class AudioQuality(str, Enum):
+    FLAC_24BIT = "FLAC 24bit"
+    FLAC_16BIT = "FLAC 16bit"
+    MP3_320 = "MP3 320"
+    MP3_V0 = "MP3 V0"
+    AAC_256 = "AAC 256"
+    MP3_192 = "MP3 192"
+    MP3_V2 = "MP3 V2"
+    UNKNOWN = "Unknown"
+
+
+@dataclass
+class QualityProfileItem:
+    quality: str
+    allowed: bool = True
+    weight: int = 100
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "quality": self.quality,
+            "allowed": bool(self.allowed),
+            "weight": int(self.weight),
+        }
+
+
+@dataclass
+class QualityProfile:
+    id: str
+    name: str
+    cutoff: str
+    items: list[QualityProfileItem]
+    preferred_tags: list[str] = field(default_factory=list)
+    ignored_tags: list[str] = field(default_factory=list)
+    min_size_mb: Optional[float] = None
+    max_size_mb: Optional[float] = None
+    is_default: bool = False
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "id": self.id,
+            "name": self.name,
+            "cutoff": self.cutoff,
+            "items": [
+                item.to_dict() if hasattr(item, "to_dict") else item
+                for item in self.items
+            ],
+            "preferred_tags": list(self.preferred_tags),
+            "ignored_tags": list(self.ignored_tags),
+            "min_size_mb": self.min_size_mb,
+            "max_size_mb": self.max_size_mb,
+            "is_default": bool(self.is_default),
+            "created_at": self.created_at,
+            "updated_at": self.updated_at,
+        }
+
+
+@dataclass
+class ParsedRelease:
+    raw_title: str
+    artist: Optional[str] = None
+    album: Optional[str] = None
+    title: Optional[str] = None
+    year: Optional[int] = None
+    quality: str = "Unknown"
+    source: Optional[str] = None
+    tags: list[str] = field(default_factory=list)
+    bitrate_kbps: Optional[int] = None
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "raw_title": self.raw_title,
+            "artist": self.artist,
+            "album": self.album,
+            "title": self.title,
+            "year": self.year,
+            "quality": self.quality,
+            "source": self.source,
+            "tags": list(self.tags),
+            "bitrate_kbps": self.bitrate_kbps,
+        }
+
+
+@dataclass
+class EvaluationResult:
+    is_acceptable: bool
+    score: int
+    rejection_reasons: list[str]
+    parsed_quality: str
+    meets_cutoff: bool
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "is_acceptable": bool(self.is_acceptable),
+            "score": int(self.score),
+            "rejection_reasons": list(self.rejection_reasons),
+            "parsed_quality": self.parsed_quality,
+            "meets_cutoff": bool(self.meets_cutoff),
+        }
+
 
 

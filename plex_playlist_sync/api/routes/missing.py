@@ -11,12 +11,14 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
+from plex_playlist_sync.acquisition_coordinator import acquisition_coordinator
 from plex_playlist_sync.api.dependencies import (
     get_config,
     get_current_user,
     get_db,
     get_lidarr_client,
     get_plex_client,
+    require_admin,
     verify_feed_access,
 )
 from plex_playlist_sync.clients.lidarr import LidarrClient
@@ -482,4 +484,27 @@ def delete_match_override(
             detail="Match override not found",
         )
     return {"status": "deleted", "id": override_id}
+
+
+@router.post("/{track_id}/grab")
+def grab_missing_track(
+    track_id: int,
+    db: Database = Depends(get_db),
+    _admin: dict[str, Any] = Depends(require_admin),
+) -> dict[str, Any]:
+    """Admin-only endpoint to trigger native search and grab for a missing track."""
+    track = db.get_missing_track(track_id)
+    if not track:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Missing track {track_id} not found",
+        )
+
+    return acquisition_coordinator.search_and_grab(
+        artist=track["artist"],
+        title=track["title"],
+        album=track.get("album"),
+        item_type="track",
+        db=db,
+    )
 

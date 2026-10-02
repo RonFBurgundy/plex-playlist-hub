@@ -6,24 +6,60 @@ paths via the token template engine, performs atomic file moves with
 collision resolution into /music, and triggers Plex library update pings.
 """
 
+import json
 import logging
 import os
 import shutil
 import threading
 import time
+import urllib.parse
 from pathlib import Path
 from typing import Any, Optional
 
+import httpx
+
 from plex_playlist_sync.clients.acquisition import get_acquisition_driver
 from plex_playlist_sync.clients.plex import PlexClient
-from plex_playlist_sync.library import inspect_audio_file, resolve_collision
+from plex_playlist_sync.library import (
+    embed_album_artwork,
+    inspect_audio_file,
+    resolve_collision,
+    write_audio_tags,
+)
 from plex_playlist_sync.models import DownloadStatus, RequestStatus
 from plex_playlist_sync.naming import build_track_path
+from plex_playlist_sync.security import is_safe_service_url
 from plex_playlist_sync.storage import Database
 
 logger = logging.getLogger(__name__)
 
 AUDIO_EXTENSIONS = {".flac", ".mp3", ".m4a", ".aac", ".ogg", ".opus", ".wav", ".aiff"}
+
+
+def _is_safe_cover_url(url: Optional[str]) -> bool:
+    """Validates that a cover artwork URL is safe against SSRF attacks."""
+    if not isinstance(url, str) or not url.strip():
+        return False
+    try:
+        parsed = urllib.parse.urlparse(url.strip())
+        if parsed.scheme not in ("http", "https"):
+            return False
+        hostname = (parsed.hostname or "").lower()
+        whitelisted_domains = (
+            "mzstatic.com",
+            "deezer.com",
+            "dzcdn.net",
+            "spotify.com",
+            "scdn.co",
+            "last.fm",
+            "musicbrainz.org",
+            "discogs.com",
+        )
+        if any(hostname == d or hostname.endswith("." + d) for d in whitelisted_domains):
+            return True
+        return is_safe_service_url(url, allow_lan=False)
+    except Exception:
+        return False
 
 
 def safe_atomic_move(source_file: Path | str, target_file: Path | str) -> Path:
@@ -82,6 +118,54 @@ def place_audio_file(
             return dst
     else:
         return safe_atomic_move(source_file, target_file)
+
+
+def translate_remote_path(
+    remote_path: Optional[str], mappings: list[dict[str, str]]
+) -> Optional[str]:
+    """Translates remote download client file paths to local mount paths.
+
+    If remote_path starts with a mapping's remote_path, replaces that prefix with local_path.
+    Guards against directory traversal attacks.
+    """
+    if remote_path is None:
+        return None
+
+    # Defense against directory traversal attempts in remote path input
+    parts = remote_path.replace("\\", "/").split("/")
+    if ".." in parts:
+        logger.warning("Path traversal attempt rejected in remote_path: %s", remote_path)
+        return None
+
+    if not mappings:
+        return remote_path
+
+    resolved = remote_path
+    for m in mappings:
+        if not isinstance(m, dict):
+            continue
+        r = m.get("remote_path")
+        l = m.get("local_path")
+        if not r or not l:
+            continue
+        r_clean = r.rstrip("/")
+        l_clean = l.rstrip("/")
+        if resolved == r_clean:
+            resolved = l_clean
+            break
+        elif resolved.startswith(r_clean + "/"):
+            resolved = l_clean + resolved[len(r_clean):]
+            break
+        elif resolved.startswith(r_clean + "\\"):
+            resolved = l_clean + "/" + resolved[len(r_clean) + 1:].replace("\\", "/")
+            break
+
+    norm = os.path.normpath(resolved)
+    if ".." in norm.replace("\\", "/").split("/"):
+        logger.warning("Directory traversal detected in remote path mapping: %s", resolved)
+        return None
+
+    return norm
 
 
 class AcquisitionWorker:
@@ -195,6 +279,9 @@ class AcquisitionWorker:
     ) -> dict[str, int]:
         media_settings = db.get_media_management_settings()
         import_mode = media_settings.get("import_mode", "move")
+        write_tags = bool(media_settings.get("write_audio_tags", True))
+        embed_art = bool(media_settings.get("embed_artwork", True))
+        save_cover = bool(media_settings.get("save_cover_art_file", True))
         if staging_dir:
             self.staging_dir = staging_dir
         else:
@@ -281,8 +368,19 @@ class AcquisitionWorker:
                             logger.warning("Error refreshing Plex after Lidarr import: %s", e)
                     continue
 
-                # Locate downloaded audio files
-                candidate_src = status_dict.get("source_path") or item.get("source_path")
+                # Locate downloaded audio files with remote path translation
+                mappings: list[dict[str, str]] = []
+                extra_json = client_config.get("extra_settings_json")
+                if extra_json:
+                    try:
+                        extra_data = json.loads(extra_json) if isinstance(extra_json, str) else extra_json
+                        if isinstance(extra_data, dict):
+                            mappings = extra_data.get("remote_path_mappings", [])
+                    except (json.JSONDecodeError, TypeError):
+                        mappings = []
+
+                raw_src = status_dict.get("source_path") or item.get("source_path")
+                candidate_src = translate_remote_path(raw_src, mappings) if raw_src else None
                 if candidate_src:
                     src_path = Path(candidate_src).resolve()
                     staging_path = Path(self.staging_dir).resolve()
@@ -312,6 +410,23 @@ class AcquisitionWorker:
                 imported_paths: list[str] = []
                 root_folder = media_settings.get("root_folder_path") or "/music"
                 root_path = Path(root_folder).resolve()
+
+                # Fetch associated request and album cover art if available
+                req = db.get_request(item["request_id"]) if item.get("request_id") else None
+                cover_bytes: bytes | None = None
+                if req and (embed_art or save_cover):
+                    cover_url = req.get("cover_url")
+                    if cover_url and _is_safe_cover_url(cover_url):
+                        try:
+                            resp = httpx.get(cover_url, timeout=10.0, follow_redirects=True)
+                            if resp.status_code == 200 and resp.content:
+                                cover_bytes = resp.content
+                        except httpx.HTTPError as e:
+                            logger.warning("HTTP error fetching cover art from %s: %s", cover_url, e)
+                        except Exception as e:
+                            logger.warning("Error fetching cover art from %s: %s", cover_url, e)
+                    elif cover_url:
+                        logger.warning("Cover art URL rejected by SSRF protection: %s", cover_url)
 
                 for af in audio_files:
                     try:
@@ -345,6 +460,39 @@ class AcquisitionWorker:
                     placed_path = place_audio_file(af, target_path, mode=import_mode)
                     imported_paths.append(str(placed_path))
                     logger.info("Successfully imported '%s' -> '%s'", af.name, placed_path)
+
+                    # Tag writing and artwork embedding
+                    tags_to_write: dict[str, Any] = {
+                        "artist": (req.get("artist") if req else None) or metadata.get("artist"),
+                        "album": (req.get("album") or req.get("title") if req else None) or metadata.get("album"),
+                        "title": metadata.get("title") if len(audio_files) > 1 else ((req.get("title") if req else None) or metadata.get("title")),
+                        "date": (req.get("release_date") if req else None) or metadata.get("year"),
+                        "tracknumber": metadata.get("track_number"),
+                        "totaltracks": metadata.get("total_tracks"),
+                        "discnumber": metadata.get("disc_number"),
+                        "totaldiscs": metadata.get("total_discs"),
+                    }
+
+                    if write_tags:
+                        art_to_embed = cover_bytes if embed_art else None
+                        try:
+                            write_audio_tags(placed_path, tags=tags_to_write, cover_art_bytes=art_to_embed)
+                        except Exception as e:
+                            logger.warning("Error writing audio tags to %s: %s", placed_path, e)
+                    elif embed_art and cover_bytes:
+                        try:
+                            embed_album_artwork(placed_path, cover_bytes)
+                        except Exception as e:
+                            logger.warning("Error embedding artwork into %s: %s", placed_path, e)
+
+                    if save_cover and cover_bytes:
+                        cover_file = placed_path.parent / "cover.jpg"
+                        if not cover_file.exists():
+                            try:
+                                cover_file.write_bytes(cover_bytes)
+                                logger.info("Saved album cover to %s", cover_file)
+                            except OSError as e:
+                                logger.warning("Failed to save cover.jpg at %s: %s", cover_file, e)
 
                 if not imported_paths:
                     logger.error("No audio files were successfully imported for download %s", download_id)

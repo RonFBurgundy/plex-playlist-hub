@@ -7,6 +7,7 @@ from typing import Any, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
 
+from plex_playlist_sync.acquisition_coordinator import acquisition_coordinator
 from plex_playlist_sync.api.dependencies import (
     get_config,
     get_current_user,
@@ -112,27 +113,54 @@ def create_request(
 
     created = db.create_request(new_request)
 
-    # Dispatch to Lidarr trickle worker if processing and client configured
-    if initial_status == RequestStatus.PROCESSING and lidarr_client is not None:
-        try:
-            lidarr_worker.start_trickle(
-                items=[
-                    {
-                        "id": req_id,
-                        "artist": clean_artist,
-                        "album": clean_album or clean_title,
-                        "title": clean_title,
-                        "is_request": True,
-                    }
-                ],
-                client=lidarr_client,
-                db=db,
-                delay_seconds=config.lidarr_trickle_rate_seconds,
-                auto_search=config.lidarr_auto_search,
-            )
-            logger.info("Enqueued request %s (%s - %s) to Lidarr worker", req_id, clean_artist, clean_title)
-        except Exception as e:
-            logger.error("Failed to enqueue request %s to Lidarr worker: %s", req_id, e)
+    # Dispatch to native acquisition coordinator if processing, otherwise fall back to Lidarr
+    if initial_status == RequestStatus.PROCESSING:
+        grabbed = False
+        has_native_clients = any(
+            c.get("enabled") for c in db.list_download_clients() if c.get("driver_type") != "lidarr"
+        )
+        has_indexers = any(i.get("enabled") for i in db.list_indexers()) or any(
+            c.get("driver_type") == "slskd" and c.get("enabled") for c in db.list_download_clients()
+        )
+
+        if has_native_clients and has_indexers:
+            try:
+                grab_res = acquisition_coordinator.search_and_grab(
+                    artist=clean_artist,
+                    title=clean_title,
+                    album=clean_album,
+                    item_type=body.item_type,
+                    request_id=req_id,
+                    db=db,
+                )
+                if grab_res.get("success"):
+                    grabbed = True
+                    logger.info("Native acquisition grabbed request %s (%s - %s)", req_id, clean_artist, clean_title)
+                else:
+                    logger.info("Native acquisition found no match for request %s: %s", req_id, grab_res.get("message"))
+            except Exception as e:
+                logger.error("Error in native acquisition for request %s: %s", req_id, e)
+
+        if not grabbed and lidarr_client is not None:
+            try:
+                lidarr_worker.start_trickle(
+                    items=[
+                        {
+                            "id": req_id,
+                            "artist": clean_artist,
+                            "album": clean_album or clean_title,
+                            "title": clean_title,
+                            "is_request": True,
+                        }
+                    ],
+                    client=lidarr_client,
+                    db=db,
+                    delay_seconds=config.lidarr_trickle_rate_seconds,
+                    auto_search=config.lidarr_auto_search,
+                )
+                logger.info("Enqueued request %s (%s - %s) to Lidarr worker", req_id, clean_artist, clean_title)
+            except Exception as e:
+                logger.error("Failed to enqueue request %s to Lidarr worker: %s", req_id, e)
 
     return created
 
@@ -153,7 +181,33 @@ def approve_request(
     db.update_request_status(request_id, RequestStatus.PROCESSING)
     updated = db.get_request(request_id)
 
-    if lidarr_client is not None:
+    grabbed = False
+    has_native_clients = any(
+        c.get("enabled") for c in db.list_download_clients() if c.get("driver_type") != "lidarr"
+    )
+    has_indexers = any(i.get("enabled") for i in db.list_indexers()) or any(
+        c.get("driver_type") == "slskd" and c.get("enabled") for c in db.list_download_clients()
+    )
+
+    if has_native_clients and has_indexers:
+        try:
+            grab_res = acquisition_coordinator.search_and_grab(
+                artist=req["artist"],
+                title=req["title"],
+                album=req.get("album"),
+                item_type=req.get("item_type", "track"),
+                request_id=request_id,
+                db=db,
+            )
+            if grab_res.get("success"):
+                grabbed = True
+                logger.info("Native acquisition grabbed approved request %s (%s - %s)", request_id, req["artist"], req["title"])
+            else:
+                logger.info("Native acquisition found no match for approved request %s: %s", request_id, grab_res.get("message"))
+        except Exception as e:
+            logger.error("Error in native acquisition for approved request %s: %s", request_id, e)
+
+    if not grabbed and lidarr_client is not None:
         try:
             lidarr_worker.start_trickle(
                 items=[

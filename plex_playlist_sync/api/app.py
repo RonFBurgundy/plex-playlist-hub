@@ -11,16 +11,19 @@ from fastapi.responses import FileResponse
 from starlette.staticfiles import StaticFiles
 
 from plex_playlist_sync.api.routes import (
+    acquisition,
     auth,
     discovery,
     download_clients,
     indexers,
     missing,
     playlists,
+    quality_profiles,
     queue,
     requests,
     settings,
     sync,
+    system,
     users,
 )
 from plex_playlist_sync.config import Config
@@ -104,7 +107,12 @@ def create_app(
         download_clients.router, prefix="/settings/download-clients", tags=["download_clients"]
     )
     api_router.include_router(indexers.router, prefix="/settings/indexers", tags=["indexers"])
+    api_router.include_router(
+        quality_profiles.router, prefix="/settings/quality-profiles", tags=["quality_profiles"]
+    )
     api_router.include_router(queue.router, prefix="/queue", tags=["queue"])
+    api_router.include_router(acquisition.router, prefix="/acquisition", tags=["acquisition"])
+    api_router.include_router(system.router, prefix="/system", tags=["system"])
 
     @api_router.api_route("/health", methods=["GET", "HEAD"], tags=["health"])
     def health_check() -> dict[str, str]:

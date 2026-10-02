@@ -1,0 +1,312 @@
+"""Automated Search & Grab Coordinator for TrackSeerr Phase 3.
+
+Coordinates multi-indexer searches across Torznab, Newznab, and slskd,
+scores and ranks candidates against Quality Profiles, dispatches grabs to
+appropriate download clients (qBittorrent, SABnzbd, slskd), and tracks active transfers.
+"""
+
+import logging
+from typing import Any, Optional, Union
+import uuid
+
+from plex_playlist_sync.clients.acquisition import get_acquisition_driver, get_indexer_driver
+from plex_playlist_sync.models import (
+    AcquisitionSearchResult,
+    ActiveDownload,
+    DownloadClientConfig,
+    DownloadStatus,
+    EvaluationResult,
+    QualityProfile,
+    QualityProfileItem,
+)
+from plex_playlist_sync.quality import evaluate_release, parse_release_title
+from plex_playlist_sync.storage import Database
+
+logger = logging.getLogger(__name__)
+
+
+def _to_quality_profile(data: Union[QualityProfile, dict[str, Any]]) -> QualityProfile:
+    """Converts a dict or QualityProfile model to a canonical QualityProfile instance."""
+    if isinstance(data, QualityProfile):
+        return data
+
+    items: list[QualityProfileItem] = []
+    for item in data.get("items", []):
+        if isinstance(item, QualityProfileItem):
+            items.append(item)
+        elif isinstance(item, dict):
+            items.append(
+                QualityProfileItem(
+                    quality=str(item.get("quality", "Unknown")),
+                    allowed=bool(item.get("allowed", True)),
+                    weight=int(item.get("weight", 100)),
+                )
+            )
+
+    return QualityProfile(
+        id=str(data.get("id", "")),
+        name=str(data.get("name", "")),
+        cutoff=str(data.get("cutoff", "FLAC 16bit")),
+        items=items,
+        preferred_tags=list(data.get("preferred_tags") or []),
+        ignored_tags=list(data.get("ignored_tags") or []),
+        min_size_mb=(
+            float(data["min_size_mb"]) if data.get("min_size_mb") is not None else None
+        ),
+        max_size_mb=(
+            float(data["max_size_mb"]) if data.get("max_size_mb") is not None else None
+        ),
+        is_default=bool(data.get("is_default", False)),
+    )
+
+
+class AcquisitionCoordinator:
+    """Coordinates search, quality evaluation, client dispatch, and active transfer records."""
+
+    def search_all_indexers(
+        self,
+        artist: str,
+        title: Optional[str] = None,
+        album: Optional[str] = None,
+        db: Optional[Database] = None,
+    ) -> list[AcquisitionSearchResult]:
+        """Queries all enabled Torznab/Newznab indexers and slskd clients.
+
+        Errors on individual indexers or clients are logged without aborting others.
+        """
+        if db is None:
+            logger.warning("No database supplied to search_all_indexers")
+            return []
+
+        all_results: list[AcquisitionSearchResult] = []
+
+        # 1. Query enabled indexers (Torznab / Newznab)
+        try:
+            indexers = db.list_indexers(enabled_only=True)
+        except Exception as e:
+            logger.error("Failed to query enabled indexers from database: %s", e)
+            indexers = []
+
+        for idx_cfg in indexers:
+            idx_name = idx_cfg.get("name", "unknown")
+            try:
+                driver = get_indexer_driver(idx_cfg)
+                res = driver.search(artist=artist, title=title, album=album)
+                if res:
+                    all_results.extend(res)
+            except Exception as e:
+                logger.warning("Error searching indexer '%s' (%s): %s", idx_name, idx_cfg.get("host_url"), e)
+
+        # 2. Query enabled slskd download clients if present
+        try:
+            download_clients = db.list_download_clients(enabled_only=True)
+        except Exception as e:
+            logger.error("Failed to query download clients from database: %s", e)
+            download_clients = []
+
+        slskd_clients = [
+            c for c in download_clients
+            if str(c.get("driver_type", "")).lower() == "slskd"
+        ]
+        for s_cfg in slskd_clients:
+            s_name = s_cfg.get("name", "slskd")
+            try:
+                driver = get_acquisition_driver(s_cfg)
+                res = driver.search(artist=artist, title=title, album=album)
+                if res:
+                    all_results.extend(res)
+            except Exception as e:
+                logger.warning("Error searching slskd client '%s' (%s): %s", s_name, s_cfg.get("host_url"), e)
+
+        return all_results
+
+    def evaluate_and_rank(
+        self,
+        candidates: list[AcquisitionSearchResult],
+        profile: Union[QualityProfile, dict[str, Any]],
+    ) -> list[tuple[AcquisitionSearchResult, EvaluationResult]]:
+        """Evaluates candidates against QualityProfile and sorts by score descending.
+
+        Ties for torrent releases are broken using seeder counts.
+        """
+        if not candidates:
+            return []
+
+        prof = _to_quality_profile(profile)
+        ranked: list[tuple[AcquisitionSearchResult, EvaluationResult]] = []
+
+        for candidate in candidates:
+            parsed = parse_release_title(candidate.title)
+            eval_res = evaluate_release(
+                release=parsed,
+                profile=prof,
+                size_bytes=candidate.size_bytes if candidate.size_bytes > 0 else None,
+            )
+            if eval_res.is_acceptable:
+                ranked.append((candidate, eval_res))
+
+        def sort_key(item: tuple[AcquisitionSearchResult, EvaluationResult]) -> tuple[int, int]:
+            cand, res = item
+            is_torrent = cand.protocol == "torrent" or cand.source in ("torznab", "torrent") or bool(cand.magnet_url)
+            seeders = int(cand.seeders or 0) if is_torrent else 0
+            return (res.score, seeders)
+
+        ranked.sort(key=sort_key, reverse=True)
+        return ranked
+
+    def find_client_for_protocol(
+        self,
+        protocol: str,
+        db: Database,
+    ) -> Optional[dict[str, Any]]:
+        """Finds the enabled download client with the highest priority for the requested protocol.
+
+        - "torrent": driver_type == "qbittorrent"
+        - "usenet": driver_type == "sabnzbd"
+        - "slskd": driver_type == "slskd"
+        """
+        proto = str(protocol).lower().strip()
+        target_driver: Optional[str] = None
+
+        if proto in ("torrent", "torznab"):
+            target_driver = "qbittorrent"
+        elif proto in ("usenet", "newznab"):
+            target_driver = "sabnzbd"
+        elif proto in ("slskd", "soulseek", "p2p"):
+            target_driver = "slskd"
+
+        if not target_driver:
+            return None
+
+        try:
+            enabled_clients = db.list_download_clients(enabled_only=True)
+        except Exception as e:
+            logger.error("Failed to list download clients from database: %s", e)
+            return None
+
+        matching = [
+            c for c in enabled_clients
+            if str(c.get("driver_type", "")).lower() == target_driver
+        ]
+        if not matching:
+            return None
+
+        # Sort by priority ascending (1 = highest priority), then created_at
+        matching.sort(key=lambda c: (int(c.get("priority", 1)), str(c.get("created_at", ""))))
+        return matching[0]
+
+    def search_and_grab(
+        self,
+        artist: str,
+        title: str,
+        album: Optional[str] = None,
+        item_type: str = "track",
+        request_id: Optional[str] = None,
+        db: Optional[Database] = None,
+        quality_profile_id: Optional[str] = None,
+    ) -> dict[str, Any]:
+        """Searches indexers, ranks releases against the Quality Profile, and dispatches grab.
+
+        Records active download transfer in the database upon successful dispatch.
+        """
+        if db is None:
+            raise ValueError("Database instance must be provided to search_and_grab")
+
+        # 1. Retrieve quality profile
+        profile_dict: Optional[dict[str, Any]] = None
+        if quality_profile_id:
+            try:
+                profile_dict = db.get_quality_profile(quality_profile_id)
+            except Exception as e:
+                logger.warning("Error fetching quality profile %s: %s; falling back to default", quality_profile_id, e)
+
+        if not profile_dict:
+            try:
+                profile_dict = db.get_default_quality_profile()
+            except Exception as e:
+                logger.error("Failed to retrieve default quality profile: %s", e)
+                return {
+                    "success": False,
+                    "message": f"Quality profile not available: {str(e)}",
+                }
+
+        profile = _to_quality_profile(profile_dict)
+
+        # 2. Search indexers & slskd
+        candidates = self.search_all_indexers(artist=artist, title=title, album=album, db=db)
+
+        # 3. Evaluate and rank
+        ranked = self.evaluate_and_rank(candidates=candidates, profile=profile)
+        if not ranked:
+            return {
+                "success": False,
+                "message": "No acceptable releases found meeting quality profile criteria",
+                "candidates_count": len(candidates),
+            }
+
+        top_candidate, eval_res = ranked[0]
+
+        # 4. Find appropriate client for candidate's protocol
+        client = self.find_client_for_protocol(protocol=top_candidate.protocol, db=db)
+        if not client:
+            return {
+                "success": False,
+                "message": f"No enabled download client available for {top_candidate.protocol}",
+            }
+
+        # 5. Dispatch download to client driver
+        try:
+            client_driver = get_acquisition_driver(client)
+            download_hash = client_driver.download(top_candidate)
+        except Exception as e:
+            logger.error(
+                "Dispatch download failed on client '%s' for '%s': %s",
+                client.get("name"),
+                top_candidate.title,
+                e,
+            )
+            return {
+                "success": False,
+                "message": f"Download dispatch failed: {str(e)}",
+            }
+
+        # 6. Record active download in database
+        download_id = f"dl-{uuid.uuid4().hex[:12]}"
+        active_dl = ActiveDownload(
+            id=download_id,
+            request_id=request_id,
+            client_id=str(client["id"]),
+            download_hash=download_hash,
+            title=top_candidate.title,
+            artist=artist,
+            item_type=item_type,
+            status=DownloadStatus.QUEUED.value,
+            progress=0.0,
+            size_bytes=top_candidate.size_bytes,
+            source_path=None,
+            target_path=None,
+        )
+        db.create_active_download(active_dl)
+
+        logger.info(
+            "Successfully grabbed release '%s' via %s (download_id=%s, score=%d)",
+            top_candidate.title,
+            client.get("name"),
+            download_id,
+            eval_res.score,
+        )
+
+        return {
+            "success": True,
+            "download_id": download_id,
+            "download_hash": download_hash,
+            "release": top_candidate.title,
+            "client": client["name"],
+            "score": eval_res.score,
+        }
+
+
+# Module singleton
+acquisition_coordinator = AcquisitionCoordinator()
+
+__all__ = ["AcquisitionCoordinator", "acquisition_coordinator", "_to_quality_profile"]

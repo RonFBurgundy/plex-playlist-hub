@@ -661,3 +661,15 @@ class PlexClient:
             logger.warning("Could not refresh Plex library '%s': %s", sec_name, e)
         return False
 
+    def test_connection(self) -> tuple[bool, str]:
+        """Tests connectivity and responsiveness of the Plex Media Server."""
+        try:
+            if hasattr(self.server, "query"):
+                self.server.query("/", timeout=4.0)
+            friendly_name = getattr(self.server, "friendlyName", "Plex Server")
+            version = getattr(self.server, "version", "unknown")
+            return True, f"Connected to {friendly_name} (v{version})"
+        except Exception as e:
+            logger.warning("Plex connection test failed: %s", e)
+            return False, str(e)
+

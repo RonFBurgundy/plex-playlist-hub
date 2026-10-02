@@ -29,6 +29,8 @@ class DownloadClientItem(BaseModel):
     password: Optional[str] = None
     enabled: bool = True
     priority: int = 1
+    category: Optional[str] = None
+    remote_path_mappings: Optional[list[dict[str, str]]] = None
     extra_settings_json: Optional[str] = None
     created_at: Optional[str] = None
     updated_at: Optional[str] = None
@@ -44,6 +46,8 @@ class DownloadClientPayload(BaseModel):
     password: Optional[str] = None
     enabled: bool = True
     priority: int = 1
+    category: Optional[str] = None
+    remote_path_mappings: Optional[list[dict[str, str]]] = None
     extra_settings_json: Optional[str] = None
 
 
@@ -53,6 +57,8 @@ class TestConnectionPayload(BaseModel):
     api_key: Optional[str] = None
     username: Optional[str] = None
     password: Optional[str] = None
+    category: Optional[str] = None
+    remote_path_mappings: Optional[list[dict[str, str]]] = None
     extra_settings_json: Optional[str] = None
 
 
@@ -61,12 +67,54 @@ class TestConnectionResponse(BaseModel):
     message: str
 
 
+def _normalize_extra_settings(
+    extra_json: Optional[str],
+    category: Optional[str] = None,
+    remote_path_mappings: Optional[list[dict[str, str]]] = None,
+) -> str:
+    """Merges category and remote_path_mappings into extra_settings_json with defaults."""
+    extra: dict[str, Any] = {}
+    if extra_json:
+        try:
+            parsed = json.loads(extra_json)
+            if isinstance(parsed, dict):
+                extra = parsed
+        except (json.JSONDecodeError, TypeError):
+            extra = {}
+
+    if category is not None:
+        extra["category"] = category
+    elif "category" not in extra:
+        extra["category"] = "music"
+
+    if remote_path_mappings is not None:
+        extra["remote_path_mappings"] = remote_path_mappings
+    elif "remote_path_mappings" not in extra:
+        extra["remote_path_mappings"] = []
+
+    return json.dumps(extra)
+
+
 def _mask_client_dict(client: dict[str, Any]) -> dict[str, Any]:
     c = dict(client)
     if c.get("api_key"):
         c["api_key"] = mask_secret(c["api_key"])
     if c.get("password"):
         c["password"] = mask_secret(c["password"])
+
+    extra_json = c.get("extra_settings_json")
+    if extra_json:
+        try:
+            extra = json.loads(extra_json)
+            c["category"] = extra.get("category", "music")
+            c["remote_path_mappings"] = extra.get("remote_path_mappings", [])
+        except (json.JSONDecodeError, TypeError):
+            c["category"] = "music"
+            c["remote_path_mappings"] = []
+    else:
+        c["category"] = "music"
+        c["remote_path_mappings"] = []
+
     return c
 
 
@@ -122,6 +170,12 @@ def create_or_update_download_client(
     elif not password and existing:
         password = existing.get("password")
 
+    extra_settings = _normalize_extra_settings(
+        payload.extra_settings_json,
+        category=payload.category,
+        remote_path_mappings=payload.remote_path_mappings,
+    )
+
     config = DownloadClientConfig(
         id=client_id,
         name=payload.name.strip(),
@@ -132,7 +186,7 @@ def create_or_update_download_client(
         password=password,
         enabled=payload.enabled,
         priority=payload.priority,
-        extra_settings_json=payload.extra_settings_json,
+        extra_settings_json=extra_settings,
     )
 
     saved = db.create_download_client(config)
@@ -153,6 +207,12 @@ def test_download_client_connection(
             message="Prohibited or invalid host URL (SSRF defense)",
         )
 
+    extra_settings = _normalize_extra_settings(
+        payload.extra_settings_json,
+        category=payload.category,
+        remote_path_mappings=payload.remote_path_mappings,
+    )
+
     try:
         driver = get_acquisition_driver(
             {
@@ -161,7 +221,7 @@ def test_download_client_connection(
                 "api_key": payload.api_key,
                 "username": payload.username,
                 "password": payload.password,
-                "extra_settings_json": payload.extra_settings_json,
+                "extra_settings_json": extra_settings,
             }
         )
         success, msg = driver.test_connection()
