@@ -5,7 +5,7 @@ import sqlite3
 import sys
 import threading
 import time
-from typing import Optional
+from typing import Optional, Union
 
 import uvicorn
 
@@ -49,95 +49,115 @@ def main() -> int:
 
     logger.info("Initializing TrackSeerr v1.0.0")
 
-    if not config.plex_url or not config.plex_token:
+    role = os.getenv("ROLE", "all-in-one").lower().strip()
+
+    if role != "gateway" and (not config.plex_url or not config.plex_token):
         logger.error("Missing mandatory environment variables: PLEX_URL and PLEX_TOKEN must be specified.")
         return 1
 
-    plex_client = None
-    try:
-        plex_client = PlexClient(
-            base_url=config.plex_url,
-            token=config.plex_token,
-            verify_ssl=config.plex_verify_ssl,
-        )
-    except Exception as e:
-        if config.run_once or config.headless:
-            logger.error("Failed to connect to Plex Media Server: %s", e)
-            return 1
-        logger.warning(
-            "Could not connect to Plex Server at %s on startup: %s. "
-            "Starting Web Server; connection will be retried during sync.",
-            config.plex_url,
-            e,
-        )
+    plex_client: Optional[PlexClient] = None
+    spotify_client: Optional[Union[SpotifyClient, SpotifyWebScraper]] = None
+    deezer_client: Optional[DeezerClient] = None
 
-    spotify_client = None
-    if config.has_spotify:
+    if role != "gateway":
         try:
-            spotify_client = SpotifyClient(
-                client_id=config.spotify_client_id,  # type: ignore
-                client_secret=config.spotify_client_secret,  # type: ignore
+            plex_client = PlexClient(
+                base_url=config.plex_url,
+                token=config.plex_token,
+                verify_ssl=config.plex_verify_ssl,
             )
         except Exception as e:
-            logger.error("Failed to initialize Spotify client: %s. Falling back to web scraper.", e)
-            spotify_client = SpotifyWebScraper()
-    else:
-        logger.info("No Spotify API credentials configured; activating keyless SpotifyWebScraper")
-        spotify_client = SpotifyWebScraper()
+            if config.run_once or config.headless:
+                logger.error("Failed to connect to Plex Media Server: %s", e)
+                return 1
+            logger.warning(
+                "Could not connect to Plex Server at %s on startup: %s. "
+                "Starting Web Server; connection will be retried during sync.",
+                config.plex_url,
+                e,
+            )
 
-    deezer_client = None
-    if config.has_deezer:
-        try:
-            deezer_client = DeezerClient()
-        except Exception as e:
-            logger.error("Failed to initialize Deezer client: %s. Skipping Deezer sync.", e)
-
-    coordinator = SyncCoordinator(
-        config=config,
-        plex_client=plex_client,
-        spotify_client=spotify_client,
-        deezer_client=deezer_client,
-    )
-
-    # 1. Run-once / CLI mode
-    if config.run_once:
-        logger.info("RUN_ONCE enabled; running single sync cycle and exiting.")
-        coordinator.run_sync_cycle()
-        logger.info("TrackSeerr run-once completed cleanly.")
-        return 0
-
-    # 2. Headless mode (no web UI)
-    if config.headless:
-        logger.info("Running in HEADLESS loop mode.")
-        while not _shutdown_requested:
+        if config.has_spotify:
             try:
-                coordinator.run_sync_cycle()
+                spotify_client = SpotifyClient(
+                    client_id=config.spotify_client_id,  # type: ignore
+                    client_secret=config.spotify_client_secret,  # type: ignore
+                )
             except Exception as e:
-                logger.exception("Unexpected error occurred during sync cycle: %s", e)
-            slept = 0
-            while slept < config.wait_seconds and not _shutdown_requested:
-                time.sleep(min(1, config.wait_seconds - slept))
-                slept += 1
-        logger.info("TrackSeerr terminated cleanly.")
-        return 0
+                logger.error("Failed to initialize Spotify client: %s. Falling back to web scraper.", e)
+                spotify_client = SpotifyWebScraper()
+        else:
+            logger.info("No Spotify API credentials configured; activating keyless SpotifyWebScraper")
+            spotify_client = SpotifyWebScraper()
+
+        if config.has_deezer:
+            try:
+                deezer_client = DeezerClient()
+            except Exception as e:
+                logger.error("Failed to initialize Deezer client: %s. Skipping Deezer sync.", e)
+
+        coordinator = SyncCoordinator(
+            config=config,
+            plex_client=plex_client,
+            spotify_client=spotify_client,
+            deezer_client=deezer_client,
+        )
+
+        # 1. Run-once / CLI mode
+        if config.run_once:
+            logger.info("RUN_ONCE enabled; running single sync cycle and exiting.")
+            coordinator.run_sync_cycle()
+            logger.info("TrackSeerr run-once completed cleanly.")
+            return 0
+
+        # 2. Headless mode (no web UI)
+        if config.headless:
+            logger.info("Running in HEADLESS loop mode.")
+            while not _shutdown_requested:
+                try:
+                    coordinator.run_sync_cycle()
+                except Exception as e:
+                    logger.exception("Unexpected error occurred during sync cycle: %s", e)
+                slept = 0
+                while slept < config.wait_seconds and not _shutdown_requested:
+                    time.sleep(min(1, config.wait_seconds - slept))
+                    slept += 1
+            logger.info("TrackSeerr terminated cleanly.")
+            return 0
 
     # 3. Web UI & REST Server Mode (Default)
-    logger.info("Starting TrackSeerr Web Server on %s:%d", config.host, config.port)
-    db_path = str(safe_data_path("sync_db.sqlite", base_dir=config.data_dir))
-    try:
-        db = Database(db_path)
-    except (PermissionError, sqlite3.OperationalError) as e:
-        logger.critical(
-            "Failed to initialize SQLite database at '%s': %s. "
-            "Please verify file and directory permissions on '%s' (e.g. Unraid PUID/PGID).",
-            db_path,
-            e,
-            config.data_dir,
-        )
-        return 1
+    logger.info("Starting TrackSeerr Web Server on %s:%d (role=%s)", config.host, config.port, role)
+    if role == "gateway":
+        try:
+            db_path = str(safe_data_path("sync_db.sqlite", base_dir=config.data_dir))
+            db = Database(db_path)
+        except (PermissionError, sqlite3.OperationalError, OSError, ValueError) as e:
+            fallback_db_path = "/tmp/trackseerr_gateway.sqlite"
+            logger.warning(
+                "Gateway mode unable to open database at '%s': %s. "
+                "Falling back to ephemeral database at '%s'.",
+                config.data_dir,
+                e,
+                fallback_db_path,
+            )
+            os.environ["DATABASE_PATH"] = fallback_db_path
+            db = Database(fallback_db_path)
+    else:
+        db_path = str(safe_data_path("sync_db.sqlite", base_dir=config.data_dir))
+        try:
+            db = Database(db_path)
+        except (PermissionError, sqlite3.OperationalError) as e:
+            logger.critical(
+                "Failed to initialize SQLite database at '%s': %s. "
+                "Please verify file and directory permissions on '%s' (e.g. Unraid PUID/PGID).",
+                db_path,
+                e,
+                config.data_dir,
+            )
+            return 1
 
     # Auto-discover Plex Home users and populate database
-    if plex_client is not None:
+    if role != "gateway" and plex_client is not None:
         try:
             home_users = plex_client.get_home_users()
             for u in home_users:
@@ -154,15 +174,16 @@ def main() -> int:
             logger.warning("Could not auto-discover Plex Home users on startup: %s", e)
 
     # Sync legacy config playlist IDs to DB if any
-    for sp_id in config.spotify_playlist_ids:
-        if not db.get_playlist(sp_id):
-            db.upsert_playlist(sp_id, f"Spotify Playlist {sp_id}", service="spotify")
-    for dz_id in config.deezer_playlist_ids:
-        if not db.get_playlist(dz_id):
-            db.upsert_playlist(dz_id, f"Deezer Playlist {dz_id}", service="deezer")
+    if role != "gateway":
+        for sp_id in config.spotify_playlist_ids:
+            if not db.get_playlist(sp_id):
+                db.upsert_playlist(sp_id, f"Spotify Playlist {sp_id}", service="spotify")
+        for dz_id in config.deezer_playlist_ids:
+            if not db.get_playlist(dz_id):
+                db.upsert_playlist(dz_id, f"Deezer Playlist {dz_id}", service="deezer")
 
     # Start periodic background sync worker thread if wait_seconds > 0
-    if config.wait_seconds > 0:
+    if role != "gateway" and config.wait_seconds > 0:
         def background_sync_worker():
             logger.info("Background sync scheduler started (interval: %d seconds)", config.wait_seconds)
             while not _shutdown_requested:
@@ -190,7 +211,7 @@ def main() -> int:
         bg_thread.start()
 
     # Start periodic Lidarr auto-trickle worker thread if configured
-    if config.has_lidarr and config.lidarr_auto_trickle:
+    if role != "gateway" and config.has_lidarr and config.lidarr_auto_trickle:
         from plex_playlist_sync.clients.lidarr import LidarrClient
         from plex_playlist_sync.lidarr_queue import lidarr_worker
 
@@ -243,6 +264,13 @@ def main() -> int:
         )
         lidarr_bg_thread.start()
 
+    # Start AcquisitionWorker for download monitoring and auto-organization
+    if role != "gateway":
+        from .acquisition_worker import acquisition_worker
+
+        logger.info("Starting AcquisitionWorker (role=%s)", role)
+        acquisition_worker.start(db=db, plex_client=plex_client, poll_interval=5.0)
+
     app = create_app(db=db, config=config)
 
     uvicorn_config = uvicorn.Config(
@@ -259,6 +287,13 @@ def main() -> int:
         logger.exception("Web server error: %s", e)
         return 1
     finally:
+        if role != "gateway":
+            try:
+                from .acquisition_worker import acquisition_worker
+
+                acquisition_worker.stop()
+            except Exception:
+                pass
         db.close()
 
     logger.info("TrackSeerr server terminated cleanly.")

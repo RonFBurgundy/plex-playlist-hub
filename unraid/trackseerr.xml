@@ -10,15 +10,15 @@
   <Support>https://github.com/RonFBurgundy/trackseerr/issues</Support>
   <Project>https://github.com/RonFBurgundy/trackseerr</Project>
   <Overview>
-TrackSeerr is the self-hosted, multi-user music request, discovery, and playlist synchronization suite for your local Plex Media Server, Plexamp, and Lidarr.
+TrackSeerr is a self-hosted, multi-user music request, discovery, and library management suite combining an Overseerr-style frontend with an Arr-style media management and acquisition backend for Plex Media Server and Plexamp.
 
-Key Features:
-- Music Discovery &amp; Requests: Browse trending charts and request albums/tracks with family quotas.
-- Multi-User Plex Home Routing: Share and sync playlists with specific users, kids, or the entire home.
-- Zero Spotify API Key Required: Built-in scraper allows seamless public Spotify playlist syncing without developer accounts.
-- 1-Click Bookmarklet &amp; Clipboard Import: Easily import personal Spotify playlists and Liked Songs into Plexamp.
-- Scalable Lidarr Trickle Automation: Paced background trickle worker automatically monitors missing albums and triggers targeted searches without overloading MusicBrainz.
-- Beautiful Dark Web UI: Interactive web dashboard on port 5250 with Plex OAuth sign-in.
+Key Capabilities:
+- Music Discovery &amp; Audio Previews: Zero-key discovery of trending charts, new releases, and deep search via public Apple Music and Deezer APIs with 30-second audio previews.
+- Multi-User Request Engine: Plex Home user integration, per-user request quotas, and administrative approval queues.
+- Dual Acquisition Engine: Fulfill requests using your existing Lidarr server via batched trickle automation, or use native acquisition drivers (slskd / Soulseek P2P for single-track and album surgical matching, SABnzbd for Usenet, qBittorrent for torrents, Torznab/Newznab indexers).
+- Real-Time Activity Queue: Live transfer progress, speed monitoring, cancellation, and retry controls.
+- Arr-Grade Media Management: Mutagen audio inspection, token template naming engine ({Artist Name}/{Album Title} ({Release Year})/{track:00} - {Track Title}), collision protection, and automated Plex library refresh pings.
+- Playlist Synchronization: Import and synchronize Spotify and Deezer playlists directly into personal Plexamp profiles with keyless scraping and 1-click browser bookmarklets.
   </Overview>
   <Category>MediaApp:Music MediaServer:Music Tools:Utilities</Category>
   <WebUI>http://[IP]:[PORT:5250]</WebUI>
@@ -36,6 +36,12 @@ Key Features:
   <Config Name="WebUI &amp; API Port" Target="5250" Default="5250" Mode="tcp" Description="Web Dashboard and REST API port. Accessible in your browser." Type="Port" Display="always" Required="true" Mask="false">5250</Config>
 
   <Config Name="AppData Storage" Target="/data" Default="/mnt/user/appdata/trackseerr" Mode="rw" Description="Persistent directory for the SQLite database, sessions, sync logs, and missing track exports." Type="Path" Display="always" Required="true" Mask="false">/mnt/user/appdata/trackseerr</Config>
+
+  <Config Name="Music Library Storage" Target="/music" Default="/mnt/user/data/media/music" Mode="rw" Description="Optional: Host path to your organized music directory. Required when using native acquisition drivers (slskd, SABnzbd, qBittorrent) to place organized tracks into Plex. Optional if using Lidarr for file management." Type="Path" Display="advanced" Required="false" Mask="false">/mnt/user/data/media/music</Config>
+
+  <Config Name="Download Staging Storage" Target="/downloads" Default="/mnt/user/data/downloads" Mode="rw" Description="Optional: Host path to your download staging directory. Required when using native acquisition drivers to import completed transfers into your music library. Optional if using Lidarr." Type="Path" Display="advanced" Required="false" Mask="false">/mnt/user/data/downloads</Config>
+
+  <Config Name="Execution Role" Target="ROLE" Default="all-in-one" Mode="" Description="Container execution role: 'all-in-one' (default, runs web gateway and acquisition worker) or 'gateway'/'core' for two-tier DMZ architectures." Type="Variable" Display="advanced" Required="false" Mask="false">all-in-one</Config>
 
   <Config Name="Plex Server URL" Target="PLEX_URL" Default="http://192.168.1.100:32400" Mode="" Description="Base URL of your Plex Media Server, using your server's LAN IP and port 32400. IMPORTANT: Do NOT use localhost on bridge networking." Type="Variable" Display="always" Required="true" Mask="false">http://192.168.1.100:32400</Config>
 

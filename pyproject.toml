@@ -30,6 +30,7 @@ dependencies = [
     "urllib3>=2.2.0",
     "fastapi>=0.110.0",
     "uvicorn>=0.28.0",
+    "mutagen>=1.47.0",
 ]
 
 [project.optional-dependencies]
@@ -57,3 +58,6 @@ python_files = ["test_*.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
 addopts = "-v --tb=short"
+
+[tool.ruff.lint]
+ignore = ["B008"]

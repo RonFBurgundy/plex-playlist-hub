@@ -5,7 +5,15 @@ import sqlite3
 from unittest.mock import patch
 import pytest
 
-from plex_playlist_sync.models import Playlist, Track
+from plex_playlist_sync.models import (
+    ActiveDownload,
+    DownloadClientConfig,
+    DownloadDriverType,
+    DownloadStatus,
+    IndexerConfig,
+    Playlist,
+    Track,
+)
 from plex_playlist_sync.storage import Database
 
 
@@ -366,3 +374,132 @@ class TestForeignKeyCascades:
         # Attempt to target a non-existent user should raise sqlite3.IntegrityError
         with pytest.raises(sqlite3.IntegrityError):
             mem_db.set_playlist_targets("p1", ["nonexistent_user"])
+
+
+class TestAcquisitionStorage:
+    def test_migration_v8_tables_and_indexes(self, mem_db):
+        cursor = mem_db.conn.cursor()
+        cursor.execute("SELECT name FROM sqlite_master WHERE type='table'")
+        tables = {row[0] for row in cursor.fetchall()}
+        assert "download_clients" in tables
+        assert "indexers" in tables
+        assert "active_downloads" in tables
+
+        cursor.execute("SELECT name FROM sqlite_master WHERE type='index'")
+        indexes = {row[0] for row in cursor.fetchall()}
+        assert "idx_active_downloads_status" in indexes
+
+    def test_download_clients_crud(self, mem_db):
+        client = mem_db.create_download_client(
+            DownloadClientConfig(
+                id="client-slskd-1",
+                name="Soulseek Primary",
+                driver_type=DownloadDriverType.SLSKD,
+                host_url="http://slskd:5030",
+                username="admin",
+                password="pwd",
+                priority=1,
+                enabled=True,
+            )
+        )
+        assert client["id"] is not None
+        assert client["name"] == "Soulseek Primary"
+
+        fetched = mem_db.get_download_client(client["id"])
+        assert fetched is not None
+        assert fetched["driver_type"] == "slskd"
+
+        all_clients = mem_db.list_download_clients()
+        assert len(all_clients) == 1
+
+        # Update
+        updated = mem_db.update_download_client(client["id"], {"priority": 5, "enabled": False})
+        assert updated["priority"] == 5
+        assert updated["enabled"] is False
+
+        # Delete
+        assert mem_db.delete_download_client(client["id"]) is True
+        assert mem_db.get_download_client(client["id"]) is None
+        assert len(mem_db.list_download_clients()) == 0
+
+    def test_indexers_crud(self, mem_db):
+        indexer = mem_db.create_indexer(
+            IndexerConfig(
+                id="indexer-torznab-1",
+                name="Prowlarr Redacted",
+                indexer_type="torznab",
+                host_url="http://prowlarr:9696/1/api",
+                api_key="secret",
+                categories="3000,3010",
+                priority=1,
+                enabled=True,
+            )
+        )
+        assert indexer["id"] is not None
+
+        fetched = mem_db.get_indexer(indexer["id"])
+        assert fetched is not None
+        assert fetched["name"] == "Prowlarr Redacted"
+
+        all_indexers = mem_db.list_indexers()
+        assert len(all_indexers) == 1
+
+        updated = mem_db.update_indexer(indexer["id"], {"name": "Prowlarr Lossless"})
+        assert updated["name"] == "Prowlarr Lossless"
+
+        assert mem_db.delete_indexer(indexer["id"]) is True
+        assert mem_db.get_indexer(indexer["id"]) is None
+
+    def test_active_downloads_crud_and_status_update(self, mem_db):
+        client = mem_db.create_download_client(
+            DownloadClientConfig(
+                id="client-sab-1",
+                name="SABnzbd",
+                driver_type=DownloadDriverType.SABNZBD,
+                host_url="http://sabnzbd:8080",
+            )
+        )
+
+        dl = mem_db.create_active_download(
+            ActiveDownload(
+                id="dl-active-1",
+                title="Daft Punk - Around the World",
+                artist="Daft Punk",
+                client_id=client["id"],
+                download_hash="nzo-12345",
+                status=DownloadStatus.DOWNLOADING,
+                progress=42.0,
+            )
+        )
+        assert dl["id"] is not None
+
+        fetched = mem_db.get_active_download(dl["id"])
+        assert fetched is not None
+        assert fetched["progress"] == 42.0
+
+        # Update status
+        mem_db.update_download_status(
+            dl["id"],
+            status=DownloadStatus.COMPLETED.value,
+            target_path="/music/Daft Punk/Homework/02 - Around the World.flac",
+        )
+        mem_db.update_download_progress(dl["id"], progress=100.0)
+
+        completed = mem_db.get_active_download(dl["id"])
+        assert completed["status"] == DownloadStatus.COMPLETED.value
+        assert completed["progress"] == 100.0
+        assert completed["target_path"] == "/music/Daft Punk/Homework/02 - Around the World.flac"
+
+        # List active downloads filtered
+        active_list = mem_db.list_active_downloads(statuses=[DownloadStatus.DOWNLOADING.value])
+        assert len(active_list) == 0
+
+        # List with completed
+        all_list = mem_db.list_active_downloads(statuses=[DownloadStatus.COMPLETED.value])
+        assert len(all_list) == 1
+
+        # Delete
+        assert mem_db.delete_active_download(dl["id"]) is True
+        assert mem_db.get_active_download(dl["id"]) is None
+
+

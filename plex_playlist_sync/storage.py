@@ -8,7 +8,17 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional, Union
 
-from plex_playlist_sync.models import Playlist, Track
+from plex_playlist_sync.models import (
+    ActiveDownload,
+    DownloadClientConfig,
+    DownloadDriverType,
+    DownloadStatus,
+    IndexerConfig,
+    MusicRequest,
+    Playlist,
+    RequestStatus,
+    Track,
+)
 
 
 class Database:
@@ -113,6 +123,9 @@ class Database:
                 (3, self._migration_v3),
                 (4, self._migration_v4),
                 (5, self._migration_v5),
+                (6, self._migration_v6),
+                (7, self._migration_v7),
+                (8, self._migration_v8),
             ]
 
             for version, migration_fn in migrations:
@@ -239,6 +252,118 @@ class Database:
         )
         cur.execute(
             "CREATE INDEX IF NOT EXISTS idx_missing_tracks_lidarr_status ON missing_tracks(lidarr_status)"
+        )
+
+    def _migration_v6(self, cur: sqlite3.Cursor) -> None:
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS music_requests (
+                id TEXT PRIMARY KEY,
+                user_id TEXT NOT NULL,
+                item_type TEXT NOT NULL,
+                title TEXT NOT NULL,
+                artist TEXT NOT NULL,
+                album TEXT,
+                cover_url TEXT,
+                preview_url TEXT,
+                status TEXT NOT NULL DEFAULT 'pending',
+                release_date TEXT,
+                foreign_id TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+            )
+            """
+        )
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_requests_user ON music_requests(user_id)")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_requests_status ON music_requests(status)")
+
+    def _migration_v7(self, cur: sqlite3.Cursor) -> None:
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS media_management_settings (
+                id INTEGER PRIMARY KEY CHECK (id = 1),
+                artist_folder_format TEXT NOT NULL DEFAULT '{Artist Name}',
+                album_folder_format TEXT NOT NULL DEFAULT '{Album Title} ({Release Year}){[ - Album Type]}',
+                standard_track_format TEXT NOT NULL DEFAULT '{track:00} - {Track Title}{[ (Quality Full)]}',
+                compilation_track_format TEXT NOT NULL DEFAULT '{track:00} - {Artist Name} - {Track Title}{[ (Quality Full)]}',
+                multi_disc_folder_format TEXT NOT NULL DEFAULT '{Medium Format} {medium:00}',
+                root_folder_path TEXT NOT NULL DEFAULT '/music',
+                colon_replacement_format TEXT NOT NULL DEFAULT ' - ',
+                clean_artist_names INTEGER NOT NULL DEFAULT 1,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+            """
+        )
+        cur.execute(
+            """
+            INSERT OR IGNORE INTO media_management_settings (id) VALUES (1);
+            """
+        )
+
+    def _migration_v8(self, cur: sqlite3.Cursor) -> None:
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS download_clients (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                driver_type TEXT NOT NULL,
+                host_url TEXT NOT NULL,
+                api_key TEXT,
+                username TEXT,
+                password TEXT,
+                enabled INTEGER NOT NULL DEFAULT 1,
+                priority INTEGER NOT NULL DEFAULT 1,
+                extra_settings_json TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+            """
+        )
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS indexers (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                indexer_type TEXT NOT NULL,
+                host_url TEXT NOT NULL,
+                api_key TEXT,
+                categories TEXT NOT NULL DEFAULT '3000,3010,3020,3030,3040',
+                enabled INTEGER NOT NULL DEFAULT 1,
+                priority INTEGER NOT NULL DEFAULT 1,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+            """
+        )
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS active_downloads (
+                id TEXT PRIMARY KEY,
+                request_id TEXT,
+                client_id TEXT NOT NULL,
+                download_hash TEXT,
+                title TEXT NOT NULL,
+                artist TEXT NOT NULL,
+                item_type TEXT NOT NULL DEFAULT 'track',
+                status TEXT NOT NULL DEFAULT 'queued',
+                progress REAL NOT NULL DEFAULT 0.0,
+                size_bytes INTEGER NOT NULL DEFAULT 0,
+                source_path TEXT,
+                target_path TEXT,
+                error_message TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (client_id) REFERENCES download_clients(id) ON DELETE CASCADE,
+                FOREIGN KEY (request_id) REFERENCES music_requests(id) ON DELETE SET NULL
+            );
+            """
+        )
+        cur.execute(
+            "CREATE INDEX IF NOT EXISTS idx_active_downloads_status ON active_downloads(status);"
+        )
+        cur.execute(
+            "CREATE INDEX IF NOT EXISTS idx_active_downloads_client ON active_downloads(client_id);"
         )
 
     # -------------------------------------------------------------------------
@@ -731,3 +856,644 @@ class Database:
             )
             self.conn.commit()
             return cur.rowcount > 0
+
+    # -------------------------------------------------------------------------
+    # Music Requests CRUD
+    # -------------------------------------------------------------------------
+
+    def create_request(self, request: MusicRequest) -> dict[str, Any]:
+        """Creates a new music request."""
+        status_val = request.status.value if isinstance(request.status, RequestStatus) else str(request.status)
+        with self._lock:
+            self.conn.execute(
+                """
+                INSERT INTO music_requests (
+                    id, user_id, item_type, title, artist, album,
+                    cover_url, preview_url, status, release_date, foreign_id,
+                    created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                """,
+                (
+                    str(request.id),
+                    str(request.user_id),
+                    str(request.item_type),
+                    str(request.title),
+                    str(request.artist),
+                    request.album,
+                    request.cover_url,
+                    request.preview_url,
+                    status_val,
+                    request.release_date,
+                    request.foreign_id,
+                ),
+            )
+            self.conn.commit()
+        req = self.get_request(str(request.id))
+        if req is None:
+            raise RuntimeError(f"Failed to retrieve created request {request.id}")
+        return req
+
+    def get_request(self, request_id: str) -> Optional[dict[str, Any]]:
+        """Retrieves a single request by ID with user info joined."""
+        with self._lock:
+            cur = self.conn.execute(
+                """
+                SELECT r.id, r.user_id, r.item_type, r.title, r.artist, r.album,
+                       r.cover_url, r.preview_url, r.status, r.release_date, r.foreign_id,
+                       r.created_at, r.updated_at, u.username
+                FROM music_requests r
+                LEFT JOIN users u ON r.user_id = u.id
+                WHERE r.id = ?
+                """,
+                (str(request_id),),
+            )
+            row = cur.fetchone()
+            return dict(row) if row else None
+
+    def list_requests(
+        self, user_id: Optional[str] = None, status: Optional[str] = None
+    ) -> list[dict[str, Any]]:
+        """Lists requests filtered by user_id and/or status with username joined."""
+        query = """
+            SELECT r.id, r.user_id, r.item_type, r.title, r.artist, r.album,
+                   r.cover_url, r.preview_url, r.status, r.release_date, r.foreign_id,
+                   r.created_at, r.updated_at, u.username
+            FROM music_requests r
+            LEFT JOIN users u ON r.user_id = u.id
+            WHERE 1=1
+        """
+        params: list[Any] = []
+        if user_id:
+            query += " AND r.user_id = ?"
+            params.append(str(user_id))
+        if status:
+            status_val = status.value if hasattr(status, "value") else str(status)
+            query += " AND r.status = ?"
+            params.append(status_val)
+
+        query += " ORDER BY r.created_at DESC"
+
+        with self._lock:
+            cur = self.conn.execute(query, params)
+            return [dict(row) for row in cur.fetchall()]
+
+    def update_request_status(
+        self, request_id: str, status: Union[RequestStatus, str]
+    ) -> bool:
+        """Updates the status of a request."""
+        status_val = status.value if isinstance(status, RequestStatus) else str(status)
+        with self._lock:
+            cur = self.conn.execute(
+                """
+                UPDATE music_requests
+                SET status = ?, updated_at = CURRENT_TIMESTAMP
+                WHERE id = ?
+                """,
+                (status_val, str(request_id)),
+            )
+            self.conn.commit()
+            return cur.rowcount > 0
+
+    def delete_request(self, request_id: str) -> bool:
+        """Deletes a request by ID."""
+        with self._lock:
+            cur = self.conn.execute(
+                "DELETE FROM music_requests WHERE id = ?",
+                (str(request_id),),
+            )
+            self.conn.commit()
+            return cur.rowcount > 0
+
+    def find_matching_processing_requests(
+        self, artist: str, album: Optional[str] = None, title: Optional[str] = None
+    ) -> list[dict[str, Any]]:
+        """Finds pending or processing requests matching an artist and optional album/title."""
+        clean_artist = (artist or "").strip().lower()
+        if not clean_artist:
+            return []
+        clean_album = (album or "").strip().lower() if album else None
+        clean_title = (title or "").strip().lower() if title else None
+
+        with self._lock:
+            cur = self.conn.execute(
+                """
+                SELECT r.id, r.user_id, r.item_type, r.title, r.artist, r.album,
+                       r.cover_url, r.preview_url, r.status, r.release_date, r.foreign_id,
+                       r.created_at, r.updated_at, u.username
+                FROM music_requests r
+                LEFT JOIN users u ON r.user_id = u.id
+                WHERE r.status IN ('processing', 'pending', 'approved')
+                  AND LOWER(r.artist) = ?
+                """,
+                (clean_artist,),
+            )
+            rows = [dict(r) for r in cur.fetchall()]
+
+        matches: list[dict[str, Any]] = []
+        for r in rows:
+            req_item_type = r.get("item_type", "")
+            req_title = (r.get("title") or "").strip().lower()
+            req_album = (r.get("album") or "").strip().lower()
+
+            if clean_album and clean_title:
+                if req_item_type == "album":
+                    if req_title == clean_album or req_album == clean_album:
+                        matches.append(r)
+                elif req_item_type == "track":
+                    if req_title == clean_title and (not req_album or req_album == clean_album):
+                        matches.append(r)
+            elif clean_album:
+                if req_item_type == "album" and (req_title == clean_album or req_album == clean_album):
+                    matches.append(r)
+                elif req_item_type == "track" and req_album == clean_album:
+                    matches.append(r)
+            elif clean_title:
+                if req_title == clean_title or req_album == clean_title:
+                    matches.append(r)
+            else:
+                matches.append(r)
+        return matches
+
+    # -------------------------------------------------------------------------
+    # Media Management Settings CRUD
+    # -------------------------------------------------------------------------
+
+    def get_media_management_settings(self) -> dict[str, Any]:
+        """Retrieves media management settings (singleton row id=1)."""
+        with self._lock:
+            cur = self.conn.execute("SELECT * FROM media_management_settings WHERE id = 1")
+            row = cur.fetchone()
+            if not row:
+                self.conn.execute("INSERT OR IGNORE INTO media_management_settings (id) VALUES (1)")
+                self.conn.commit()
+                cur = self.conn.execute("SELECT * FROM media_management_settings WHERE id = 1")
+                row = cur.fetchone()
+            res = dict(row)
+            res["clean_artist_names"] = bool(res.get("clean_artist_names", 1))
+            return res
+
+    def update_media_management_settings(self, settings: dict[str, Any]) -> dict[str, Any]:
+        """Updates media management settings (singleton row id=1)."""
+        allowed_keys = {
+            "artist_folder_format",
+            "album_folder_format",
+            "standard_track_format",
+            "compilation_track_format",
+            "multi_disc_folder_format",
+            "root_folder_path",
+            "colon_replacement_format",
+            "clean_artist_names",
+        }
+        updates: dict[str, Any] = {}
+        for k, v in settings.items():
+            if k in allowed_keys and v is not None:
+                if k == "clean_artist_names":
+                    updates[k] = 1 if v else 0
+                else:
+                    updates[k] = str(v)
+
+        if updates:
+            set_clauses = [f"{k} = ?" for k in updates.keys()]
+            set_clauses.append("updated_at = CURRENT_TIMESTAMP")
+            values = list(updates.values())
+            query = f"UPDATE media_management_settings SET {', '.join(set_clauses)} WHERE id = 1"
+            with self._lock:
+                self.conn.execute(query, values)
+                self.conn.commit()
+
+        return self.get_media_management_settings()
+
+    # -------------------------------------------------------------------------
+    # Download Clients CRUD
+    # -------------------------------------------------------------------------
+
+    def create_download_client(
+        self, client: Union[dict[str, Any], DownloadClientConfig]
+    ) -> dict[str, Any]:
+        """Creates or updates a download client in the database."""
+        c = client.to_dict() if isinstance(client, DownloadClientConfig) else dict(client)
+        cid = str(c.get("id") or "")
+        name = str(c.get("name") or "")
+        driver_type = str(c.get("driver_type") or "")
+        host_url = str(c.get("host_url") or "")
+        api_key = c.get("api_key")
+        username = c.get("username")
+        password = c.get("password")
+        enabled = 1 if c.get("enabled", True) else 0
+        priority = int(c.get("priority", 1))
+        extra_settings_json = c.get("extra_settings_json")
+        if isinstance(c.get("extra_settings"), dict):
+            extra_settings_json = json.dumps(c["extra_settings"])
+
+        with self._lock:
+            self.conn.execute(
+                """
+                INSERT INTO download_clients (
+                    id, name, driver_type, host_url, api_key, username, password,
+                    enabled, priority, extra_settings_json, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                ON CONFLICT(id) DO UPDATE SET
+                    name = excluded.name,
+                    driver_type = excluded.driver_type,
+                    host_url = excluded.host_url,
+                    api_key = excluded.api_key,
+                    username = excluded.username,
+                    password = excluded.password,
+                    enabled = excluded.enabled,
+                    priority = excluded.priority,
+                    extra_settings_json = excluded.extra_settings_json,
+                    updated_at = CURRENT_TIMESTAMP
+                """,
+                (
+                    cid,
+                    name,
+                    driver_type,
+                    host_url,
+                    api_key,
+                    username,
+                    password,
+                    enabled,
+                    priority,
+                    extra_settings_json,
+                ),
+            )
+            self.conn.commit()
+        return self.get_download_client(cid) or {}
+
+    def get_download_client(self, client_id: str) -> Optional[dict[str, Any]]:
+        """Retrieves a single download client by ID."""
+        with self._lock:
+            cur = self.conn.execute(
+                "SELECT * FROM download_clients WHERE id = ?", (str(client_id),)
+            )
+            row = cur.fetchone()
+            if not row:
+                return None
+            res = dict(row)
+            res["enabled"] = bool(res.get("enabled", 1))
+            res["priority"] = int(res.get("priority", 1))
+            return res
+
+    def list_download_clients(self, enabled_only: bool = False) -> list[dict[str, Any]]:
+        """Lists download clients, optionally filtering for enabled only."""
+        with self._lock:
+            if enabled_only:
+                cur = self.conn.execute(
+                    "SELECT * FROM download_clients WHERE enabled = 1 ORDER BY priority ASC, created_at ASC"
+                )
+            else:
+                cur = self.conn.execute(
+                    "SELECT * FROM download_clients ORDER BY priority ASC, created_at ASC"
+                )
+            rows = [dict(r) for r in cur.fetchall()]
+        for r in rows:
+            r["enabled"] = bool(r.get("enabled", 1))
+            r["priority"] = int(r.get("priority", 1))
+        return rows
+
+    def update_download_client(
+        self, client_id: str, updates: dict[str, Any]
+    ) -> Optional[dict[str, Any]]:
+        """Updates download client fields."""
+        allowed = {
+            "name",
+            "driver_type",
+            "host_url",
+            "api_key",
+            "username",
+            "password",
+            "enabled",
+            "priority",
+            "extra_settings_json",
+        }
+        filtered: dict[str, Any] = {}
+        for k, v in updates.items():
+            if k in allowed:
+                if k == "enabled":
+                    filtered[k] = 1 if v else 0
+                elif k == "priority":
+                    filtered[k] = int(v)
+                else:
+                    filtered[k] = v
+
+        if not filtered:
+            return self.get_download_client(client_id)
+
+        set_clauses = [f"{k} = ?" for k in filtered.keys()]
+        set_clauses.append("updated_at = CURRENT_TIMESTAMP")
+        values = list(filtered.values())
+        values.append(str(client_id))
+
+        with self._lock:
+            cur = self.conn.execute(
+                f"UPDATE download_clients SET {', '.join(set_clauses)} WHERE id = ?",
+                values,
+            )
+            self.conn.commit()
+            if cur.rowcount == 0:
+                return None
+        return self.get_download_client(client_id)
+
+    def delete_download_client(self, client_id: str) -> bool:
+        """Deletes a download client by ID."""
+        with self._lock:
+            cur = self.conn.execute(
+                "DELETE FROM download_clients WHERE id = ?", (str(client_id),)
+            )
+            self.conn.commit()
+            return cur.rowcount > 0
+
+    # -------------------------------------------------------------------------
+    # Indexers CRUD
+    # -------------------------------------------------------------------------
+
+    def create_indexer(
+        self, indexer: Union[dict[str, Any], IndexerConfig]
+    ) -> dict[str, Any]:
+        """Creates or updates an indexer."""
+        idx = indexer.to_dict() if isinstance(indexer, IndexerConfig) else dict(indexer)
+        iid = str(idx.get("id") or "")
+        name = str(idx.get("name") or "")
+        indexer_type = str(idx.get("indexer_type") or "torznab")
+        host_url = str(idx.get("host_url") or "")
+        api_key = idx.get("api_key")
+        categories = str(idx.get("categories") or "3000,3010,3020,3030,3040")
+        enabled = 1 if idx.get("enabled", True) else 0
+        priority = int(idx.get("priority", 1))
+
+        with self._lock:
+            self.conn.execute(
+                """
+                INSERT INTO indexers (
+                    id, name, indexer_type, host_url, api_key, categories,
+                    enabled, priority, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                ON CONFLICT(id) DO UPDATE SET
+                    name = excluded.name,
+                    indexer_type = excluded.indexer_type,
+                    host_url = excluded.host_url,
+                    api_key = excluded.api_key,
+                    categories = excluded.categories,
+                    enabled = excluded.enabled,
+                    priority = excluded.priority,
+                    updated_at = CURRENT_TIMESTAMP
+                """,
+                (iid, name, indexer_type, host_url, api_key, categories, enabled, priority),
+            )
+            self.conn.commit()
+        return self.get_indexer(iid) or {}
+
+    def get_indexer(self, indexer_id: str) -> Optional[dict[str, Any]]:
+        """Retrieves a single indexer by ID."""
+        with self._lock:
+            cur = self.conn.execute(
+                "SELECT * FROM indexers WHERE id = ?", (str(indexer_id),)
+            )
+            row = cur.fetchone()
+            if not row:
+                return None
+            res = dict(row)
+            res["enabled"] = bool(res.get("enabled", 1))
+            res["priority"] = int(res.get("priority", 1))
+            return res
+
+    def list_indexers(self, enabled_only: bool = False) -> list[dict[str, Any]]:
+        """Lists indexers, optionally filtering for enabled only."""
+        with self._lock:
+            if enabled_only:
+                cur = self.conn.execute(
+                    "SELECT * FROM indexers WHERE enabled = 1 ORDER BY priority ASC, created_at ASC"
+                )
+            else:
+                cur = self.conn.execute(
+                    "SELECT * FROM indexers ORDER BY priority ASC, created_at ASC"
+                )
+            rows = [dict(r) for r in cur.fetchall()]
+        for r in rows:
+            r["enabled"] = bool(r.get("enabled", 1))
+            r["priority"] = int(r.get("priority", 1))
+        return rows
+
+    def update_indexer(
+        self, indexer_id: str, updates: dict[str, Any]
+    ) -> Optional[dict[str, Any]]:
+        """Updates indexer fields."""
+        allowed = {"name", "indexer_type", "host_url", "api_key", "categories", "enabled", "priority"}
+        filtered: dict[str, Any] = {}
+        for k, v in updates.items():
+            if k in allowed:
+                if k == "enabled":
+                    filtered[k] = 1 if v else 0
+                elif k == "priority":
+                    filtered[k] = int(v)
+                else:
+                    filtered[k] = v
+
+        if not filtered:
+            return self.get_indexer(indexer_id)
+
+        set_clauses = [f"{k} = ?" for k in filtered.keys()]
+        set_clauses.append("updated_at = CURRENT_TIMESTAMP")
+        values = list(filtered.values())
+        values.append(str(indexer_id))
+
+        with self._lock:
+            cur = self.conn.execute(
+                f"UPDATE indexers SET {', '.join(set_clauses)} WHERE id = ?",
+                values,
+            )
+            self.conn.commit()
+            if cur.rowcount == 0:
+                return None
+        return self.get_indexer(indexer_id)
+
+    def delete_indexer(self, indexer_id: str) -> bool:
+        """Deletes an indexer by ID."""
+        with self._lock:
+            cur = self.conn.execute(
+                "DELETE FROM indexers WHERE id = ?", (str(indexer_id),)
+            )
+            self.conn.commit()
+            return cur.rowcount > 0
+
+    # -------------------------------------------------------------------------
+    # Active Downloads CRUD
+    # -------------------------------------------------------------------------
+
+    def create_active_download(
+        self, download: Union[dict[str, Any], ActiveDownload]
+    ) -> dict[str, Any]:
+        """Creates or updates an active download record."""
+        d = download.to_dict() if isinstance(download, ActiveDownload) else dict(download)
+        did = str(d.get("id") or "")
+        req_id = d.get("request_id")
+        client_id = str(d.get("client_id") or "")
+        download_hash = d.get("download_hash")
+        title = str(d.get("title") or "")
+        artist = str(d.get("artist") or "")
+        item_type = str(d.get("item_type") or "track")
+        status = str(d.get("status") or "queued")
+        progress = float(d.get("progress") or 0.0)
+        size_bytes = int(d.get("size_bytes") or 0)
+        source_path = d.get("source_path")
+        target_path = d.get("target_path")
+        error_message = d.get("error_message")
+
+        with self._lock:
+            self.conn.execute(
+                """
+                INSERT INTO active_downloads (
+                    id, request_id, client_id, download_hash, title, artist,
+                    item_type, status, progress, size_bytes, source_path,
+                    target_path, error_message, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                ON CONFLICT(id) DO UPDATE SET
+                    request_id = excluded.request_id,
+                    client_id = excluded.client_id,
+                    download_hash = excluded.download_hash,
+                    title = excluded.title,
+                    artist = excluded.artist,
+                    item_type = excluded.item_type,
+                    status = excluded.status,
+                    progress = excluded.progress,
+                    size_bytes = excluded.size_bytes,
+                    source_path = excluded.source_path,
+                    target_path = excluded.target_path,
+                    error_message = excluded.error_message,
+                    updated_at = CURRENT_TIMESTAMP
+                """,
+                (
+                    did,
+                    req_id,
+                    client_id,
+                    download_hash,
+                    title,
+                    artist,
+                    item_type,
+                    status,
+                    progress,
+                    size_bytes,
+                    source_path,
+                    target_path,
+                    error_message,
+                ),
+            )
+            self.conn.commit()
+        return self.get_active_download(did) or {}
+
+    def get_active_download(self, download_id: str) -> Optional[dict[str, Any]]:
+        """Retrieves active download by ID with client details joined."""
+        with self._lock:
+            cur = self.conn.execute(
+                """
+                SELECT d.*, c.name AS client_name, c.driver_type AS client_driver_type
+                FROM active_downloads d
+                LEFT JOIN download_clients c ON d.client_id = c.id
+                WHERE d.id = ?
+                """,
+                (str(download_id),),
+            )
+            row = cur.fetchone()
+            if not row:
+                return None
+            res = dict(row)
+            res["progress"] = float(res.get("progress") or 0.0)
+            res["size_bytes"] = int(res.get("size_bytes") or 0)
+            return res
+
+    def list_active_downloads(
+        self, statuses: Optional[list[str]] = None
+    ) -> list[dict[str, Any]]:
+        """Lists active downloads, optionally filtered by a list of statuses."""
+        with self._lock:
+            if statuses:
+                placeholders = ", ".join(["?"] * len(statuses))
+                cur = self.conn.execute(
+                    f"""
+                    SELECT d.*, c.name AS client_name, c.driver_type AS client_driver_type
+                    FROM active_downloads d
+                    LEFT JOIN download_clients c ON d.client_id = c.id
+                    WHERE d.status IN ({placeholders})
+                    ORDER BY d.created_at DESC
+                    """,
+                    [str(s).lower() for s in statuses],
+                )
+            else:
+                cur = self.conn.execute(
+                    """
+                    SELECT d.*, c.name AS client_name, c.driver_type AS client_driver_type
+                    FROM active_downloads d
+                    LEFT JOIN download_clients c ON d.client_id = c.id
+                    ORDER BY d.created_at DESC
+                    """
+                )
+            rows = [dict(r) for r in cur.fetchall()]
+        for r in rows:
+            r["progress"] = float(r.get("progress") or 0.0)
+            r["size_bytes"] = int(r.get("size_bytes") or 0)
+        return rows
+
+    def update_download_progress(
+        self, download_id: str, progress: float, size_bytes: Optional[int] = None
+    ) -> bool:
+        """Updates download progress and optional size."""
+        with self._lock:
+            if size_bytes is not None:
+                cur = self.conn.execute(
+                    """
+                    UPDATE active_downloads
+                    SET progress = ?, size_bytes = ?, updated_at = CURRENT_TIMESTAMP
+                    WHERE id = ?
+                    """,
+                    (float(progress), int(size_bytes), str(download_id)),
+                )
+            else:
+                cur = self.conn.execute(
+                    """
+                    UPDATE active_downloads
+                    SET progress = ?, updated_at = CURRENT_TIMESTAMP
+                    WHERE id = ?
+                    """,
+                    (float(progress), str(download_id)),
+                )
+            self.conn.commit()
+            return cur.rowcount > 0
+
+    def update_download_status(
+        self,
+        download_id: str,
+        status: str,
+        error_message: Optional[str] = None,
+        source_path: Optional[str] = None,
+        target_path: Optional[str] = None,
+    ) -> bool:
+        """Updates status and paths / error for an active download."""
+        updates = ["status = ?", "updated_at = CURRENT_TIMESTAMP"]
+        params: list[Any] = [str(status).lower()]
+        if error_message is not None:
+            updates.append("error_message = ?")
+            params.append(error_message)
+        if source_path is not None:
+            updates.append("source_path = ?")
+            params.append(source_path)
+        if target_path is not None:
+            updates.append("target_path = ?")
+            params.append(target_path)
+
+        params.append(str(download_id))
+        query = f"UPDATE active_downloads SET {', '.join(updates)} WHERE id = ?"
+        with self._lock:
+            cur = self.conn.execute(query, params)
+            self.conn.commit()
+            return cur.rowcount > 0
+
+    def delete_active_download(self, download_id: str) -> bool:
+        """Deletes an active download entry."""
+        with self._lock:
+            cur = self.conn.execute(
+                "DELETE FROM active_downloads WHERE id = ?", (str(download_id),)
+            )
+            self.conn.commit()
+            return cur.rowcount > 0
+
+

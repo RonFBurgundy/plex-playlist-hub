@@ -10,7 +10,19 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from starlette.staticfiles import StaticFiles
 
-from plex_playlist_sync.api.routes import auth, missing, playlists, sync, users
+from plex_playlist_sync.api.routes import (
+    auth,
+    discovery,
+    download_clients,
+    indexers,
+    missing,
+    playlists,
+    queue,
+    requests,
+    settings,
+    sync,
+    users,
+)
 from plex_playlist_sync.config import Config
 from plex_playlist_sync.storage import Database
 
@@ -48,6 +60,7 @@ def create_app(
             "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
             "font-src 'self' https://fonts.gstatic.com; "
             "img-src 'self' data: https:; "
+            "media-src 'self' https: data:; "
             "connect-src 'self'; "
             "frame-ancestors 'none'"
         )
@@ -84,6 +97,14 @@ def create_app(
     api_router.include_router(playlists.router, prefix="/playlists", tags=["playlists"])
     api_router.include_router(sync.router, prefix="/sync", tags=["sync"])
     api_router.include_router(missing.router, prefix="/missing", tags=["missing"])
+    api_router.include_router(discovery.router, prefix="/discovery", tags=["discovery"])
+    api_router.include_router(requests.router, prefix="/requests", tags=["requests"])
+    api_router.include_router(settings.router, prefix="/settings", tags=["settings"])
+    api_router.include_router(
+        download_clients.router, prefix="/settings/download-clients", tags=["download_clients"]
+    )
+    api_router.include_router(indexers.router, prefix="/settings/indexers", tags=["indexers"])
+    api_router.include_router(queue.router, prefix="/queue", tags=["queue"])
 
     @api_router.api_route("/health", methods=["GET", "HEAD"], tags=["health"])
     def health_check() -> dict[str, str]:

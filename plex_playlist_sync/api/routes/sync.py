@@ -24,7 +24,7 @@ from plex_playlist_sync.clients.deezer import DeezerClient
 from plex_playlist_sync.clients.plex import PlexClient
 from plex_playlist_sync.clients.spotify import SpotifyClient
 from plex_playlist_sync.config import Config
-from plex_playlist_sync.models import Playlist, Track
+from plex_playlist_sync.models import Playlist, RequestStatus, Track
 from plex_playlist_sync.storage import Database
 
 logger = logging.getLogger(__name__)
@@ -349,17 +349,71 @@ async def handle_sync_webhook(
             )
 
     body_preview = ""
+    fulfilled_count = 0
     try:
         raw_body = await request.body()
         if raw_body:
             body_preview = raw_body[:200].decode("utf-8", errors="ignore")
-    except Exception:
-        pass
+            try:
+                payload = json.loads(raw_body.decode("utf-8", errors="ignore"))
+            except Exception:
+                payload = None
 
-    logger.info("Sync webhook received (triggering background sync): %s", body_preview)
+            if isinstance(payload, dict):
+                artist_name = None
+                album_name = None
+                track_title = None
+
+                if isinstance(payload.get("artist"), dict):
+                    artist_name = payload["artist"].get("name")
+                elif isinstance(payload.get("artist"), str):
+                    artist_name = payload["artist"]
+
+                if isinstance(payload.get("album"), dict):
+                    album_name = payload["album"].get("title")
+                elif isinstance(payload.get("album"), str):
+                    album_name = payload["album"]
+                elif isinstance(payload.get("albums"), list) and payload["albums"]:
+                    first_album = payload["albums"][0]
+                    album_name = first_album.get("title") if isinstance(first_album, dict) else str(first_album)
+
+                if isinstance(payload.get("track"), dict):
+                    track_title = payload["track"].get("title")
+                elif isinstance(payload.get("title"), str):
+                    track_title = payload["title"]
+                elif isinstance(payload.get("trackFiles"), list) and payload["trackFiles"]:
+                    first_tf = payload["trackFiles"][0]
+                    if isinstance(first_tf, dict) and isinstance(first_tf.get("track"), dict):
+                        track_title = first_tf["track"].get("title")
+
+                if artist_name:
+                    matching_reqs = db.find_matching_processing_requests(
+                        artist=artist_name, album=album_name, title=track_title
+                    )
+                    for m_req in matching_reqs:
+                        db.update_request_status(m_req["id"], RequestStatus.AVAILABLE)
+                        fulfilled_count += 1
+                        logger.info(
+                            "Auto-fulfilled request %s (%s - %s) to AVAILABLE via webhook",
+                            m_req["id"],
+                            m_req.get("artist"),
+                            m_req.get("title"),
+                        )
+    except Exception as e:
+        logger.debug("Error inspecting webhook payload for request fulfillment: %s", e)
+
+    logger.info(
+        "Sync webhook received (triggering background sync): %s (auto-fulfilled %d requests)",
+        body_preview,
+        fulfilled_count,
+    )
 
     if sync_state.is_syncing:
-        return {"status": "already_running", "message": "Synchronization is already in progress"}
+        return {
+            "status": "already_running",
+            "message": "Synchronization is already in progress",
+            "fulfilled_requests": fulfilled_count,
+        }
 
     background_tasks.add_task(
         sync_state.execute_sync,
@@ -369,4 +423,9 @@ async def handle_sync_webhook(
         spotify_client=spotify_client,
         deezer_client=deezer_client,
     )
-    return {"status": "triggered", "message": "Background synchronization triggered via webhook"}
+    return {
+        "status": "triggered",
+        "message": "Background synchronization triggered via webhook",
+        "fulfilled_requests": fulfilled_count,
+    }
+

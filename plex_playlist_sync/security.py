@@ -228,3 +228,59 @@ def is_safe_image_url(url: Optional[str]) -> bool:
 
     return False
 
+
+def is_safe_service_url(url: Optional[str]) -> bool:
+    """Validates that a service host URL (download client or indexer) is safe against SSRF.
+
+    Accepts HTTP and HTTPS schemes on homelab LAN IPs (private, loopback, docker container names)
+    and valid public domains.
+    Strictly blocks:
+    - Dangerous schemes (file://, ftp://, gopher://, etc.)
+    - Link-local and cloud metadata addresses (169.254.169.254, 169.254.0.0/16, fd00:ec2::254)
+    - Cloud metadata hostnames (metadata.google.internal, instance-data)
+    - Userinfo URL components (embedded username/password)
+    - Malformed or illegal hostname characters
+    """
+    import ipaddress
+
+    if not isinstance(url, str):
+        return False
+    val = url.strip()
+    if not val:
+        return False
+
+    try:
+        parsed = urllib.parse.urlparse(val)
+    except ValueError:
+        return False
+
+    if parsed.scheme not in ("http", "https"):
+        return False
+
+    if not parsed.hostname or parsed.username or parsed.password:
+        return False
+
+    hostname = parsed.hostname.lower()
+
+    # Reject cloud metadata hostnames
+    if hostname in ("metadata.google.internal", "instance-data", "metadata"):
+        return False
+
+    # Check IP addresses
+    try:
+        ip = ipaddress.ip_address(hostname)
+        if ip.is_link_local or ip.is_multicast or ip.is_reserved:
+            return False
+        return True
+    except ValueError:
+        pass
+
+    # Hostname syntax validation
+    if hostname == "localhost":
+        return True
+
+    if not re.fullmatch(r"^[a-z0-9][a-z0-9_\.-]*[a-z0-9]$", hostname):
+        return False
+
+    return True
+

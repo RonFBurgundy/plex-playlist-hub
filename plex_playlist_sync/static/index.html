@@ -68,13 +68,73 @@
         </div>
 
         <!-- Live Sync Status Badge -->
-        <div class="hidden md:flex items-center space-x-2 px-3 py-1 rounded-full bg-slate-900 border border-slate-800 text-xs text-slate-300">
+        <div class="hidden lg:flex items-center space-x-2 px-3 py-1 rounded-full bg-slate-900 border border-slate-800 text-xs text-slate-300">
           <span :class="syncStatus.is_syncing ? 'status-dot syncing' : 'status-dot idle'"></span>
           <span x-text="syncStatus.is_syncing ? 'Syncing...' : 'Idle'"></span>
           <span class="text-slate-600">|</span>
           <span class="text-slate-400 text-[11px]" x-text="'Last: ' + formatRelativeTime(syncStatus.last_run_at)"></span>
         </div>
       </div>
+
+      <!-- Overseerr / Arr Primary Navigation Tabs -->
+      <nav class="hidden md:flex items-center space-x-1" x-show="isAuthenticated">
+        <!-- Discover Tab -->
+        <button @click="activeTab = 'discover'"
+                :class="activeTab === 'discover' ? 'bg-amber-500/15 text-[#e5a00d] border-amber-500/40' : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60 border-transparent'"
+                class="flex items-center space-x-2 px-3.5 py-1.5 rounded-lg text-xs font-semibold border transition">
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"></path>
+          </svg>
+          <span>Discover</span>
+        </button>
+
+        <!-- Requests Tab -->
+        <button @click="activeTab = 'requests'; loadRequests()"
+                :class="activeTab === 'requests' ? 'bg-amber-500/15 text-[#e5a00d] border-amber-500/40' : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60 border-transparent'"
+                class="flex items-center space-x-2 px-3.5 py-1.5 rounded-lg text-xs font-semibold border transition relative">
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4"></path>
+          </svg>
+          <span>Requests</span>
+          <span x-show="pendingRequestsCount > 0"
+                x-text="pendingRequestsCount"
+                class="px-1.5 py-0.2 rounded-full text-[10px] font-bold bg-[#e5a00d] text-slate-950"></span>
+        </button>
+
+        <!-- Playlists Tab -->
+        <button @click="activeTab = 'playlists'"
+                :class="activeTab === 'playlists' ? 'bg-amber-500/15 text-[#e5a00d] border-amber-500/40' : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60 border-transparent'"
+                class="flex items-center space-x-2 px-3.5 py-1.5 rounded-lg text-xs font-semibold border transition">
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3"></path>
+          </svg>
+          <span>Playlists</span>
+        </button>
+
+        <!-- Activity Tab -->
+        <button @click="activeTab = 'activity'; loadQueue()"
+                :class="activeTab === 'activity' ? 'bg-amber-500/15 text-[#e5a00d] border-amber-500/40' : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60 border-transparent'"
+                class="flex items-center space-x-2 px-3.5 py-1.5 rounded-lg text-xs font-semibold border transition relative">
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"></path>
+          </svg>
+          <span>Activity</span>
+          <span x-show="activeDownloadsCount > 0"
+                x-text="activeDownloadsCount"
+                class="px-1.5 py-0.2 rounded-full text-[10px] font-bold bg-[#e5a00d] text-slate-950 animate-pulse"></span>
+        </button>
+
+        <!-- Settings Tab -->
+        <button @click="activeTab = 'settings'; loadSettings();"
+                :class="activeTab === 'settings' ? 'bg-amber-500/15 text-[#e5a00d] border-amber-500/40' : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60 border-transparent'"
+                class="flex items-center space-x-2 px-3.5 py-1.5 rounded-lg text-xs font-semibold border transition">
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"></path>
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"></path>
+          </svg>
+          <span>Settings</span>
+        </button>
+      </nav>
 
       <!-- Action Buttons & User Menu -->
       <div class="flex items-center space-x-3">
@@ -203,9 +263,345 @@
     <!-- AUTHENTICATED DASHBOARD CONTENT -->
     <template x-if="isAuthenticated">
       <div class="space-y-8">
-        
-        <!-- 1. Top Summary Stat Cards Grid -->
-        <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+
+        <!-- Mobile Navigation Bar -->
+        <div class="flex md:hidden items-center justify-around py-2 px-3 rounded-xl bg-slate-900 border border-slate-800">
+          <button @click="activeTab = 'discover'"
+                  :class="activeTab === 'discover' ? 'text-[#e5a00d] font-bold' : 'text-slate-400'"
+                  class="text-xs flex items-center space-x-1">
+            <span>Discover</span>
+          </button>
+          <button @click="activeTab = 'requests'; loadRequests()"
+                  :class="activeTab === 'requests' ? 'text-[#e5a00d] font-bold' : 'text-slate-400'"
+                  class="text-xs flex items-center space-x-1">
+            <span>Requests</span>
+            <span x-show="pendingRequestsCount > 0" x-text="pendingRequestsCount" class="px-1.5 py-0.2 rounded-full text-[10px] bg-[#e5a00d] text-slate-950 font-bold"></span>
+          </button>
+          <button @click="activeTab = 'playlists'"
+                  :class="activeTab === 'playlists' ? 'text-[#e5a00d] font-bold' : 'text-slate-400'"
+                  class="text-xs flex items-center space-x-1">
+            <span>Playlists</span>
+          </button>
+          <button @click="activeTab = 'activity'; loadQueue()"
+                  :class="activeTab === 'activity' ? 'text-[#e5a00d] font-bold' : 'text-slate-400'"
+                  class="text-xs flex items-center space-x-1 relative">
+            <span>Activity</span>
+            <span x-show="activeDownloadsCount > 0" x-text="activeDownloadsCount" class="px-1.5 py-0.2 rounded-full text-[10px] bg-[#e5a00d] text-slate-950 font-bold animate-pulse"></span>
+          </button>
+          <button @click="activeTab = 'settings'; loadSettings();"
+                  :class="activeTab === 'settings' ? 'text-[#e5a00d] font-bold' : 'text-slate-400'"
+                  class="text-xs flex items-center space-x-1">
+            <span>Settings</span>
+          </button>
+        </div>
+
+        <!-- ================= DISCOVER TAB ================= -->
+        <div x-show="activeTab === 'discover'" class="space-y-6">
+          <!-- Discover Header & Search Bar -->
+          <div class="flex flex-col md:flex-row md:items-center justify-between gap-4">
+            <div>
+              <h2 class="text-2xl font-bold tracking-tight text-white">Music Discovery</h2>
+              <p class="text-xs text-slate-400">Discover trending music, new album releases, and search across Apple Music & Deezer</p>
+            </div>
+
+            <!-- Search Input with Debounce -->
+            <div class="relative w-full md:w-96">
+              <div class="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-slate-400">
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"></path>
+                </svg>
+              </div>
+              <input type="text"
+                     x-model="discoveryState.query"
+                     @input.debounce.400ms="searchDiscovery()"
+                     placeholder="Search artist, album, or song..."
+                     class="w-full pl-9 pr-8 py-2 rounded-xl bg-slate-900 border border-slate-800 text-sm text-slate-200 placeholder-slate-500 focus:outline-none focus:border-[#e5a00d] focus:ring-1 focus:ring-[#e5a00d] transition">
+              <button x-show="discoveryState.query"
+                      @click="discoveryState.query = ''; loadTrending()"
+                      class="absolute inset-y-0 right-0 pr-3 flex items-center text-slate-400 hover:text-slate-200">
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
+                </svg>
+              </button>
+            </div>
+          </div>
+
+          <!-- Category Pills Filter -->
+          <div class="flex items-center space-x-2 overflow-x-auto pb-2 border-b border-slate-800">
+            <button @click="setDiscoveryCategory('trending')"
+                    :class="discoveryState.category === 'trending' ? 'bg-[#e5a00d] text-slate-950 font-bold' : 'bg-slate-900 text-slate-300 hover:bg-slate-800 border border-slate-800'"
+                    class="px-3.5 py-1.5 rounded-lg text-xs transition flex items-center space-x-1.5 flex-shrink-0">
+              <span>Trending</span>
+            </button>
+            <button @click="setDiscoveryCategory('new_releases')"
+                    :class="discoveryState.category === 'new_releases' ? 'bg-[#e5a00d] text-slate-950 font-bold' : 'bg-slate-900 text-slate-300 hover:bg-slate-800 border border-slate-800'"
+                    class="px-3.5 py-1.5 rounded-lg text-xs transition flex items-center space-x-1.5 flex-shrink-0">
+              <span>New Releases</span>
+            </button>
+            <button @click="setDiscoveryCategory('all')"
+                    :class="discoveryState.category === 'all' ? 'bg-[#e5a00d] text-slate-950 font-bold' : 'bg-slate-900 text-slate-300 hover:bg-slate-800 border border-slate-800'"
+                    class="px-3.5 py-1.5 rounded-lg text-xs transition flex items-center space-x-1.5 flex-shrink-0">
+              <span>All Types</span>
+            </button>
+            <button @click="setDiscoveryCategory('albums')"
+                    :class="discoveryState.category === 'albums' ? 'bg-[#e5a00d] text-slate-950 font-bold' : 'bg-slate-900 text-slate-300 hover:bg-slate-800 border border-slate-800'"
+                    class="px-3.5 py-1.5 rounded-lg text-xs transition flex items-center space-x-1.5 flex-shrink-0">
+              <span>Albums Only</span>
+            </button>
+            <button @click="setDiscoveryCategory('tracks')"
+                    :class="discoveryState.category === 'tracks' ? 'bg-[#e5a00d] text-slate-950 font-bold' : 'bg-slate-900 text-slate-300 hover:bg-slate-800 border border-slate-800'"
+                    class="px-3.5 py-1.5 rounded-lg text-xs transition flex items-center space-x-1.5 flex-shrink-0">
+              <span>Tracks Only</span>
+            </button>
+          </div>
+
+          <!-- Loading Indicator -->
+          <div x-show="discoveryState.isLoading" class="py-20 flex flex-col items-center justify-center space-y-3">
+            <div class="w-8 h-8 rounded-full border-2 border-[#e5a00d] border-t-transparent animate-spin"></div>
+            <span class="text-xs text-slate-400">Loading discovery catalog...</span>
+          </div>
+
+          <!-- Empty Search Results -->
+          <div x-show="!discoveryState.isLoading && discoveryState.items.length === 0" class="py-20 text-center space-y-2">
+            <p class="text-sm font-semibold text-slate-300">No items found</p>
+            <p class="text-xs text-slate-500">Try a different search term or check Trending charts.</p>
+          </div>
+
+          <!-- Overseerr-Style Poster Grid -->
+          <div x-show="!discoveryState.isLoading && discoveryState.items.length > 0"
+               class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-4">
+            <template x-for="item in discoveryState.items" :key="item.id">
+              <div class="group relative rounded-xl bg-slate-900 border border-slate-800 overflow-hidden overseerr-card flex flex-col">
+                <!-- Artwork Aspect-Square Container -->
+                <div class="relative aspect-square w-full bg-slate-950 overflow-hidden">
+                  <img :src="item.cover_url || '/static/placeholder.svg'"
+                       :alt="item.title"
+                       class="w-full h-full object-cover group-hover:scale-105 transition duration-300"
+                       loading="lazy"
+                       onerror="this.src='/static/placeholder.svg'">
+
+                  <!-- Item Type Badge (Top Right) -->
+                  <span class="absolute top-2 right-2 text-[10px] uppercase font-bold tracking-wider px-1.5 py-0.5 rounded bg-slate-950/80 backdrop-blur-sm border border-slate-700 text-slate-300"
+                        x-text="item.item_type"></span>
+
+                  <!-- Audio Preview Overlay Button (Center/Bottom Left) -->
+                  <template x-if="item.preview_url">
+                    <button @click.stop="audioPlayer.toggle(item)"
+                            title="Play 30s Audio Preview"
+                            class="absolute bottom-2 left-2 w-9 h-9 rounded-full bg-slate-950/80 hover:bg-[#e5a00d] hover:text-slate-950 text-slate-100 backdrop-blur-sm border border-slate-700/80 flex items-center justify-center transition shadow-lg">
+                      <svg x-show="!audioPlayer.isPlaying || audioPlayer.currentTrack?.id !== item.id" class="w-4 h-4 ml-0.5" fill="currentColor" viewBox="0 0 24 24">
+                        <path d="M8 5v14l11-7z"/>
+                      </svg>
+                      <svg x-show="audioPlayer.isPlaying && audioPlayer.currentTrack?.id === item.id" class="w-4 h-4 text-emerald-400" fill="currentColor" viewBox="0 0 24 24">
+                        <path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/>
+                      </svg>
+                    </button>
+                  </template>
+
+                  <!-- Status Badge Overlay (Top Left) -->
+                  <div class="absolute top-2 left-2">
+                    <span x-show="item.status === 'in_library'"
+                          class="px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-500/90 text-slate-950 backdrop-blur-sm">
+                      In Library
+                    </span>
+                    <span x-show="item.status === 'requested' || item.status === 'pending'"
+                          class="px-2 py-0.5 rounded text-[10px] font-bold bg-amber-500/90 text-slate-950 backdrop-blur-sm">
+                      Requested
+                    </span>
+                    <span x-show="item.status === 'processing'"
+                          class="px-2 py-0.5 rounded text-[10px] font-bold bg-blue-500/90 text-slate-950 backdrop-blur-sm">
+                      Processing
+                    </span>
+                    <span x-show="item.status === 'available'"
+                          class="px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-400/90 text-slate-950 backdrop-blur-sm">
+                      Available
+                    </span>
+                  </div>
+                </div>
+
+                <!-- Meta & Action Card Footer -->
+                <div class="p-3 flex-1 flex flex-col justify-between space-y-2">
+                  <div class="space-y-0.5">
+                    <div class="text-xs font-bold text-slate-200 line-clamp-1 group-hover:text-[#e5a00d] transition" :title="item.title" x-text="item.title"></div>
+                    <div class="text-[11px] text-slate-400 line-clamp-1" :title="item.artist" x-text="item.artist"></div>
+                    <div x-show="item.release_date" class="text-[10px] text-slate-500" x-text="formatYear(item.release_date)"></div>
+                  </div>
+
+                  <!-- Request Action Button -->
+                  <div>
+                    <template x-if="item.status === 'in_library'">
+                      <button disabled class="w-full py-1.5 px-2 rounded-lg text-xs font-semibold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 cursor-default flex items-center justify-center space-x-1">
+                        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path></svg>
+                        <span>In Library</span>
+                      </button>
+                    </template>
+
+                    <template x-if="item.status === 'requested' || item.status === 'pending'">
+                      <button disabled class="w-full py-1.5 px-2 rounded-lg text-xs font-semibold bg-amber-500/10 text-amber-400 border border-amber-500/20 cursor-default flex items-center justify-center space-x-1">
+                        <span>Requested</span>
+                      </button>
+                    </template>
+
+                    <template x-if="item.status === 'processing'">
+                      <button disabled class="w-full py-1.5 px-2 rounded-lg text-xs font-semibold bg-blue-500/10 text-blue-400 border border-blue-500/20 cursor-default flex items-center justify-center space-x-1">
+                        <span class="w-1.5 h-1.5 rounded-full bg-blue-400 animate-ping mr-1"></span>
+                        <span>Processing</span>
+                      </button>
+                    </template>
+
+                    <template x-if="item.status === 'none' || item.status === 'rejected'">
+                      <button @click="createRequest(item)"
+                              :disabled="isSubmittingRequest"
+                              class="w-full py-1.5 px-2 rounded-lg text-xs font-semibold bg-blue-600 hover:bg-blue-500 text-white transition flex items-center justify-center space-x-1 shadow-md shadow-blue-600/20 disabled:opacity-50">
+                        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"></path>
+                        </svg>
+                        <span>Request</span>
+                      </button>
+                    </template>
+                  </div>
+                </div>
+              </div>
+            </template>
+          </div>
+        </div>
+
+        <!-- ================= REQUESTS TAB ================= -->
+        <div x-show="activeTab === 'requests'" class="space-y-6">
+          <!-- Requests Header & Filters -->
+          <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+            <div>
+              <h2 class="text-2xl font-bold tracking-tight text-white">Music Requests</h2>
+              <p class="text-xs text-slate-400">Manage user media requests, track processing status, and automate Lidarr dispatch</p>
+            </div>
+
+            <!-- Filter Tabs -->
+            <div class="flex items-center space-x-1 bg-slate-900 p-1 rounded-xl border border-slate-800">
+              <button @click="setRequestFilter('all')"
+                      :class="requestsState.filter === 'all' ? 'bg-[#e5a00d] text-slate-950 font-bold' : 'text-slate-400 hover:text-slate-200'"
+                      class="px-3 py-1 rounded-lg text-xs transition">
+                All
+              </button>
+              <button @click="setRequestFilter('pending')"
+                      :class="requestsState.filter === 'pending' ? 'bg-[#e5a00d] text-slate-950 font-bold' : 'text-slate-400 hover:text-slate-200'"
+                      class="px-3 py-1 rounded-lg text-xs transition">
+                Pending
+              </button>
+              <button @click="setRequestFilter('processing')"
+                      :class="requestsState.filter === 'processing' ? 'bg-[#e5a00d] text-slate-950 font-bold' : 'text-slate-400 hover:text-slate-200'"
+                      class="px-3 py-1 rounded-lg text-xs transition">
+                Processing
+              </button>
+              <button @click="setRequestFilter('available')"
+                      :class="requestsState.filter === 'available' ? 'bg-[#e5a00d] text-slate-950 font-bold' : 'text-slate-400 hover:text-slate-200'"
+                      class="px-3 py-1 rounded-lg text-xs transition">
+                Available
+              </button>
+              <button @click="setRequestFilter('rejected')"
+                      :class="requestsState.filter === 'rejected' ? 'bg-[#e5a00d] text-slate-950 font-bold' : 'text-slate-400 hover:text-slate-200'"
+                      class="px-3 py-1 rounded-lg text-xs transition">
+                Rejected
+              </button>
+            </div>
+          </div>
+
+          <!-- Loading State -->
+          <div x-show="requestsState.isLoading" class="py-20 flex flex-col items-center justify-center space-y-3">
+            <div class="w-8 h-8 rounded-full border-2 border-[#e5a00d] border-t-transparent animate-spin"></div>
+            <span class="text-xs text-slate-400">Loading requests...</span>
+          </div>
+
+          <!-- Empty Requests -->
+          <div x-show="!requestsState.isLoading && filteredRequests.length === 0" class="py-20 text-center space-y-2">
+            <p class="text-sm font-semibold text-slate-300">No requests found</p>
+            <p class="text-xs text-slate-500">Go to Discover to request albums or songs.</p>
+          </div>
+
+          <!-- Requests Card Grid -->
+          <div x-show="!requestsState.isLoading && filteredRequests.length > 0"
+               class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+            <template x-for="req in filteredRequests" :key="req.id">
+              <div class="glass-panel rounded-xl p-4 border border-slate-800 hover:border-slate-700 transition flex space-x-4 items-start">
+                <!-- Cover Art Thumbnail -->
+                <div class="w-20 h-20 rounded-lg bg-slate-950 overflow-hidden flex-shrink-0 border border-slate-800">
+                  <img :src="req.cover_url || '/static/placeholder.svg'"
+                       :alt="req.title"
+                       class="w-full h-full object-cover"
+                       onerror="this.src='/static/placeholder.svg'">
+                </div>
+
+                <!-- Info & Controls -->
+                <div class="flex-1 min-w-0 space-y-1.5">
+                  <div class="flex items-center justify-between">
+                    <span class="text-[10px] uppercase font-bold tracking-wider px-1.5 py-0.5 rounded bg-slate-800 text-slate-300"
+                          x-text="req.item_type"></span>
+                    <!-- Status Badge -->
+                    <span :class="{
+                            'bg-amber-500/20 text-amber-400 border-amber-500/40': req.status === 'pending',
+                            'bg-blue-500/20 text-blue-400 border-blue-500/40': req.status === 'processing' || req.status === 'approved',
+                            'bg-emerald-500/20 text-emerald-400 border-emerald-500/40': req.status === 'available',
+                            'bg-rose-500/20 text-rose-400 border-rose-500/40': req.status === 'rejected'
+                          }"
+                          class="px-2 py-0.5 rounded text-[10px] font-bold border uppercase tracking-wider"
+                          x-text="req.status"></span>
+                  </div>
+
+                  <div class="text-sm font-bold text-white truncate" :title="req.title" x-text="req.title"></div>
+                  <div class="text-xs text-slate-400 truncate" :title="req.artist" x-text="req.artist"></div>
+
+                  <div class="flex items-center justify-between text-[11px] text-slate-500 pt-1 border-t border-slate-800/80">
+                    <span x-text="'By ' + (req.username || 'User')"></span>
+                    <span x-text="formatRelativeTime(req.created_at)"></span>
+                  </div>
+
+                  <!-- Action Buttons -->
+                  <div class="pt-2 flex items-center justify-end space-x-2">
+                    <!-- Preview audio if available -->
+                    <template x-if="req.preview_url">
+                      <button @click="audioPlayer.toggle(req)"
+                              title="Audio Preview"
+                              class="p-1 rounded bg-slate-800 hover:bg-[#e5a00d] hover:text-slate-950 text-slate-300 transition">
+                        <svg class="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>
+                      </button>
+                    </template>
+
+                    <!-- Admin Approval Actions -->
+                    <template x-if="currentUser?.is_admin && req.status === 'pending'">
+                      <div class="flex items-center space-x-1.5">
+                        <button @click="approveRequest(req.id)"
+                                title="Approve Request"
+                                class="px-2 py-1 rounded bg-emerald-600 hover:bg-emerald-500 text-slate-950 font-bold text-[11px] transition flex items-center space-x-1">
+                          <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path></svg>
+                          <span>Approve</span>
+                        </button>
+                        <button @click="rejectRequest(req.id)"
+                                title="Reject Request"
+                                class="px-2 py-1 rounded bg-rose-600 hover:bg-rose-500 text-white font-bold text-[11px] transition flex items-center space-x-1">
+                          <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path></svg>
+                          <span>Reject</span>
+                        </button>
+                      </div>
+                    </template>
+
+                    <!-- User Delete / Cancel Request -->
+                    <template x-if="currentUser?.is_admin || (req.user_id === currentUser?.id && req.status === 'pending')">
+                      <button @click="deleteRequest(req.id)"
+                              title="Cancel Request"
+                              class="p-1 text-slate-500 hover:text-rose-400 transition">
+                        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path></svg>
+                      </button>
+                    </template>
+                  </div>
+                </div>
+              </div>
+            </template>
+          </div>
+        </div>
+
+        <!-- ================= PLAYLISTS TAB (Sync & Smart Mixes) ================= -->
+        <div x-show="activeTab === 'playlists'" class="space-y-8">
+          <!-- 1. Top Summary Stat Cards Grid -->
+          <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
           
           <!-- Stat 1: Total Playlists -->
           <div class="glass-panel rounded-xl p-5 border border-slate-800 flex items-center justify-between">
@@ -592,6 +988,567 @@
             </table>
           </div>
         </template>
+
+        <!-- Close Playlists Tab -->
+        </div>
+
+        <!-- ================= ACTIVITY / QUEUE TAB ================= -->
+        <div x-show="activeTab === 'activity'" class="space-y-6">
+          <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+            <div>
+              <h2 class="text-2xl font-bold tracking-tight text-white flex items-center space-x-3">
+                <span>Activity & Download Queue</span>
+                <span x-show="activityQueue.length > 0"
+                      class="text-xs px-2.5 py-0.5 rounded-full bg-amber-500/20 text-[#e5a00d] border border-amber-500/30"
+                      x-text="activityQueue.length + ' active'"></span>
+              </h2>
+              <p class="text-xs text-slate-400">Live download progress and transfers across slskd, SABnzbd, qBittorrent, and Lidarr</p>
+            </div>
+            <div class="flex items-center space-x-2">
+              <button @click="loadQueue(true)" class="px-3 py-1.5 rounded-lg text-xs font-medium bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 transition flex items-center space-x-1.5">
+                <svg class="w-3.5 h-3.5" :class="isQueueRefreshing ? 'animate-spin text-[#e5a00d]' : ''" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path></svg>
+                <span>Refresh</span>
+              </button>
+            </div>
+          </div>
+
+          <!-- Empty Queue State -->
+          <div x-show="activityQueue.length === 0" class="glass-panel rounded-2xl p-12 text-center border border-slate-800">
+            <div class="w-16 h-16 rounded-2xl bg-slate-900 border border-slate-800 flex items-center justify-center mx-auto mb-4 text-slate-500">
+              <svg class="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"></path>
+              </svg>
+            </div>
+            <h3 class="text-base font-semibold text-slate-200">No Active Downloads</h3>
+            <p class="text-xs text-slate-400 max-w-sm mx-auto mt-1">Your activity queue is empty. New releases, approved requests, and manual grabs will appear here in real-time.</p>
+          </div>
+
+          <!-- Queue Table -->
+          <div x-show="activityQueue.length > 0" class="glass-panel rounded-2xl border border-slate-800 overflow-hidden shadow-xl">
+            <div class="overflow-x-auto">
+              <table class="w-full text-left text-xs text-slate-300">
+                <thead class="bg-slate-900/80 uppercase text-[10px] tracking-wider text-slate-400 border-b border-slate-800">
+                  <tr>
+                    <th class="px-4 py-3">Release / Track</th>
+                    <th class="px-4 py-3">Artist</th>
+                    <th class="px-4 py-3">Downloader</th>
+                    <th class="px-4 py-3 min-w-[200px]">Progress</th>
+                    <th class="px-4 py-3">Size / Speed</th>
+                    <th class="px-4 py-3">Status</th>
+                    <th class="px-4 py-3 text-right">Actions</th>
+                  </tr>
+                </thead>
+                <tbody class="divide-y divide-slate-800/60 font-mono">
+                  <template x-for="item in activityQueue" :key="item.id">
+                    <tr class="hover:bg-slate-900/40 transition">
+                      <td class="px-4 py-3 font-sans font-medium text-slate-100">
+                        <div class="flex items-center space-x-2">
+                          <span class="px-1.5 py-0.5 rounded text-[10px] font-mono uppercase bg-slate-800 text-slate-400" x-text="item.item_type || 'track'"></span>
+                          <span class="truncate max-w-xs" x-text="item.title" :title="item.title"></span>
+                        </div>
+                      </td>
+                      <td class="px-4 py-3 font-sans text-slate-300 truncate max-w-[150px]" x-text="item.artist"></td>
+                      <td class="px-4 py-3 font-sans">
+                        <span class="px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider bg-slate-800 text-slate-300 border border-slate-700"
+                              x-text="item.client_name || item.client_driver_type || 'Client'"></span>
+                      </td>
+                      <td class="px-4 py-3">
+                        <div class="space-y-1">
+                          <div class="flex items-center justify-between text-[11px] font-sans">
+                            <span class="font-semibold text-slate-200" x-text="(item.progress || 0).toFixed(1) + '%'"></span>
+                            <span class="text-slate-400 text-[10px]" x-text="item.eta_seconds ? formatEta(item.eta_seconds) : ''"></span>
+                          </div>
+                          <div class="w-full bg-slate-800 rounded-full h-2 overflow-hidden">
+                            <div class="bg-gradient-to-r from-amber-500 to-[#e5a00d] h-2 rounded-full transition-all duration-300"
+                                 :style="'width: ' + Math.min(100, Math.max(0, item.progress || 0)) + '%'"></div>
+                          </div>
+                        </div>
+                      </td>
+                      <td class="px-4 py-3 text-slate-400 text-[11px]">
+                        <div x-text="formatBytes(item.size_bytes)"></div>
+                        <div class="text-[10px] text-slate-500" x-show="item.speed_bps" x-text="formatBytes(item.speed_bps) + '/s'"></div>
+                      </td>
+                      <td class="px-4 py-3 font-sans">
+                        <span class="px-2 py-0.5 rounded-full text-[10px] font-semibold uppercase tracking-wider"
+                              :class="{
+                                'bg-amber-500/15 text-[#e5a00d] border border-amber-500/30 animate-pulse': item.status === 'downloading',
+                                'bg-sky-500/15 text-sky-400 border border-sky-500/30 animate-pulse': item.status === 'importing',
+                                'bg-emerald-500/15 text-emerald-400 border border-emerald-500/30': item.status === 'imported' || item.status === 'completed',
+                                'bg-rose-500/15 text-rose-400 border border-rose-500/30': item.status === 'failed',
+                                'bg-slate-800 text-slate-400 border border-slate-700': item.status === 'queued'
+                              }"
+                              x-text="item.status"></span>
+                      </td>
+                      <td class="px-4 py-3 text-right font-sans">
+                        <button @click="cancelDownload(item.id)"
+                                title="Cancel Download"
+                                class="p-1 rounded-lg text-slate-400 hover:text-rose-400 hover:bg-slate-800 transition">
+                          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path></svg>
+                        </button>
+                      </td>
+                    </tr>
+                  </template>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+
+        <!-- ================= SETTINGS TAB ================= -->
+        <div x-show="activeTab === 'settings'" class="space-y-6">
+          <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+            <div>
+              <h2 class="text-2xl font-bold tracking-tight text-white">Arr Stack & Media Settings</h2>
+              <p class="text-xs text-slate-400">Configure directory and track naming templates, inspect audio formats, and monitor media services</p>
+            </div>
+
+            <!-- Sub-tab Navigation -->
+            <div class="flex items-center space-x-1 bg-slate-900 p-1 rounded-xl border border-slate-800 overflow-x-auto">
+              <button @click="settingsSubTab = 'media'"
+                      :class="settingsSubTab === 'media' ? 'bg-[#e5a00d] text-slate-950 font-bold' : 'text-slate-400 hover:text-slate-200'"
+                      class="px-3.5 py-1.5 rounded-lg text-xs transition flex items-center space-x-1.5 whitespace-nowrap">
+                <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"></path></svg>
+                <span>Media Management</span>
+              </button>
+              <button @click="settingsSubTab = 'clients'; loadDownloadClients()"
+                      :class="settingsSubTab === 'clients' ? 'bg-[#e5a00d] text-slate-950 font-bold' : 'text-slate-400 hover:text-slate-200'"
+                      class="px-3.5 py-1.5 rounded-lg text-xs transition flex items-center space-x-1.5 whitespace-nowrap">
+                <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"></path></svg>
+                <span>Download Clients</span>
+              </button>
+              <button @click="settingsSubTab = 'indexers'; loadIndexers()"
+                      :class="settingsSubTab === 'indexers' ? 'bg-[#e5a00d] text-slate-950 font-bold' : 'text-slate-400 hover:text-slate-200'"
+                      class="px-3.5 py-1.5 rounded-lg text-xs transition flex items-center space-x-1.5 whitespace-nowrap">
+                <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"></path></svg>
+                <span>Indexers</span>
+              </button>
+              <button @click="settingsSubTab = 'status'"
+                      :class="settingsSubTab === 'status' ? 'bg-[#e5a00d] text-slate-950 font-bold' : 'text-slate-400 hover:text-slate-200'"
+                      class="px-3.5 py-1.5 rounded-lg text-xs transition flex items-center space-x-1.5 whitespace-nowrap">
+                <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z"></path></svg>
+                <span>System Status</span>
+              </button>
+            </div>
+            </div>
+
+          <!-- ================= SUB-TAB 1: MEDIA MANAGEMENT ================= -->
+          <div x-show="settingsSubTab === 'media'" class="space-y-6">
+            <!-- Presets Bar & Action Header -->
+            <div class="glass-panel rounded-xl p-4 border border-slate-800 flex flex-col md:flex-row md:items-center justify-between gap-4">
+              <div class="space-y-1">
+                <span class="text-xs font-semibold text-slate-300">Quick Template Presets:</span>
+                <div class="flex flex-wrap items-center gap-2">
+                  <button type="button" @click="applyPreset('Lidarr Standard')"
+                          class="px-2.5 py-1 rounded-lg text-xs bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 hover:border-amber-500/50 transition">
+                    Lidarr Standard
+                  </button>
+                  <button type="button" @click="applyPreset('Clean Minimal')"
+                          class="px-2.5 py-1 rounded-lg text-xs bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 hover:border-amber-500/50 transition">
+                    Clean Minimal
+                  </button>
+                  <button type="button" @click="applyPreset('Audiophile / Detailed')"
+                          class="px-2.5 py-1 rounded-lg text-xs bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 hover:border-amber-500/50 transition">
+                    Audiophile / Detailed
+                  </button>
+                </div>
+              </div>
+
+              <!-- Save Changes Button -->
+              <div class="flex items-center space-x-3">
+                <template x-if="!currentUser?.is_admin">
+                  <span class="text-[11px] text-amber-500/80">Admin required to save</span>
+                </template>
+                <button type="button" @click="saveSettings()"
+                        :disabled="settingsState.isSaving || !currentUser?.is_admin"
+                        class="px-4 py-2 rounded-xl text-xs font-bold transition flex items-center space-x-2"
+                        :class="currentUser?.is_admin ? 'bg-[#e5a00d] hover:bg-[#d4940c] text-slate-950 shadow-lg shadow-amber-500/10' : 'bg-slate-800 text-slate-500 cursor-not-allowed'">
+                  <template x-if="settingsState.isSaving">
+                    <div class="w-3.5 h-3.5 border-2 border-slate-950 border-t-transparent rounded-full animate-spin"></div>
+                  </template>
+                  <svg x-show="!settingsState.isSaving" class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path></svg>
+                  <span>Save Media Settings</span>
+                </button>
+              </div>
+            </div>
+
+            <!-- Two-Column Layout: Form Settings & Live Preview -->
+            <div class="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
+              <!-- Form Fields Column -->
+              <div class="lg:col-span-7 glass-panel rounded-xl p-5 border border-slate-800 space-y-5">
+                <h3 class="text-sm font-bold text-white border-b border-slate-800/80 pb-2 flex items-center space-x-2">
+                  <svg class="w-4 h-4 text-[#e5a00d]" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"></path></svg>
+                  <span>Directory & Track Formats</span>
+                </h3>
+
+                <!-- Root Folder Path -->
+                <div class="space-y-1.5">
+                  <label class="text-xs font-semibold text-slate-300">Root Music Folder</label>
+                  <input type="text" x-model="settingsState.mediaManagement.root_folder_path" @input="updatePreview()"
+                         placeholder="/music"
+                         class="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs text-slate-200 focus:outline-none focus:border-amber-500 font-mono">
+                  <p class="text-[11px] text-slate-500">Root directory where library tracks and albums will reside</p>
+                </div>
+
+                <!-- Colon Replacement & Clean Artist Names -->
+                <div class="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-1">
+                  <div class="space-y-1.5">
+                    <label class="text-xs font-semibold text-slate-300">Colon Replacement Format</label>
+                    <select x-model="settingsState.mediaManagement.colon_replacement_format" @change="updatePreview()"
+                            class="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs text-slate-200 focus:outline-none focus:border-amber-500">
+                      <option value=" - ">Dash (' - ')</option>
+                      <option value="_">Underscore ('_')</option>
+                      <option value=" ">Space (' ')</option>
+                    </select>
+                    <p class="text-[11px] text-slate-500">Cross-platform replacement for Windows-illegal colons</p>
+                  </div>
+                  <div class="space-y-1.5 flex flex-col justify-end">
+                    <label class="flex items-center space-x-2.5 p-2 rounded-lg bg-slate-950/60 border border-slate-800 cursor-pointer hover:border-slate-700 transition">
+                      <input type="checkbox" x-model="settingsState.mediaManagement.clean_artist_names" @change="updatePreview()"
+                             class="rounded bg-slate-900 border-slate-700 text-amber-500 focus:ring-0">
+                      <span class="text-xs text-slate-300 font-medium">Clean Artist Names</span>
+                    </label>
+                    <p class="text-[11px] text-slate-500">Strip leading 'The', 'A', 'An' from folders</p>
+                  </div>
+                </div>
+
+                <!-- Artist Folder Format -->
+                <div class="space-y-1.5 pt-2">
+                  <div class="flex items-center justify-between">
+                    <label class="text-xs font-semibold text-slate-300">Artist Folder Format</label>
+                    <div class="flex items-center space-x-1">
+                      <button type="button" @click="insertToken('artist_folder_format', '{Artist Name}')" class="text-[10px] px-1.5 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-amber-400 font-mono transition">+{Artist Name}</button>
+                      <button type="button" @click="insertToken('artist_folder_format', '{Artist CleanName}')" class="text-[10px] px-1.5 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-amber-400 font-mono transition">+{Artist CleanName}</button>
+                    </div>
+                  </div>
+                  <input type="text" x-model="settingsState.mediaManagement.artist_folder_format" @input="updatePreview()"
+                         class="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs text-slate-200 focus:outline-none focus:border-amber-500 font-mono">
+                </div>
+
+                <!-- Album Folder Format -->
+                <div class="space-y-1.5">
+                  <div class="flex items-center justify-between">
+                    <label class="text-xs font-semibold text-slate-300">Album Folder Format</label>
+                    <div class="flex items-center space-x-1">
+                      <button type="button" @click="insertToken('album_folder_format', '{Album Title}')" class="text-[10px] px-1.5 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-amber-400 font-mono transition">+{Album Title}</button>
+                      <button type="button" @click="insertToken('album_folder_format', '({Release Year})')" class="text-[10px] px-1.5 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-amber-400 font-mono transition">+({Release Year})</button>
+                      <button type="button" @click="insertToken('album_folder_format', '{[ - Album Type]}')" class="text-[10px] px-1.5 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-amber-400 font-mono transition">+{[ - Album Type]}</button>
+                    </div>
+                  </div>
+                  <input type="text" x-model="settingsState.mediaManagement.album_folder_format" @input="updatePreview()"
+                         class="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs text-slate-200 focus:outline-none focus:border-amber-500 font-mono">
+                </div>
+
+                <!-- Standard Track Format -->
+                <div class="space-y-1.5">
+                  <div class="flex items-center justify-between">
+                    <label class="text-xs font-semibold text-slate-300">Standard Track Format</label>
+                    <div class="flex items-center space-x-1">
+                      <button type="button" @click="insertToken('standard_track_format', '{track:00}')" class="text-[10px] px-1.5 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-amber-400 font-mono transition">+{track:00}</button>
+                      <button type="button" @click="insertToken('standard_track_format', '{Track Title}')" class="text-[10px] px-1.5 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-amber-400 font-mono transition">+{Track Title}</button>
+                      <button type="button" @click="insertToken('standard_track_format', '{[ (Quality Full)]}')" class="text-[10px] px-1.5 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-amber-400 font-mono transition">+{[ (Quality Full)]}</button>
+                    </div>
+                  </div>
+                  <input type="text" x-model="settingsState.mediaManagement.standard_track_format" @input="updatePreview()"
+                         class="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs text-slate-200 focus:outline-none focus:border-amber-500 font-mono">
+                </div>
+
+                <!-- Compilation Track Format -->
+                <div class="space-y-1.5">
+                  <div class="flex items-center justify-between">
+                    <label class="text-xs font-semibold text-slate-300">Compilation Track Format</label>
+                    <div class="flex items-center space-x-1">
+                      <button type="button" @click="insertToken('compilation_track_format', '{Artist Name}')" class="text-[10px] px-1.5 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-amber-400 font-mono transition">+{Artist Name}</button>
+                      <button type="button" @click="insertToken('compilation_track_format', '{Track Title}')" class="text-[10px] px-1.5 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-amber-400 font-mono transition">+{Track Title}</button>
+                    </div>
+                  </div>
+                  <input type="text" x-model="settingsState.mediaManagement.compilation_track_format" @input="updatePreview()"
+                         class="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs text-slate-200 focus:outline-none focus:border-amber-500 font-mono">
+                  <p class="text-[11px] text-slate-500">Used for Various Artists / multi-artist albums to preserve track-specific artist names</p>
+                </div>
+
+                <!-- Multi-Disc Folder Format -->
+                <div class="space-y-1.5">
+                  <div class="flex items-center justify-between">
+                    <label class="text-xs font-semibold text-slate-300">Multi-Disc Subdirectory Format</label>
+                    <div class="flex items-center space-x-1">
+                      <button type="button" @click="insertToken('multi_disc_folder_format', '{Medium Format} {medium:00}')" class="text-[10px] px-1.5 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-amber-400 font-mono transition">+{Medium Format} {medium:00}</button>
+                      <button type="button" @click="insertToken('multi_disc_folder_format', 'Disc {medium:0}')" class="text-[10px] px-1.5 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-amber-400 font-mono transition">+Disc {medium:0}</button>
+                    </div>
+                  </div>
+                  <input type="text" x-model="settingsState.mediaManagement.multi_disc_folder_format" @input="updatePreview()"
+                         class="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs text-slate-200 focus:outline-none focus:border-amber-500 font-mono">
+                  <p class="text-[11px] text-slate-500">Automatically omitted when total disc count is 1</p>
+                </div>
+              </div>
+
+              <!-- Live Path Preview Column -->
+              <div class="lg:col-span-5 space-y-4">
+                <div class="glass-panel rounded-xl p-5 border border-slate-800 space-y-4">
+                  <div class="flex items-center justify-between border-b border-slate-800/80 pb-3">
+                    <div class="flex items-center space-x-2">
+                      <div class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></div>
+                      <h3 class="text-sm font-bold text-white">Live Path Preview</h3>
+                    </div>
+                    <span class="text-[11px] text-slate-400 font-mono">In-Memory Engine</span>
+                  </div>
+
+                  <p class="text-xs text-slate-400">
+                    Real-time path resolutions using your configured template tokens and conditional rules:
+                  </p>
+
+                  <!-- Preview Cards Loop -->
+                  <div class="space-y-3 pt-1">
+                    <template x-for="item in settingsState.previewPaths" :key="item.id">
+                      <div class="p-3 rounded-lg bg-slate-950/70 border border-slate-800 space-y-2">
+                        <div class="flex items-center justify-between">
+                          <span class="text-xs font-bold text-slate-200" x-text="item.name"></span>
+                          <span class="text-[10px] px-1.5 py-0.5 rounded bg-slate-800 text-slate-400" x-text="item.id"></span>
+                        </div>
+                        <div class="p-2.5 bg-slate-900/90 rounded border border-slate-800/80 font-mono text-xs text-amber-400 break-all select-all leading-relaxed"
+                             x-text="item.output_path"></div>
+                      </div>
+                    </template>
+                  </div>
+                </div>
+
+                <!-- Token Reference Guide -->
+                <div class="glass-panel rounded-xl p-4 border border-slate-800 space-y-2.5">
+                  <h4 class="text-xs font-bold text-slate-200 uppercase tracking-wider">Supported Token Engine Reference</h4>
+                  <div class="grid grid-cols-2 gap-2 text-[11px] text-slate-300 font-mono">
+                    <div class="p-1.5 rounded bg-slate-950/60 border border-slate-800/80">
+                      <span class="text-amber-400 font-semibold">{Artist Name}</span>
+                      <p class="text-[10px] text-slate-400 font-sans">Full artist name</p>
+                    </div>
+                    <div class="p-1.5 rounded bg-slate-950/60 border border-slate-800/80">
+                      <span class="text-amber-400 font-semibold">{Artist CleanName}</span>
+                      <p class="text-[10px] text-slate-400 font-sans">Strips 'The', 'A', 'An'</p>
+                    </div>
+                    <div class="p-1.5 rounded bg-slate-950/60 border border-slate-800/80">
+                      <span class="text-amber-400 font-semibold">{Release Year}</span>
+                      <p class="text-[10px] text-slate-400 font-sans">4-digit year</p>
+                    </div>
+                    <div class="p-1.5 rounded bg-slate-950/60 border border-slate-800/80">
+                      <span class="text-amber-400 font-semibold">{track:00}</span>
+                      <p class="text-[10px] text-slate-400 font-sans">2-digit padded track #</p>
+                    </div>
+                    <div class="p-1.5 rounded bg-slate-950/60 border border-slate-800/80">
+                      <span class="text-amber-400 font-semibold">{Quality Full}</span>
+                      <p class="text-[10px] text-slate-400 font-sans">e.g. FLAC 24bit 96kHz</p>
+                    </div>
+                    <div class="p-1.5 rounded bg-slate-950/60 border border-slate-800/80">
+                      <span class="text-amber-400 font-semibold">{[ - Album Type]}</span>
+                      <p class="text-[10px] text-slate-400 font-sans">Conditional block</p>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          <!-- ================= SUB-TAB: DOWNLOAD CLIENTS ================= -->
+          <div x-show="settingsSubTab === 'clients'" class="space-y-6">
+            <div class="glass-panel rounded-xl p-4 border border-slate-800 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+              <div>
+                <h3 class="text-base font-bold text-white">Download Clients</h3>
+                <p class="text-xs text-slate-400">Configure slskd (Soulseek), SABnzbd (Usenet), qBittorrent, or Lidarr integration</p>
+              </div>
+              <div class="flex items-center space-x-2">
+                <button type="button" @click="openAddClientModal()"
+                        class="flex items-center space-x-2 px-3.5 py-1.5 rounded-lg text-xs font-semibold bg-[#e5a00d] hover:bg-[#cc8f0c] text-slate-950 transition shadow-md shadow-[#e5a00d]/15">
+                  <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"></path></svg>
+                  <span>Add Download Client</span>
+                </button>
+              </div>
+            </div>
+
+            <!-- Empty Clients State -->
+            <div x-show="downloadClients.length === 0" class="glass-panel rounded-xl p-8 text-center border border-slate-800">
+              <p class="text-xs text-slate-400">No download clients configured yet. Click "Add Download Client" to connect slskd, SABnzbd, qBittorrent, or Lidarr.</p>
+            </div>
+
+            <!-- Clients Card Grid -->
+            <div x-show="downloadClients.length > 0" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+              <template x-for="client in downloadClients" :key="client.id">
+                <div class="glass-panel rounded-xl p-4 border border-slate-800 flex flex-col justify-between space-y-3 hover:border-slate-700 transition">
+                  <div class="flex items-start justify-between">
+                    <div>
+                      <div class="flex items-center space-x-2">
+                        <h4 class="text-sm font-bold text-white truncate max-w-[180px]" x-text="client.name"></h4>
+                        <span class="px-2 py-0.5 rounded text-[10px] font-mono font-bold uppercase tracking-wider"
+                              :class="{
+                                'bg-sky-500/20 text-sky-400 border border-sky-500/30': client.driver_type === 'slskd',
+                                'bg-amber-500/20 text-[#e5a00d] border border-amber-500/30': client.driver_type === 'sabnzbd',
+                                'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30': client.driver_type === 'qbittorrent',
+                                'bg-purple-500/20 text-purple-400 border border-purple-500/30': client.driver_type === 'lidarr',
+                                'bg-slate-800 text-slate-400 border border-slate-700': true
+                              }"
+                              x-text="client.driver_type"></span>
+                      </div>
+                      <p class="text-xs text-slate-400 font-mono mt-1 truncate max-w-[220px]" x-text="client.host_url"></p>
+                    </div>
+                    <button type="button" @click="toggleClientEnabled(client)"
+                            class="px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider transition"
+                            :class="client.enabled ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/40' : 'bg-slate-800 text-slate-500 border border-slate-700'"
+                            x-text="client.enabled ? 'Enabled' : 'Disabled'"></button>
+                  </div>
+
+                  <div class="pt-2 border-t border-slate-800/80 flex items-center justify-between text-xs">
+                    <span class="text-slate-500 text-[11px]" x-text="'Priority: ' + (client.priority || 1)"></span>
+                    <div class="flex items-center space-x-1">
+                      <button type="button" @click="openEditClientModal(client)"
+                              class="p-1 rounded text-slate-400 hover:text-white hover:bg-slate-800 transition" title="Edit Client">
+                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"></path></svg>
+                      </button>
+                      <button type="button" @click="deleteDownloadClient(client.id)"
+                              class="p-1 rounded text-slate-400 hover:text-rose-400 hover:bg-slate-800 transition" title="Delete Client">
+                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path></svg>
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </template>
+            </div>
+          </div>
+
+          <!-- ================= SUB-TAB: INDEXERS ================= -->
+          <div x-show="settingsSubTab === 'indexers'" class="space-y-6">
+            <div class="glass-panel rounded-xl p-4 border border-slate-800 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+              <div>
+                <h3 class="text-base font-bold text-white">Indexers</h3>
+                <p class="text-xs text-slate-400">Torznab and Newznab RSS / XML music indexers for automated grab searches</p>
+              </div>
+              <div class="flex items-center space-x-2">
+                <button type="button" @click="openAddIndexerModal()"
+                        class="flex items-center space-x-2 px-3.5 py-1.5 rounded-lg text-xs font-semibold bg-[#e5a00d] hover:bg-[#cc8f0c] text-slate-950 transition shadow-md shadow-[#e5a00d]/15">
+                  <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"></path></svg>
+                  <span>Add Indexer</span>
+                </button>
+              </div>
+            </div>
+
+            <!-- Empty Indexers State -->
+            <div x-show="indexers.length === 0" class="glass-panel rounded-xl p-8 text-center border border-slate-800">
+              <p class="text-xs text-slate-400">No indexers configured yet. Click "Add Indexer" to connect Prowlarr, Jackett, or Newznab.</p>
+            </div>
+
+            <!-- Indexers Card Grid -->
+            <div x-show="indexers.length > 0" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+              <template x-for="indexer in indexers" :key="indexer.id">
+                <div class="glass-panel rounded-xl p-4 border border-slate-800 flex flex-col justify-between space-y-3 hover:border-slate-700 transition">
+                  <div class="flex items-start justify-between">
+                    <div>
+                      <div class="flex items-center space-x-2">
+                        <h4 class="text-sm font-bold text-white truncate max-w-[180px]" x-text="indexer.name"></h4>
+                        <span class="px-2 py-0.5 rounded text-[10px] font-mono font-bold uppercase tracking-wider bg-amber-500/20 text-[#e5a00d] border border-amber-500/30"
+                              x-text="indexer.indexer_type"></span>
+                      </div>
+                      <p class="text-xs text-slate-400 font-mono mt-1 truncate max-w-[220px]" x-text="indexer.host_url"></p>
+                    </div>
+                    <button type="button" @click="toggleIndexerEnabled(indexer)"
+                            class="px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider transition"
+                            :class="indexer.enabled ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/40' : 'bg-slate-800 text-slate-500 border border-slate-700'"
+                            x-text="indexer.enabled ? 'Enabled' : 'Disabled'"></button>
+                  </div>
+
+                  <div class="pt-2 border-t border-slate-800/80 flex items-center justify-between text-xs">
+                    <span class="text-slate-500 text-[11px]" x-text="'Categories: ' + (indexer.categories || 'All')"></span>
+                    <div class="flex items-center space-x-1">
+                      <button type="button" @click="openEditIndexerModal(indexer)"
+                              class="p-1 rounded text-slate-400 hover:text-white hover:bg-slate-800 transition" title="Edit Indexer">
+                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"></path></svg>
+                      </button>
+                      <button type="button" @click="deleteIndexer(indexer.id)"
+                              class="p-1 rounded text-slate-400 hover:text-rose-400 hover:bg-slate-800 transition" title="Delete Indexer">
+                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path></svg>
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </template>
+            </div>
+          </div>
+
+          <!-- ================= SUB-TAB 2: SYSTEM STATUS ================= -->
+          <div x-show="settingsSubTab === 'status'" class="space-y-6">
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
+              <!-- Plex Server Card -->
+              <div class="glass-panel rounded-xl p-5 border border-slate-800 space-y-4">
+                <div class="flex items-center space-x-3">
+                  <div class="w-10 h-10 rounded-lg bg-amber-500/10 border border-amber-500/20 text-[#e5a00d] flex items-center justify-center">
+                    <svg class="w-5 h-5" fill="currentColor" viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 14.5v-9l6 4.5-6 4.5z"/></svg>
+                  </div>
+                  <div>
+                    <h3 class="text-sm font-bold text-white">Plex Media Server</h3>
+                    <span class="text-xs text-emerald-400 font-medium">Connected</span>
+                  </div>
+                </div>
+                <div class="space-y-2 text-xs text-slate-300">
+                  <div class="flex justify-between py-1 border-b border-slate-800">
+                    <span class="text-slate-500">Plex Home Users:</span>
+                    <span class="font-mono text-slate-200" x-text="users.length"></span>
+                  </div>
+                  <div class="flex justify-between py-1 border-b border-slate-800">
+                    <span class="text-slate-500">Tracked Playlists:</span>
+                    <span class="font-mono text-slate-200" x-text="playlists.length"></span>
+                  </div>
+                </div>
+              </div>
+
+              <!-- Lidarr Card -->
+              <div class="glass-panel rounded-xl p-5 border border-slate-800 space-y-4">
+                <div class="flex items-center space-x-3">
+                  <div class="w-10 h-10 rounded-lg bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 flex items-center justify-center">
+                    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path></svg>
+                  </div>
+                  <div>
+                    <h3 class="text-sm font-bold text-white">Lidarr Integration</h3>
+                    <span class="text-xs" :class="lidarrConfig.configured ? 'text-emerald-400' : 'text-slate-500'" x-text="lidarrConfig.configured ? 'Active' : 'Unconfigured'"></span>
+                  </div>
+                </div>
+                <div class="space-y-2 text-xs text-slate-300">
+                  <div class="flex justify-between py-1 border-b border-slate-800">
+                    <span class="text-slate-500">Queue Status:</span>
+                    <span class="font-mono text-slate-200" x-text="lidarrQueue.is_running ? 'Trickling' : 'Idle'"></span>
+                  </div>
+                  <div class="flex justify-between py-1 border-b border-slate-800">
+                    <span class="text-slate-500">Pacing Delay:</span>
+                    <span class="font-mono text-slate-200" x-text="lidarrQueue.delay_seconds + 's'"></span>
+                  </div>
+                </div>
+              </div>
+
+              <!-- Storage Card -->
+              <div class="glass-panel rounded-xl p-5 border border-slate-800 space-y-4">
+                <div class="flex items-center space-x-3">
+                  <div class="w-10 h-10 rounded-lg bg-blue-500/10 border border-blue-500/20 text-blue-400 flex items-center justify-center">
+                    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z"></path></svg>
+                  </div>
+                  <div>
+                    <h3 class="text-sm font-bold text-white">Storage & Sandboxing</h3>
+                    <span class="text-xs text-emerald-400 font-medium">Isolated</span>
+                  </div>
+                </div>
+                <div class="space-y-2 text-xs text-slate-300">
+                  <div class="flex justify-between py-1 border-b border-slate-800">
+                    <span class="text-slate-500">Raw Media Mount:</span>
+                    <span class="text-slate-400 font-mono">None (Zero Raw Mount)</span>
+                  </div>
+                  <div class="flex justify-between py-1 border-b border-slate-800">
+                    <span class="text-slate-500">App Database:</span>
+                    <span class="text-slate-400 font-mono">/data/sync_db.sqlite</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Arr-Style Naming Schemes Preview -->
+            <div class="glass-panel rounded-xl p-5 border border-slate-800 space-y-3">
+              <h3 class="text-sm font-bold text-white">Arr-Style Naming Scheme Preview</h3>
+              <p class="text-xs text-slate-400">TrackSeerr interfaces with Lidarr using standard Arr directory hierarchy conventions:</p>
+              <div class="p-3 bg-slate-950 rounded-lg border border-slate-800 font-mono text-xs text-amber-400 select-all">
+                {Artist Name}/{Album Title} ({Release Year})/{track:00} - {Track Title}
+              </div>
+            </div>
+          </div>
+        </div>
 
       </div>
     </template>
@@ -1583,6 +2540,327 @@
     </div>
   </div>
 
+  <!-- ================= DOWNLOAD CLIENT CONFIG MODAL ================= -->
+  <div x-show="isClientModalOpen" 
+       x-transition.opacity.duration.200ms
+       class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-sm"
+       style="display: none;">
+    <div @click.away="closeClientModal()" 
+         class="glass-modal rounded-2xl w-full max-w-lg p-6 flex flex-col shadow-2xl border border-slate-700/80 space-y-4 max-h-[90vh] overflow-y-auto">
+      
+      <!-- Modal Header -->
+      <div class="flex items-center justify-between border-b border-slate-800 pb-3 flex-shrink-0">
+        <div>
+          <h3 class="text-base font-bold text-white flex items-center space-x-2">
+            <span x-text="clientForm.id ? 'Edit Download Client' : 'Add Download Client'"></span>
+          </h3>
+          <p class="text-xs text-slate-400">Configure acquisition client settings and connection parameters</p>
+        </div>
+        <button @click="closeClientModal()" class="text-slate-500 hover:text-white transition p-1">
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
+          </svg>
+        </button>
+      </div>
+
+      <!-- Modal Body / Form -->
+      <form @submit.prevent="saveDownloadClient()" class="space-y-4">
+        <!-- Client Name -->
+        <div class="space-y-1">
+          <label class="block text-xs font-semibold uppercase tracking-wider text-slate-400">Name</label>
+          <input type="text" 
+                 x-model="clientForm.name" 
+                 required
+                 placeholder="e.g. slskd Soulseek, SABnzbd, qBittorrent" 
+                 class="w-full px-3 py-2 bg-slate-900 border border-slate-700/80 rounded-lg text-xs text-white placeholder-slate-500 focus:outline-none focus:border-[#e5a00d] transition">
+        </div>
+
+        <!-- Driver Type -->
+        <div class="space-y-1">
+          <label class="block text-xs font-semibold uppercase tracking-wider text-slate-400">Driver Type</label>
+          <select x-model="clientForm.driver_type" 
+                  class="w-full px-3 py-2 bg-slate-900 border border-slate-700/80 rounded-lg text-xs text-white focus:outline-none focus:border-[#e5a00d] transition">
+            <option value="slskd">slskd (Soulseek P2P)</option>
+            <option value="sabnzbd">SABnzbd (Usenet)</option>
+            <option value="qbittorrent">qBittorrent (BitTorrent)</option>
+            <option value="lidarr">Lidarr (Music Automation)</option>
+          </select>
+        </div>
+
+        <!-- Host URL -->
+        <div class="space-y-1">
+          <label class="block text-xs font-semibold uppercase tracking-wider text-slate-400">Host URL</label>
+          <input type="url" 
+                 x-model="clientForm.host_url" 
+                 required
+                 placeholder="http://localhost:5030" 
+                 class="w-full px-3 py-2 bg-slate-900 border border-slate-700/80 rounded-lg text-xs font-mono text-white placeholder-slate-500 focus:outline-none focus:border-[#e5a00d] transition">
+          <p class="text-[11px] text-slate-500">Base URL of the service (e.g. http://192.168.1.50:8080 or http://slskd:5030)</p>
+        </div>
+
+        <!-- API Key (for SABnzbd, Lidarr) -->
+        <div class="space-y-1" x-show="clientForm.driver_type === 'sabnzbd' || clientForm.driver_type === 'lidarr'">
+          <label class="block text-xs font-semibold uppercase tracking-wider text-slate-400">API Key</label>
+          <input type="password" 
+                 x-model="clientForm.api_key" 
+                 placeholder="API Key / Token" 
+                 class="w-full px-3 py-2 bg-slate-900 border border-slate-700/80 rounded-lg text-xs font-mono text-white placeholder-slate-500 focus:outline-none focus:border-[#e5a00d] transition">
+        </div>
+
+        <!-- Username & Password (for slskd, qBittorrent) -->
+        <div class="grid grid-cols-2 gap-3" x-show="clientForm.driver_type === 'slskd' || clientForm.driver_type === 'qbittorrent'">
+          <div class="space-y-1">
+            <label class="block text-xs font-semibold uppercase tracking-wider text-slate-400">Username</label>
+            <input type="text" 
+                   x-model="clientForm.username" 
+                   placeholder="admin" 
+                   class="w-full px-3 py-2 bg-slate-900 border border-slate-700/80 rounded-lg text-xs text-white placeholder-slate-500 focus:outline-none focus:border-[#e5a00d] transition">
+          </div>
+          <div class="space-y-1">
+            <label class="block text-xs font-semibold uppercase tracking-wider text-slate-400">Password</label>
+            <input type="password" 
+                   x-model="clientForm.password" 
+                   placeholder="••••••••" 
+                   class="w-full px-3 py-2 bg-slate-900 border border-slate-700/80 rounded-lg text-xs text-white placeholder-slate-500 focus:outline-none focus:border-[#e5a00d] transition">
+          </div>
+        </div>
+
+        <!-- Priority & Enabled -->
+        <div class="grid grid-cols-2 gap-3">
+          <div class="space-y-1">
+            <label class="block text-xs font-semibold uppercase tracking-wider text-slate-400">Priority (1 = highest)</label>
+            <input type="number" 
+                   min="1" 
+                   max="100" 
+                   x-model.number="clientForm.priority" 
+                   class="w-full px-3 py-2 bg-slate-900 border border-slate-700/80 rounded-lg text-xs text-white focus:outline-none focus:border-[#e5a00d] transition">
+          </div>
+          <div class="flex items-center pt-5">
+            <label class="flex items-center space-x-2 cursor-pointer select-none">
+              <input type="checkbox" 
+                     x-model="clientForm.enabled" 
+                     class="w-4 h-4 rounded bg-slate-900 border-slate-700 text-[#e5a00d] focus:ring-[#e5a00d] focus:ring-offset-slate-950">
+              <span class="text-xs text-slate-200">Enable Client</span>
+            </label>
+          </div>
+        </div>
+
+        <!-- Advanced Extra Settings JSON (Collapsible/Optional) -->
+        <div class="space-y-1 pt-1">
+          <details class="group text-xs text-slate-400">
+            <summary class="cursor-pointer font-medium hover:text-slate-200 transition select-none flex items-center space-x-1">
+              <span>Advanced Driver Settings (JSON)</span>
+            </summary>
+            <div class="mt-2">
+              <textarea x-model="clientForm.extra_settings_json" 
+                        rows="3" 
+                        placeholder='{"category": "music", "minimum_upload_speed": 100}' 
+                        class="w-full p-2 bg-slate-900 border border-slate-700/80 rounded-lg text-[11px] font-mono text-slate-300 placeholder-slate-600 focus:outline-none focus:border-[#e5a00d] transition"></textarea>
+            </div>
+          </details>
+        </div>
+
+        <!-- Connection Test Result Banner -->
+        <div x-show="clientTestResult" 
+             class="p-3 rounded-lg border text-xs flex items-start space-x-2"
+             :class="clientTestResult?.success ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-300' : 'bg-rose-500/10 border-rose-500/30 text-rose-300'">
+          <svg x-show="clientTestResult?.success" class="w-4 h-4 text-emerald-400 flex-shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path>
+          </svg>
+          <svg x-show="!clientTestResult?.success" class="w-4 h-4 text-rose-400 flex-shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
+          </svg>
+          <div class="flex-1 font-mono text-[11px]">
+            <span class="font-bold block" x-text="clientTestResult?.success ? 'Connection Successful' : 'Connection Failed'"></span>
+            <span x-text="clientTestResult?.message"></span>
+            <span x-show="clientTestResult?.version" class="text-slate-400 block" x-text="'Version: ' + clientTestResult?.version"></span>
+          </div>
+        </div>
+
+        <!-- Modal Footer Actions -->
+        <div class="flex items-center justify-between pt-3 border-t border-slate-800">
+          <!-- Test Button -->
+          <button type="button" 
+                  @click="testDownloadClient()" 
+                  :disabled="clientTesting || !clientForm.host_url"
+                  class="flex items-center space-x-1.5 px-3 py-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-xs font-medium text-slate-200 border border-slate-700 transition disabled:opacity-50">
+            <svg x-show="clientTesting" class="w-3.5 h-3.5 animate-spin text-slate-400" fill="none" viewBox="0 0 24 24">
+              <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+              <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+            </svg>
+            <span x-text="clientTesting ? 'Testing...' : 'Test Connection'"></span>
+          </button>
+
+          <!-- Cancel & Save Buttons -->
+          <div class="flex items-center space-x-2">
+            <button type="button" 
+                    @click="closeClientModal()" 
+                    class="px-4 py-2 text-xs font-medium text-slate-400 hover:text-white transition">
+              Cancel
+            </button>
+            <button type="submit" 
+                    :disabled="clientSaving"
+                    class="flex items-center space-x-1.5 px-4 py-2 text-xs font-semibold rounded-lg bg-[#e5a00d] hover:bg-[#cc8f0c] text-slate-950 transition disabled:opacity-50 shadow-md">
+              <svg x-show="clientSaving" class="w-3.5 h-3.5 animate-spin text-slate-950" fill="none" viewBox="0 0 24 24">
+                <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+              </svg>
+              <span x-text="clientSaving ? 'Saving...' : 'Save'"></span>
+            </button>
+          </div>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- ================= INDEXER CONFIG MODAL ================= -->
+  <div x-show="isIndexerModalOpen" 
+       x-transition.opacity.duration.200ms
+       class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-sm"
+       style="display: none;">
+    <div @click.away="closeIndexerModal()" 
+         class="glass-modal rounded-2xl w-full max-w-lg p-6 flex flex-col shadow-2xl border border-slate-700/80 space-y-4 max-h-[90vh] overflow-y-auto">
+      
+      <!-- Modal Header -->
+      <div class="flex items-center justify-between border-b border-slate-800 pb-3 flex-shrink-0">
+        <div>
+          <h3 class="text-base font-bold text-white flex items-center space-x-2">
+            <span x-text="indexerForm.id ? 'Edit Indexer' : 'Add Indexer'"></span>
+          </h3>
+          <p class="text-xs text-slate-400">Configure Torznab / Newznab search feeds</p>
+        </div>
+        <button @click="closeIndexerModal()" class="text-slate-500 hover:text-white transition p-1">
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
+          </svg>
+        </button>
+      </div>
+
+      <!-- Modal Body / Form -->
+      <form @submit.prevent="saveIndexer()" class="space-y-4">
+        <!-- Indexer Name -->
+        <div class="space-y-1">
+          <label class="block text-xs font-semibold uppercase tracking-wider text-slate-400">Name</label>
+          <input type="text" 
+                 x-model="indexerForm.name" 
+                 required
+                 placeholder="e.g. Prowlarr - Redacted, NZBPlanet" 
+                 class="w-full px-3 py-2 bg-slate-900 border border-slate-700/80 rounded-lg text-xs text-white placeholder-slate-500 focus:outline-none focus:border-[#e5a00d] transition">
+        </div>
+
+        <!-- Indexer Type -->
+        <div class="space-y-1">
+          <label class="block text-xs font-semibold uppercase tracking-wider text-slate-400">Indexer Protocol</label>
+          <select x-model="indexerForm.indexer_type" 
+                  class="w-full px-3 py-2 bg-slate-900 border border-slate-700/80 rounded-lg text-xs text-white focus:outline-none focus:border-[#e5a00d] transition">
+            <option value="torznab">Torznab (Torrent / Prowlarr / Jackett)</option>
+            <option value="newznab">Newznab (Usenet / NZBHydra)</option>
+          </select>
+        </div>
+
+        <!-- URL -->
+        <div class="space-y-1">
+          <label class="block text-xs font-semibold uppercase tracking-wider text-slate-400">URL</label>
+          <input type="url" 
+                 x-model="indexerForm.host_url" 
+                 required
+                 placeholder="http://localhost:9696/1/api" 
+                 class="w-full px-3 py-2 bg-slate-900 border border-slate-700/80 rounded-lg text-xs font-mono text-white placeholder-slate-500 focus:outline-none focus:border-[#e5a00d] transition">
+          <p class="text-[11px] text-slate-500">Torznab API endpoint URL (must include api path)</p>
+        </div>
+
+        <!-- API Key -->
+        <div class="space-y-1">
+          <label class="block text-xs font-semibold uppercase tracking-wider text-slate-400">API Key</label>
+          <input type="password" 
+                 x-model="indexerForm.api_key" 
+                 placeholder="Torznab / Indexer API Key" 
+                 class="w-full px-3 py-2 bg-slate-900 border border-slate-700/80 rounded-lg text-xs font-mono text-white placeholder-slate-500 focus:outline-none focus:border-[#e5a00d] transition">
+        </div>
+
+        <!-- Categories -->
+        <div class="space-y-1">
+          <label class="block text-xs font-semibold uppercase tracking-wider text-slate-400">Categories (Comma-separated)</label>
+          <input type="text" 
+                 x-model="indexerForm.categories" 
+                 placeholder="3000,3010,3020,3030,3040" 
+                 class="w-full px-3 py-2 bg-slate-900 border border-slate-700/80 rounded-lg text-xs font-mono text-white placeholder-slate-500 focus:outline-none focus:border-[#e5a00d] transition">
+          <p class="text-[11px] text-slate-500">Music standard categories (3000=Audio, 3010=MP3, 3020=Lossless, 3040=Audiobook)</p>
+        </div>
+
+        <!-- Priority & Enabled -->
+        <div class="grid grid-cols-2 gap-3">
+          <div class="space-y-1">
+            <label class="block text-xs font-semibold uppercase tracking-wider text-slate-400">Priority (1 = highest)</label>
+            <input type="number" 
+                   min="1" 
+                   max="100" 
+                   x-model.number="indexerForm.priority" 
+                   class="w-full px-3 py-2 bg-slate-900 border border-slate-700/80 rounded-lg text-xs text-white focus:outline-none focus:border-[#e5a00d] transition">
+          </div>
+          <div class="flex items-center pt-5">
+            <label class="flex items-center space-x-2 cursor-pointer select-none">
+              <input type="checkbox" 
+                     x-model="indexerForm.enabled" 
+                     class="w-4 h-4 rounded bg-slate-900 border-slate-700 text-[#e5a00d] focus:ring-[#e5a00d] focus:ring-offset-slate-950">
+              <span class="text-xs text-slate-200">Enable Indexer</span>
+            </label>
+          </div>
+        </div>
+
+        <!-- Test Result Banner -->
+        <div x-show="indexerTestResult" 
+             class="p-3 rounded-lg border text-xs flex items-start space-x-2"
+             :class="indexerTestResult?.success ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-300' : 'bg-rose-500/10 border-rose-500/30 text-rose-300'">
+          <svg x-show="indexerTestResult?.success" class="w-4 h-4 text-emerald-400 flex-shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path>
+          </svg>
+          <svg x-show="!indexerTestResult?.success" class="w-4 h-4 text-rose-400 flex-shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
+          </svg>
+          <div class="flex-1 font-mono text-[11px]">
+            <span class="font-bold block" x-text="indexerTestResult?.success ? 'Capabilities Query Succeeded' : 'Capabilities Query Failed'"></span>
+            <span x-text="indexerTestResult?.message"></span>
+            <span x-show="indexerTestResult?.title" class="text-slate-400 block" x-text="'Feed: ' + indexerTestResult?.title"></span>
+          </div>
+        </div>
+
+        <!-- Modal Footer Actions -->
+        <div class="flex items-center justify-between pt-3 border-t border-slate-800">
+          <!-- Test Button -->
+          <button type="button" 
+                  @click="testIndexer()" 
+                  :disabled="indexerTesting || !indexerForm.host_url"
+                  class="flex items-center space-x-1.5 px-3 py-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-xs font-medium text-slate-200 border border-slate-700 transition disabled:opacity-50">
+            <svg x-show="indexerTesting" class="w-3.5 h-3.5 animate-spin text-slate-400" fill="none" viewBox="0 0 24 24">
+              <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+              <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+            </svg>
+            <span x-text="indexerTesting ? 'Testing...' : 'Test Feed'"></span>
+          </button>
+
+          <!-- Cancel & Save Buttons -->
+          <div class="flex items-center space-x-2">
+            <button type="button" 
+                    @click="closeIndexerModal()" 
+                    class="px-4 py-2 text-xs font-medium text-slate-400 hover:text-white transition">
+              Cancel
+            </button>
+            <button type="submit" 
+                    :disabled="indexerSaving"
+                    class="flex items-center space-x-1.5 px-4 py-2 text-xs font-semibold rounded-lg bg-[#e5a00d] hover:bg-[#cc8f0c] text-slate-950 transition disabled:opacity-50 shadow-md">
+              <svg x-show="indexerSaving" class="w-3.5 h-3.5 animate-spin text-slate-950" fill="none" viewBox="0 0 24 24">
+                <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+              </svg>
+              <span x-text="indexerSaving ? 'Saving...' : 'Save'"></span>
+            </button>
+          </div>
+        </div>
+      </form>
+    </div>
+  </div>
+
   <!-- ================= LIVE SYNC SSE TERMINAL DRAWER ================= -->
   <div x-show="isTerminalOpen" 
        x-transition:enter="transition ease-out duration-200"
@@ -1684,6 +2962,52 @@
       </template>
     </div>
 
+  </div>
+
+  <!-- ================= FLOATING 30s AUDIO PLAYER PILL ================= -->
+  <div x-show="audioPlayer.currentTrack"
+       x-transition:enter="transition ease-out duration-300 transform"
+       x-transition:enter-start="translate-y-full opacity-0"
+       x-transition:enter-end="translate-y-0 opacity-100"
+       x-transition:leave="transition ease-in duration-200 transform"
+       x-transition:leave-start="translate-y-0 opacity-100"
+       x-transition:leave-end="translate-y-full opacity-0"
+       class="fixed bottom-4 left-1/2 -translate-x-1/2 z-50 w-11/12 max-w-xl audio-player-pill rounded-2xl p-3 flex items-center space-x-3.5 shadow-2xl">
+    <!-- Track Artwork -->
+    <div class="w-12 h-12 rounded-xl bg-slate-900 overflow-hidden flex-shrink-0 border border-slate-800">
+      <img :src="audioPlayer.currentTrack?.cover_url || '/static/placeholder.svg'"
+           :alt="audioPlayer.currentTrack?.title"
+           class="w-full h-full object-cover">
+    </div>
+
+    <!-- Track Title, Artist, & Progress Bar -->
+    <div class="flex-1 min-w-0 space-y-1">
+      <div class="flex items-center justify-between">
+        <div class="text-xs font-bold text-white truncate" x-text="audioPlayer.currentTrack?.title"></div>
+        <span class="text-[10px] font-mono text-amber-400" x-text="Math.round(audioPlayer.progress) + '%'"></span>
+      </div>
+      <div class="text-[11px] text-slate-400 truncate" x-text="audioPlayer.currentTrack?.artist"></div>
+      <!-- Progress Bar -->
+      <div class="w-full bg-slate-800 h-1.5 rounded-full overflow-hidden">
+        <div class="bg-gradient-to-r from-amber-500 to-amber-400 h-full transition-all duration-200"
+             :style="'width: ' + audioPlayer.progress + '%'"></div>
+      </div>
+    </div>
+
+    <!-- Play / Pause Toggle Button -->
+    <button @click="audioPlayer.toggle(audioPlayer.currentTrack)"
+            title="Play / Pause"
+            class="w-10 h-10 rounded-full bg-[#e5a00d] hover:bg-[#cc8f0c] text-slate-950 flex items-center justify-center transition shadow-lg shadow-amber-500/30 flex-shrink-0">
+      <svg x-show="!audioPlayer.isPlaying" class="w-4 h-4 ml-0.5" fill="currentColor" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>
+      <svg x-show="audioPlayer.isPlaying" class="w-4 h-4" fill="currentColor" viewBox="0 0 24 24"><path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/></svg>
+    </button>
+
+    <!-- Close Pill Button -->
+    <button @click="audioPlayer.stop()"
+            title="Close Player"
+            class="p-1.5 text-slate-400 hover:text-slate-200 transition">
+      <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path></svg>
+    </button>
   </div>
 
   <!-- ================= FLOATING TOAST CONTAINER ================= -->

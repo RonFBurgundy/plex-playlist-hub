@@ -1,0 +1,99 @@
+"""Acquisition driver registry and factory for TrackSeerr Phase 3."""
+
+import json
+from typing import Any, Union
+
+from plex_playlist_sync.clients.acquisition.base import AcquisitionDriver
+from plex_playlist_sync.clients.acquisition.lidarr_adapter import LidarrAdapter
+from plex_playlist_sync.clients.acquisition.qbittorrent import QbittorrentDriver
+from plex_playlist_sync.clients.acquisition.sabnzbd import SabnzbdDriver
+from plex_playlist_sync.clients.acquisition.slskd import SlskdDriver
+from plex_playlist_sync.clients.acquisition.torznab import TorznabDriver
+from plex_playlist_sync.models import DownloadClientConfig, DownloadDriverType, IndexerConfig
+
+
+def get_acquisition_driver(
+    config: Union[dict[str, Any], DownloadClientConfig],
+) -> AcquisitionDriver:
+    """Instantiates the appropriate AcquisitionDriver from a download client configuration."""
+    cfg = config.to_dict() if isinstance(config, DownloadClientConfig) else dict(config)
+    driver_type = str(cfg.get("driver_type", "")).lower()
+    host_url = str(cfg.get("host_url", "")).rstrip("/")
+    api_key = cfg.get("api_key")
+    username = cfg.get("username")
+    password = cfg.get("password")
+
+    extra: dict[str, Any] = {}
+    extra_json = cfg.get("extra_settings_json")
+    if extra_json and isinstance(extra_json, str):
+        try:
+            extra = json.loads(extra_json)
+        except Exception:
+            extra = {}
+    elif isinstance(cfg.get("extra_settings"), dict):
+        extra = cfg["extra_settings"]
+
+    if driver_type in (DownloadDriverType.SLSKD.value, "slskd"):
+        return SlskdDriver(
+            host_url=host_url,
+            api_key=api_key,
+            username=username,
+            password=password,
+            download_dir=extra.get("download_dir"),
+        )
+    elif driver_type in (DownloadDriverType.SABNZBD.value, "sabnzbd"):
+        return SabnzbdDriver(
+            host_url=host_url,
+            api_key=api_key,
+            username=username,
+            password=password,
+            category=extra.get("category", "music"),
+        )
+    elif driver_type in (DownloadDriverType.QBITTORRENT.value, "qbittorrent"):
+        return QbittorrentDriver(
+            host_url=host_url,
+            username=username,
+            password=password,
+            category=extra.get("category", "trackseerr"),
+        )
+    elif driver_type in (DownloadDriverType.LIDARR.value, "lidarr"):
+        return LidarrAdapter(
+            host_url=host_url,
+            api_key=api_key or "",
+            auto_search=bool(extra.get("auto_search", True)),
+            root_folder=extra.get("root_folder"),
+            quality_profile_id=extra.get("quality_profile_id"),
+            metadata_profile_id=extra.get("metadata_profile_id"),
+        )
+    else:
+        raise ValueError(f"Unsupported download driver type: '{driver_type}'")
+
+
+def get_indexer_driver(
+    config: Union[dict[str, Any], IndexerConfig],
+) -> TorznabDriver:
+    """Instantiates a Torznab/Newznab indexer driver from configuration."""
+    cfg = config.to_dict() if isinstance(config, IndexerConfig) else dict(config)
+    host_url = str(cfg.get("host_url", "")).rstrip("/")
+    api_key = cfg.get("api_key")
+    categories = str(cfg.get("categories") or "3000,3010,3020,3030,3040")
+    indexer_type = str(cfg.get("indexer_type") or "torznab")
+
+    return TorznabDriver(
+        host_url=host_url,
+        api_key=api_key,
+        categories=categories,
+        indexer_type=indexer_type,
+    )
+
+
+__all__ = [
+    "AcquisitionDriver",
+    "SlskdDriver",
+    "SabnzbdDriver",
+    "QbittorrentDriver",
+    "TorznabDriver",
+    "LidarrAdapter",
+    "get_acquisition_driver",
+    "get_indexer_driver",
+]

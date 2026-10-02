@@ -161,6 +161,9 @@ class TestContentSecurityPolicy:
         # Images: self, data:, https: (for Spotify/Deezer artwork)
         assert "img-src 'self' data: https:" in csp
 
+        # Media: self, https:, data: (for Deezer/iTunes 30s audio previews)
+        assert "media-src 'self' https: data:" in csp
+
         # Connections: self (SSE and API)
         assert "connect-src 'self'" in csp
 

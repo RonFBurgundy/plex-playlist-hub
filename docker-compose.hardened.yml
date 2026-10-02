@@ -1,0 +1,73 @@
+# =============================================================================
+# TrackSeerr Hardened Homelab Deployment Topology
+# Two-Tier DMZ Architecture: Stateless Gateway (DMZ) + Core Acquisition Engine
+# =============================================================================
+
+version: '3.8'
+
+services:
+  # ---------------------------------------------------------------------------
+  # Tier 1: Public Gateway (DMZ Ingress)
+  # Completely stateless, zero disk mounts, isolated on reverse-proxy network.
+  # Handles authentication, web UI, discovery, and requests safely.
+  # ---------------------------------------------------------------------------
+  trackseerr-gateway:
+    image: ghcr.io/ronfburgundy/trackseerr:latest
+    container_name: trackseerr-gateway
+    restart: unless-stopped
+    ports:
+      - "5250:5250"
+    environment:
+      - ROLE=gateway
+      - TRACKSEERR_CORE_URL=http://trackseerr-core:5251
+      - PORT=5250
+      - PUID=1000
+      - PGID=1000
+      - UMASK=022
+      - TZ=Etc/UTC
+      - LOG_LEVEL=INFO
+    networks:
+      - proxynet
+      - internal-net
+    # Zero filesystem volumes mounted into gateway tier
+
+  # ---------------------------------------------------------------------------
+  # Tier 2: Core Engine & Downloader Coordinator (Internal Isolated Network)
+  # No public port mappings. Exclusively accessible via internal network.
+  # Holds persistent database, music library (/music), and download staging (/downloads).
+  # Peered directly with slskd, SABnzbd, qBittorrent, and Plex Media Server.
+  # ---------------------------------------------------------------------------
+  trackseerr-core:
+    image: ghcr.io/ronfburgundy/trackseerr:latest
+    container_name: trackseerr-core
+    restart: unless-stopped
+    expose:
+      - "5251"
+    volumes:
+      - ./data:/data
+      - /path/to/music:/music
+      - /path/to/downloads:/downloads
+    environment:
+      - ROLE=core
+      - PORT=5251
+      - PUID=1000
+      - PGID=1000
+      - UMASK=022
+      - TZ=Etc/UTC
+      - PLEX_URL=http://192.168.1.100:32400
+      - PLEX_TOKEN=your_plex_token_here
+      - PLEX_MUSIC_SECTION=Music
+      - PLEX_VERIFY_SSL=1
+      - SECONDS_TO_WAIT=14400
+      - SEARCH_SIMILARITY_THRESHOLD=0.9
+      - LOG_LEVEL=INFO
+    networks:
+      - internal-net
+
+networks:
+  proxynet:
+    name: proxynet
+    driver: bridge
+  internal-net:
+    name: trackseerr-internal-net
+    internal: true

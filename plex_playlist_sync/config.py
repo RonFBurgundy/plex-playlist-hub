@@ -76,6 +76,8 @@ class Config:
     lidarr_auto_trickle: bool = False
     lidarr_auto_trickle_interval_minutes: int = 30
     feed_token: Optional[str] = None
+    auto_approve_requests: bool = False
+    user_request_quota: int = 25
 
     @classmethod
     def from_env(cls) -> "Config":
@@ -156,6 +158,8 @@ class Config:
             lidarr_auto_trickle=_parse_bool(os.getenv("LIDARR_AUTO_TRICKLE"), False),
             lidarr_auto_trickle_interval_minutes=int(os.getenv("LIDARR_AUTO_TRICKLE_INTERVAL_MINUTES")) if os.getenv("LIDARR_AUTO_TRICKLE_INTERVAL_MINUTES") and os.getenv("LIDARR_AUTO_TRICKLE_INTERVAL_MINUTES").isdigit() else 30,
             feed_token=os.getenv("FEED_TOKEN") or None,
+            auto_approve_requests=_parse_bool(os.getenv("AUTO_APPROVE_REQUESTS"), False),
+            user_request_quota=int(os.getenv("USER_REQUEST_QUOTA")) if os.getenv("USER_REQUEST_QUOTA") and os.getenv("USER_REQUEST_QUOTA").isdigit() else 25,
         )
 
     @property

@@ -258,20 +258,37 @@ class LidarrTrickleWorker:
                         monitor_mode="specific",
                     )
 
-                # Update database statuses for tracks in this group
-                track_ids = [it.get("id") for it in group if it.get("id")]
+                # Update database statuses for tracks / requests in this group
+                missing_track_ids = [
+                    int(it["id"])
+                    for it in group
+                    if it.get("id") and not it.get("is_request") and (
+                        isinstance(it["id"], int) or (isinstance(it["id"], str) and it["id"].isdigit())
+                    )
+                ]
+                request_ids = [
+                    str(it["id"])
+                    for it in group
+                    if it.get("id") and it.get("is_request")
+                ]
+
                 if res.get("status") == "success":
-                    db.update_missing_tracks_lidarr_status_bulk(track_ids, "monitored")
+                    if missing_track_ids:
+                        db.update_missing_tracks_lidarr_status_bulk(missing_track_ids, "monitored")
+                    for req_id in request_ids:
+                        db.update_request_status(req_id, "processing")
                     with self._lock:
                         self._successful_items += len(group)
                     logger.info("Monitored %d tracks for artist '%s' in Lidarr", len(group), artist_display)
                 elif res.get("status") == "not_found":
-                    db.update_missing_tracks_lidarr_status_bulk(track_ids, "not_found")
+                    if missing_track_ids:
+                        db.update_missing_tracks_lidarr_status_bulk(missing_track_ids, "not_found")
                     with self._lock:
                         self._failed_items += len(group)
                     logger.warning("Artist '%s' not found in Lidarr/MusicBrainz", artist_display)
                 else:
-                    db.update_missing_tracks_lidarr_status_bulk(track_ids, "error")
+                    if missing_track_ids:
+                        db.update_missing_tracks_lidarr_status_bulk(missing_track_ids, "error")
                     with self._lock:
                         self._failed_items += len(group)
                     logger.error("Error queueing artist '%s': %s", artist_display, res.get("message"))

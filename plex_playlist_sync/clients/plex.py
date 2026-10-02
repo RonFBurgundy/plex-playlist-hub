@@ -638,3 +638,22 @@ class PlexClient:
             "view_count": getattr(t, "viewCount", 0) or 0,
             "last_viewed_at": str(getattr(t, "lastViewedAt", "")) if getattr(t, "lastViewedAt", None) else None,
         }
+
+    def refresh_music_library(self, section_name: Optional[str] = None) -> bool:
+        """Triggers a library section refresh on Plex Media Server."""
+        sec_name = section_name or getattr(self, "music_section", "Music") or "Music"
+        try:
+            if hasattr(self.server, "library"):
+                try:
+                    sec = self.server.library.section(sec_name)
+                    sec.update()
+                    logger.info("Triggered Plex section update for '%s'", sec_name)
+                    return True
+                except Exception:
+                    self.server.library.update()
+                    logger.info("Triggered general Plex library update")
+                    return True
+        except Exception as e:
+            logger.warning("Could not refresh Plex library '%s': %s", sec_name, e)
+        return False
+
