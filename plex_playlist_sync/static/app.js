@@ -20,7 +20,43 @@ document.addEventListener('alpine:init', () => {
     authLoadingText: '',
 
     // Overseerr / Arr Primary Tab Navigation
-    activeTab: 'discover', // 'discover' | 'requests' | 'playlists' | 'activity' | 'settings'
+    activeTab: 'discover', // 'discover' | 'library' | 'requests' | 'playlists' | 'activity' | 'settings'
+
+    libraryState: {
+      subTab: 'artists', // 'artists' | 'albums' | 'tracks'
+      artists: [],
+      albums: [],
+      tracks: [],
+      stats: null,
+      query: '',
+      monitoredFilter: 'all', // 'all' | 'monitored' | 'unmonitored'
+      selectedArtist: null,
+      selectedAlbum: null,
+      isLoading: false,
+      isScanning: false,
+      scanStatus: null,
+      scanPollTimer: null,
+      isMigratingLidarr: false,
+      lidarrMigrationStatus: null,
+      lidarrPollTimer: null,
+      // Manual Import modal state
+      manualImport: {
+        isOpen: false,
+        folderPath: '/data/downloads',
+        items: [],
+        isLoading: false,
+        isCommitting: false,
+        mode: 'move', // 'move' | 'hardlink' | 'copy'
+        writeTags: true,
+      },
+      // Batch Rename modal state
+      batchRename: {
+        isOpen: false,
+        items: [],
+        isLoading: false,
+        isApplying: false,
+      }
+    },
     isMobileMenuOpen: false,
 
     toggleMobileMenu() {
@@ -161,7 +197,9 @@ document.addEventListener('alpine:init', () => {
         this.isClientModalOpen ||
         this.isIndexerModalOpen ||
         this.isProfileModalOpen ||
-        this.isSearchModalOpen
+        this.isSearchModalOpen ||
+        this.libraryState?.manualImport?.isOpen ||
+        this.libraryState?.batchRename?.isOpen
       );
     },
 
@@ -261,7 +299,8 @@ document.addEventListener('alpine:init', () => {
         clean_artist_names: true,
         write_audio_tags: true,
         embed_artwork: true,
-        save_cover_art_file: true
+        save_cover_art_file: true,
+        library_mode: 'native',
       },
       lidarrSettings: {
         url: '',
@@ -426,6 +465,8 @@ document.addEventListener('alpine:init', () => {
         this.$watch('isIndexerModalOpen', syncBodyModalLock);
         this.$watch('isProfileModalOpen', syncBodyModalLock);
         this.$watch('isSearchModalOpen', syncBodyModalLock);
+        this.$watch('libraryState.manualImport.isOpen', syncBodyModalLock);
+        this.$watch('libraryState.batchRename.isOpen', syncBodyModalLock);
         this.$watch('activeTab', () => {
           this.isMobileMenuOpen = false;
         });
@@ -444,6 +485,8 @@ document.addEventListener('alpine:init', () => {
           if (this.isIndexerModalOpen) this.closeIndexerModal();
           if (this.isProfileModalOpen) this.closeProfileModal();
           if (this.isSearchModalOpen) this.closeInteractiveSearchModal();
+          if (this.libraryState?.manualImport?.isOpen) this.closeManualImport();
+          if (this.libraryState?.batchRename?.isOpen) this.closeBatchRename();
         }
       });
 
@@ -2158,6 +2201,7 @@ document.addEventListener('alpine:init', () => {
             write_audio_tags: data.settings.write_audio_tags !== undefined ? Boolean(data.settings.write_audio_tags) : true,
             embed_artwork: data.settings.embed_artwork !== undefined ? Boolean(data.settings.embed_artwork) : true,
             save_cover_art_file: data.settings.save_cover_art_file !== undefined ? Boolean(data.settings.save_cover_art_file) : true,
+            library_mode: data.settings.library_mode || 'native',
           };
         }
         if (data && data.presets) {
@@ -3040,6 +3084,392 @@ document.addEventListener('alpine:init', () => {
         this.showToast(err?.message || 'Failed to grab release', 'error');
       } finally {
         this.grabbingReleaseId = null;
+      }
+    },
+
+    // -----------------------------------------------------------------------
+    // Native Library Management Methods
+    // -----------------------------------------------------------------------
+    async loadLibrary() {
+      await this.loadLibraryStats();
+      if (this.libraryState.subTab === 'artists') {
+        await this.loadLibraryArtists();
+      } else if (this.libraryState.subTab === 'albums') {
+        await this.loadLibraryAlbums();
+      } else if (this.libraryState.subTab === 'tracks') {
+        await this.loadLibraryTracks();
+      }
+    },
+
+    async loadLibraryStats() {
+      try {
+        const stats = await this.apiRequest('/api/library/stats');
+        if (stats) {
+          this.libraryState.stats = stats;
+        }
+      } catch (err) {
+        console.error('Error loading library stats:', err);
+      }
+    },
+
+    async loadLibraryArtists() {
+      this.libraryState.isLoading = true;
+      try {
+        let url = `/api/library/artists?limit=100`;
+        if (this.libraryState.query) {
+          url += `&query=${encodeURIComponent(this.libraryState.query.trim())}`;
+        }
+        if (this.libraryState.monitoredFilter === 'monitored') {
+          url += `&monitored_only=true`;
+        }
+        const data = await this.apiRequest(url);
+        if (Array.isArray(data)) {
+          this.libraryState.artists = data;
+        }
+      } catch (err) {
+        console.error('Error loading library artists:', err);
+        this.showToast('Failed to load artists', 'error');
+      } finally {
+        this.libraryState.isLoading = false;
+      }
+    },
+
+    async loadLibraryAlbums(artistId = null) {
+      this.libraryState.isLoading = true;
+      try {
+        let url = `/api/library/albums?limit=100`;
+        if (artistId) {
+          url += `&artist_id=${encodeURIComponent(artistId)}`;
+        }
+        if (this.libraryState.query) {
+          url += `&query=${encodeURIComponent(this.libraryState.query.trim())}`;
+        }
+        if (this.libraryState.monitoredFilter === 'monitored') {
+          url += `&monitored_only=true`;
+        }
+        const data = await this.apiRequest(url);
+        if (Array.isArray(data)) {
+          this.libraryState.albums = data;
+        }
+      } catch (err) {
+        console.error('Error loading library albums:', err);
+        this.showToast('Failed to load albums', 'error');
+      } finally {
+        this.libraryState.isLoading = false;
+      }
+    },
+
+    async loadLibraryTracks(albumId = null, artistId = null) {
+      this.libraryState.isLoading = true;
+      try {
+        let url = `/api/library/tracks?limit=200`;
+        if (albumId) {
+          url += `&album_id=${encodeURIComponent(albumId)}`;
+        }
+        if (artistId) {
+          url += `&artist_id=${encodeURIComponent(artistId)}`;
+        }
+        if (this.libraryState.query) {
+          url += `&query=${encodeURIComponent(this.libraryState.query.trim())}`;
+        }
+        if (this.libraryState.monitoredFilter === 'monitored') {
+          url += `&monitored_only=true`;
+        }
+        const data = await this.apiRequest(url);
+        if (Array.isArray(data)) {
+          this.libraryState.tracks = data;
+        }
+      } catch (err) {
+        console.error('Error loading library tracks:', err);
+        this.showToast('Failed to load tracks', 'error');
+      } finally {
+        this.libraryState.isLoading = false;
+      }
+    },
+
+    async toggleArtistMonitored(artist) {
+      if (!artist) return;
+      const targetState = !artist.monitored;
+      try {
+        const res = await this.apiRequest(`/api/library/artists/${artist.id}/monitored`, {
+          method: 'PUT',
+          body: { monitored: targetState, cascade_children: true }
+        });
+        if (res) {
+          artist.monitored = targetState;
+          this.showToast(`Artist ${targetState ? 'monitored' : 'unmonitored'}`, 'info');
+          this.loadLibraryStats();
+        }
+      } catch (err) {
+        this.showToast(err.message || 'Failed to toggle artist monitoring', 'error');
+      }
+    },
+
+    async toggleAlbumMonitored(album) {
+      if (!album) return;
+      const targetState = !album.monitored;
+      try {
+        const res = await this.apiRequest(`/api/library/albums/${album.id}/monitored`, {
+          method: 'PUT',
+          body: { monitored: targetState, cascade_tracks: true }
+        });
+        if (res) {
+          album.monitored = targetState;
+          this.showToast(`Album ${targetState ? 'monitored' : 'unmonitored'}`, 'info');
+          this.loadLibraryStats();
+        }
+      } catch (err) {
+        this.showToast(err.message || 'Failed to toggle album monitoring', 'error');
+      }
+    },
+
+    async toggleTrackMonitored(track) {
+      if (!track) return;
+      const targetState = !track.monitored;
+      try {
+        const res = await this.apiRequest(`/api/library/tracks/${track.id}/monitored`, {
+          method: 'PUT',
+          body: { monitored: targetState }
+        });
+        if (res) {
+          track.monitored = targetState;
+          this.showToast(`Track ${targetState ? 'monitored' : 'unmonitored'}`, 'info');
+          this.loadLibraryStats();
+        }
+      } catch (err) {
+        this.showToast(err.message || 'Failed to toggle track monitoring', 'error');
+      }
+    },
+
+    async deleteLibraryArtist(artist) {
+      if (!artist || !confirm(`Remove artist '${artist.name}' and all child albums from library?`)) return;
+      try {
+        await this.apiRequest(`/api/library/artists/${artist.id}`, { method: 'DELETE' });
+        this.showToast(`Artist '${artist.name}' removed`, 'success');
+        this.loadLibrary();
+      } catch (err) {
+        this.showToast(err.message || 'Failed to remove artist', 'error');
+      }
+    },
+
+    async deleteLibraryAlbum(album) {
+      if (!album || !confirm(`Remove album '${album.title}' from library?`)) return;
+      try {
+        await this.apiRequest(`/api/library/albums/${album.id}`, { method: 'DELETE' });
+        this.showToast(`Album '${album.title}' removed`, 'success');
+        this.loadLibrary();
+      } catch (err) {
+        this.showToast(err.message || 'Failed to remove album', 'error');
+      }
+    },
+
+    async triggerLibraryScan(pruneMissing = false) {
+      this.libraryState.isScanning = true;
+      try {
+        const res = await this.apiRequest('/api/library/scan', {
+          method: 'POST',
+          body: { prune_missing: Boolean(pruneMissing) }
+        });
+        if (res && res.success) {
+          this.showToast('Filesystem scan started', 'info');
+          this.startScanPolling();
+        }
+      } catch (err) {
+        this.libraryState.isScanning = false;
+        this.showToast(err.message || 'Failed to start scan', 'error');
+      }
+    },
+
+    startScanPolling() {
+      if (this.libraryState.scanPollTimer) clearInterval(this.libraryState.scanPollTimer);
+      this.libraryState.scanPollTimer = setInterval(async () => {
+        try {
+          const status = await this.apiRequest('/api/library/scan/status');
+          if (status) {
+            this.libraryState.scanStatus = status;
+            if (!status.is_scanning) {
+              clearInterval(this.libraryState.scanPollTimer);
+              this.libraryState.scanPollTimer = null;
+              this.libraryState.isScanning = false;
+              this.showToast(`Library scan ${status.status}: ${status.files_indexed} file(s) indexed`, 'success');
+              this.loadLibrary();
+            }
+          }
+        } catch (e) {
+          clearInterval(this.libraryState.scanPollTimer);
+          this.libraryState.scanPollTimer = null;
+          this.libraryState.isScanning = false;
+        }
+      }, 2000);
+    },
+
+    async cancelLibraryScan() {
+      try {
+        await this.apiRequest('/api/library/scan/cancel', { method: 'POST' });
+        this.showToast('Scan cancellation requested', 'info');
+      } catch (err) {
+        this.showToast('Could not cancel scan', 'error');
+      }
+    },
+
+    async triggerLidarrMigration(autoSwitch = true) {
+      this.libraryState.isMigratingLidarr = true;
+      try {
+        const res = await this.apiRequest('/api/library/migrate-lidarr', {
+          method: 'POST',
+          body: { auto_switch_mode: Boolean(autoSwitch) }
+        });
+        if (res && res.success) {
+          this.showToast('Lidarr migration started', 'info');
+          this.startLidarrMigrationPolling();
+        }
+      } catch (err) {
+        this.libraryState.isMigratingLidarr = false;
+        this.showToast(err.message || 'Failed to start Lidarr migration', 'error');
+      }
+    },
+
+    startLidarrMigrationPolling() {
+      if (this.libraryState.lidarrPollTimer) clearInterval(this.libraryState.lidarrPollTimer);
+      this.libraryState.lidarrPollTimer = setInterval(async () => {
+        try {
+          const status = await this.apiRequest('/api/library/migrate-lidarr/status');
+          if (status) {
+            this.libraryState.lidarrMigrationStatus = status;
+            if (!status.is_migrating) {
+              clearInterval(this.libraryState.lidarrPollTimer);
+              this.libraryState.lidarrPollTimer = null;
+              this.libraryState.isMigratingLidarr = false;
+              this.showToast(`Lidarr migration ${status.status}: ${status.artists_migrated} artists, ${status.albums_migrated} albums`, 'success');
+              await this.loadSettings();
+              this.loadLibrary();
+            }
+          }
+        } catch (e) {
+          clearInterval(this.libraryState.lidarrPollTimer);
+          this.libraryState.lidarrPollTimer = null;
+          this.libraryState.isMigratingLidarr = false;
+        }
+      }, 2000);
+    },
+
+    openManualImport() {
+      this.libraryState.manualImport.isOpen = true;
+      this.libraryState.manualImport.folderPath = this.settingsState.mediaManagement.staging_folder_path || '/data/downloads';
+      this.scanManualImportFolder();
+    },
+
+    closeManualImport() {
+      this.libraryState.manualImport.isOpen = false;
+      this.libraryState.manualImport.items = [];
+    },
+
+    async scanManualImportFolder() {
+      this.libraryState.manualImport.isLoading = true;
+      try {
+        const res = await this.apiRequest('/api/library/manual-import/scan', {
+          method: 'POST',
+          body: { folder_path: this.libraryState.manualImport.folderPath }
+        });
+        if (Array.isArray(res)) {
+          this.libraryState.manualImport.items = res.map(it => ({ ...it, selected: true }));
+        } else {
+          this.libraryState.manualImport.items = [];
+        }
+      } catch (err) {
+        this.showToast(err.message || 'Error scanning import folder', 'error');
+      } finally {
+        this.libraryState.manualImport.isLoading = false;
+      }
+    },
+
+    async commitManualImport() {
+      const selected = this.libraryState.manualImport.items.filter(it => it.selected);
+      if (!selected.length) {
+        this.showToast('No files selected for import', 'warning');
+        return;
+      }
+      this.libraryState.manualImport.isCommitting = true;
+      try {
+        const payload = {
+          items: selected.map(it => ({
+            file_path: it.file_path,
+            artist_id: it.suggested_artist_id || null,
+            album_id: it.suggested_album_id || null,
+            track_id: it.suggested_track_id || null,
+            artist_name: it.detected_artist || null,
+            album_title: it.detected_album || null,
+            track_title: it.detected_title || null,
+            track_number: it.detected_track_number || 1,
+            mode: this.libraryState.manualImport.mode || 'move',
+            write_tags: Boolean(this.libraryState.manualImport.writeTags),
+          }))
+        };
+        const res = await this.apiRequest('/api/library/manual-import/commit', {
+          method: 'POST',
+          body: payload
+        });
+        if (res) {
+          this.showToast(`Imported ${res.imported_count || 0} file(s)`, 'success');
+          this.closeManualImport();
+          this.loadLibrary();
+        }
+      } catch (err) {
+        this.showToast(err.message || 'Failed to commit manual import', 'error');
+      } finally {
+        this.libraryState.manualImport.isCommitting = false;
+      }
+    },
+
+    openBatchRename() {
+      this.libraryState.batchRename.isOpen = true;
+      this.previewBatchRename();
+    },
+
+    closeBatchRename() {
+      this.libraryState.batchRename.isOpen = false;
+      this.libraryState.batchRename.items = [];
+    },
+
+    async previewBatchRename() {
+      this.libraryState.batchRename.isLoading = true;
+      try {
+        const res = await this.apiRequest('/api/library/rename/preview', {
+          method: 'POST',
+          body: {}
+        });
+        if (Array.isArray(res)) {
+          this.libraryState.batchRename.items = res.map(it => ({ ...it, selected: it.needs_rename }));
+        }
+      } catch (err) {
+        this.showToast(err.message || 'Error previewing rename', 'error');
+      } finally {
+        this.libraryState.batchRename.isLoading = false;
+      }
+    },
+
+    async applyBatchRename() {
+      const selected = this.libraryState.batchRename.items.filter(it => it.selected);
+      if (!selected.length) {
+        this.showToast('No files selected to rename', 'warning');
+        return;
+      }
+      this.libraryState.batchRename.isApplying = true;
+      try {
+        const fileIds = selected.map(it => it.file_id);
+        const res = await this.apiRequest('/api/library/rename/apply', {
+          method: 'POST',
+          body: { file_ids: fileIds }
+        });
+        if (res) {
+          this.showToast(`Renamed ${res.renamed_count || 0} file(s)`, 'success');
+          this.closeBatchRename();
+          this.loadLibrary();
+        }
+      } catch (err) {
+        this.showToast(err.message || 'Failed to apply rename', 'error');
+      } finally {
+        this.libraryState.batchRename.isApplying = false;
       }
     }
   }));

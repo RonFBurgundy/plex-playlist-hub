@@ -45,11 +45,10 @@ TrackSeerr allows Plex Home users to discover new music, listen to previews, sub
 +-----------------------------------------------------------------------+
 |                            Backend Layer                              |
 |                                                                       |
-|  Option A: Lidarr Adapter           Option B: Native Drivers          |
-|  - Paced Trickle Worker             - slskd (Soulseek P2P Single/EP)  |
-|  - Targeted Album Searches          - SABnzbd (Usenet via Newznab)    |
-|  - Automated Webhook Loop           - qBittorrent (Torrents / Torznab)|
-|                                     - Real-Time Activity Queue        |
+|  Option A: Lidarr Mode              Option B: Native Library Mode     |
+|  - Paced Trickle Worker             - 3-Tier Catalog & Monitoring     |
+|  - Targeted Album Searches          - slskd, SABnzbd, qBittorrent     |
+|  - Automated Webhook Loop           - Scanner, Importer & Renamer     |
 +-----------------------------------------------------------------------+
                                     |
                                     v
@@ -72,17 +71,31 @@ TrackSeerr allows Plex Home users to discover new music, listen to previews, sub
 - **Personal & Household Playlists**: Sync public playlists, user playlists, or import Liked Songs using the 1-click browser bookmarklet. Target playlists to individual users, groups, or the whole household.
 
 ### Backend: Autonomous Acquisition & Media Management
-TrackSeerr gives administrators the choice between two acquisition workflows:
+TrackSeerr gives administrators the choice between two acquisition and library management workflows via the **Operational Mode Switch** (`LIBRARY_MODE=native|lidarr`):
 
-1. **Native Autonomous Acquisition**: Operate TrackSeerr as a standalone Arr-style downloader coordinator without running Lidarr:
-   - **Download Drivers**: Native connections to slskd (Soulseek P2P for surgical single/EP matching), SABnzbd (Usenet via Newznab), and qBittorrent (BitTorrent via Torznab).
-   - **15-Minute RSS Sync**: Automatically polls indexer RSS feeds to snatch new releases the moment they are uploaded.
-   - **Wanted Backlog Sweeps**: Unfulfilled requests and missing tracks are re-checked automatically until a matching release appears.
-   - **Archive Extraction**: Automatically unpacks `.zip`, `.tar.gz`, and multi-part archives in download staging.
-   - **Quality Upgrades**: If music was grabbed in lower quality (e.g. MP3 320), TrackSeerr keeps looking for FLAC releases and upgrades your library files automatically when found.
-   - **Queue Cleanup**: Automatically removes finished downloads from client queues after import without touching your media files.
-   - **Media Management**: Inspect tags with Mutagen, format destination folders using customizable token templates (e.g. `{Artist Name}/{Album Title} ({Release Year})/{track:00} - {Track Title}`), handle collisions safely, and notify Plex when imports finish.
-2. **Lidarr Integration**: Connect to an existing Lidarr server. TrackSeerr groups missing tracks by artist and feeds Lidarr through a rate-limited background trickle worker, avoiding full discography downloads and protecting MusicBrainz from API rate limits.
+- **`native` (Default)**: Standalone Arr-grade library coordinator managing full cataloging, monitoring, disk scanning, manual importing, batch renaming, and autonomous acquisition.
+- **`lidarr`**: Overseerr-style gateway mode delegating file handling and download orchestration to Lidarr with zero split-brain collisions.
+
+#### 1. Native Library Management & Catalog Engine
+When running in `native` mode, TrackSeerr acts as a complete music library system:
+- **Three-Tier Catalog Schema**: Backed by persistent SQLite tables (`library_artists`, `library_albums`, `library_tracks`, `library_files`) with granular monitoring toggles at artist, album, or individual track levels, supporting cascading monitoring inheritance.
+- **Recursive Filesystem Scanner**: Non-destructive scanner for `/music` that extracts Mutagen audio stream metrics (codecs, bit depth, sample rates, bitrates) and tags, reconciles files against catalog entries, evaluates Quality Profile cutoffs, prunes missing files on demand, and triggers Plex library refreshes.
+- **Interactive Manual Import Queue**: Staging directory scanner with fuzzy candidate matching, confidence ratings (0–100%), standardized audio tag writing, and configurable import modes (`move`, `hardlink`, `copy`).
+- **Token Template Batch Renamer**: Scans existing library paths against your active Arr naming template, previews side-by-side path diffs, and executes atomic cross-mount renames.
+- **1-Click Lidarr API Migration**: Background migration job pulling an existing Lidarr instance's artists, albums, tracks, track files, and MusicBrainz IDs (`MBIDs`) via REST API, automatically transitioning the instance into `native` mode upon completion.
+
+#### 2. Native Autonomous Acquisition
+Operate TrackSeerr as an independent downloader coordinator without running Lidarr:
+- **Download Drivers**: Native connections to slskd (Soulseek P2P for surgical single/EP matching), SABnzbd (Usenet via Newznab), and qBittorrent (BitTorrent via Torznab).
+- **15-Minute RSS Sync**: Automatically polls indexer RSS feeds to snatch new releases the moment they are uploaded.
+- **Wanted Backlog Sweeps**: Unfulfilled requests and missing tracks are re-checked automatically until a matching release appears.
+- **Archive Extraction**: Automatically unpacks `.zip`, `.tar.gz`, and multi-part archives in download staging.
+- **Quality Upgrades**: If music was grabbed in lower quality (e.g. MP3 320), TrackSeerr keeps looking for FLAC releases and upgrades your library files automatically when found.
+- **Queue Cleanup**: Automatically removes finished downloads from client queues after import without touching your media files.
+- **Media Management**: Inspect tags with Mutagen, format destination folders using customizable token templates (e.g. `{Artist Name}/{Album Title} ({Release Year})/{track:00} - {Track Title}`), handle collisions safely, and notify Plex when imports finish.
+
+#### 3. Lidarr Integration Mode
+Connect to an existing Lidarr server. TrackSeerr groups missing tracks by artist and feeds Lidarr through a rate-limited background trickle worker, avoiding full discography downloads and protecting MusicBrainz from API rate limits. All file movement and organization is delegated to Lidarr.
 
 ---
 
@@ -227,6 +240,7 @@ networks:
 |---|---|---|
 | `ROLE` | `all-in-one` | Container execution mode: `all-in-one`, `gateway`, or `core` |
 | `TRACKSEERR_CORE_URL` | *None* | Core endpoint URL required when running in `gateway` mode |
+| `LIBRARY_MODE` | `native` | Operational mode: `native` for full TrackSeerr catalog & library management, or `lidarr` for external Lidarr delegation |
 | `PORT` | `5250` | Port for the web service |
 | `HOST` | `0.0.0.0` | Host binding interface |
 | `PUID` / `PGID` | `1000` / `1000` | User and group ID for filesystem operations (`99`/`100` on Unraid) |

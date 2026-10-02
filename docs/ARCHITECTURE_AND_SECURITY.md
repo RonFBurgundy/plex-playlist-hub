@@ -200,6 +200,58 @@ networks:
     internal: true
 ```
 
+### Two-Tier Gateway Library Availability Boundary
+
+In the hardened two-tier architecture, the Gateway container (`ROLE=gateway`) is deliberately isolated from the host filesystem, storing zero media and possessing zero volume mounts. It communicates with the Core engine (`ROLE=core`) solely across an internal Docker bridge network (`internal-net`).
+
+```
+[ Public Users / Plex Home ]
+              |
+              v
++-----------------------------+
+|     trackseerr-gateway      |  <-- Tier 1: Public Exposure
+|  - Zero Media Mounts        |
+|  - Sanitized Availability   |      Exposes: in_library, monitored, status, quality
+|  - Zero Disk Coordinates    |      Hides:   /music, /downloads, host paths, tokens
++-----------------------------+
+              |
+              | (Internal API Query: GET /api/library/availability)
+              v
++-----------------------------+
+|      trackseerr-core        |  <-- Tier 2: Internal Isolated Engine
+|  - Mounts /music & /downloads|
+|  - SQLite Catalog Authority |      Manages: library_artists, library_albums,
+|  - Mutagen Tagging Engine   |               library_tracks, library_files
+|  - Atomic Moving & Renamer  |
++-----------------------------+
+              |
+              +---> [ /music Storage Mount ]
+              +---> [ /downloads Scratch Mount ]
+```
+
+#### Sanitized Availability Contract
+To prevent information leakage to unprivileged users, external observers, or compromised reverse proxies, the Gateway library availability layer (`plex_playlist_sync.library_availability`) sanitizes all media inspection queries. Public discovery, artist discographies, album tracklists, and request views expose only high-level status descriptors:
+
+- `in_library` (*boolean*): Indicates whether the artist, album, or track exists in the TrackSeerr catalog.
+- `monitored` (*boolean*): Indicates whether the item is marked for automated acquisition or quality upgrades.
+- `status` (*string*): Normalized availability indicator:
+  - `available`: File exists on disk and meets or exceeds the active Quality Profile cutoff.
+  - `cutoff_unmet`: File exists on disk but is below the target quality cutoff (eligible for automatic upgrade).
+  - `missing`: Catalog entry exists but no corresponding physical file is present.
+  - `partial`: For albums/artists, indicates some tracks are present while others are missing.
+  - `none`: Not present in the library catalog.
+- `quality` (*string | null*): Clean quality label (e.g. `FLAC 24bit`, `FLAC 16bit`, `MP3 320`) without encoding tool metadata or absolute paths.
+- `file_count` / `track_count` (*integer*): Numeric progress totals for UI status bars.
+
+**Strict Boundary Rule**: Under no circumstances does Tier 1 expose physical storage coordinates, volume paths (e.g. `/music/Daft Punk/Discovery/01.flac`), file sizes in bytes, inode data, or downloader hash identifiers.
+
+#### Core Engine Responsibility Boundary
+Tier 2 (`trackseerr-core`) holds exclusive operational ownership of:
+1. **Physical Storage Mounts**: Access to `/music` (target library) and `/downloads` (staging).
+2. **Mutagen Pipeline**: Audio container parsing, bit depth/sample rate calculations, and ID3v2/Vorbis tag manipulation.
+3. **Catalog Authority**: Direct write access to SQLite tables (`library_artists`, `library_albums`, `library_tracks`, `library_files`).
+4. **File Mutation Operations**: Directory scanning, manual import moves/copies/hardlinks, and batch file renaming.
+
 ---
 
 ## Media Management and File Organization Pipeline
@@ -347,13 +399,41 @@ TrackSeerr strictly validates all outbound network targets:
   - While private RFC 1918 addresses are permitted for local services (e.g. connecting to slskd or SABnzbd on your LAN), cloud metadata endpoints are strictly blocked (`169.254.169.254`, `metadata.google.internal`, `instance-data`).
   - Dangerous URL schemes (`file://`, `ftp://`, `gopher://`) and credentials embedded in authority blocks are rejected.
 
-### 2. Path Traversal Containment & Archive Sandbox
+### 2. Path Traversal Containment & Directory Safeguards
 
-All file export, playlist save, and library file operations pass through `safe_data_path`:
-- Resolves relative path segments (`../`) and normalizes paths.
-- Asserts that the final destination path resides strictly within the designated target directory (`/data`, `/music`, or `/downloads`).
-- Any attempt to escape the designated base directory raises a `ValueError` and terminates the request immediately.
-- **Archive Extraction Sandbox**: When releases are unpacked from `.zip` or `.tar` archives, all member paths are checked against directory escape before extraction. Tarfiles use Python 3.12's `filter='data'` to safely reject links or absolute paths that could escape download staging.
+TrackSeerr enforces multiple defensive layers to ensure filesystem operations cannot escape designated storage boundaries:
+
+#### General Data Sandbox (`safe_data_path`)
+All file export and playlist save operations resolve relative path segments (`../`), normalize paths, and assert that the target resides strictly within `/data`, `/music`, or `/downloads`. Any attempt to escape raises a `ValueError` and terminates the request.
+
+#### Archive Extraction Sandbox
+When releases are unpacked from `.zip` or `.tar` archives in `/downloads`, member paths are inspected against directory escape before extraction. Tarfiles use Python 3.12's `filter='data'` to safely reject symlinks, hardlinks, or absolute paths targeting locations outside the extraction staging folder.
+
+#### Media Management Path Traversal Defense (`validate_media_path`)
+All interactive filesystem endpoints—including folder scanning, manual importing, and batch renaming—route through `validate_media_path(path_str, db)`:
+1. **Type & Null Sanitization**: Rejects empty strings, null bytes, and non-string inputs with HTTP 400 Bad Request.
+2. **Traversal Sequence Rejection**: Inspects path components for `..` segments; any occurrence immediately raises HTTP 400 (`"Path traversal attempt detected"`).
+3. **Base Directory Verification**: Resolves the path to its canonical representation using `Path.resolve()` and asserts that it resides strictly within an approved set of base mounts:
+   - `/music` (configured media library root)
+   - `/downloads` (downloader staging directory)
+   - `/data` (application database and state)
+   - `/config` (configuration files)
+   - `/tmp` (sandboxed system scratch space)
+   - Current working directory and configured `root_folder_path` or `staging_folder_path` in media management settings.
+4. **Forbidden Boundary Enforcement**: If a resolved path falls outside all approved base mounts, TrackSeerr raises HTTP 403 Forbidden (`"Access denied: path is outside approved media mounts"`).
+
+#### Endpoint Safeguards on `/manual-import/scan`
+When an administrator inputs a path for folder scanning:
+- The requested `folder_path` is passed through `validate_media_path`.
+- Attempts to probe sensitive host directories (e.g. `/etc`, `/proc`, `/root`, `/var/run`) are rejected with HTTP 403 Forbidden before any directory walk occurs.
+- Only audio files matching recognized extensions (`.flac`, `.mp3`, `.m4a`, `.aac`, `.opus`, `.ogg`, `.wav`) within the approved directory are inspected.
+
+#### Endpoint Safeguards on `/rename/apply`
+When applying batch renames across the library:
+- **Database Identity Verification**: Files to be renamed are selected by primary key IDs from the `library_files` table; arbitrary client-supplied paths are rejected.
+- **Source Path Validation**: The existing physical path registered in `library_files` is re-validated through `validate_media_path` and verified to exist on disk before any operation begins.
+- **Strict Destination Anchoring**: Target destination paths are generated by the token engine (`build_track_path`) anchored strictly within the configured library `root_folder_path` (default: `/music`). The resulting path is tested against traversal escape before writing.
+- **Collision & Atomic Relocation**: If the target filename exists, `resolve_collision` appends a unique numeric counter (`Title (1).flac`). Cross-device safe atomic moves write to a hidden temporary file before atomic replacement, preventing corruption or incomplete file scans by Plex.
 
 ### 3. Outbound Notification Dispatch Isolation
 
