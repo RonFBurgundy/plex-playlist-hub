@@ -8,6 +8,12 @@
 
 ---
 
+> [!WARNING]
+> **Work in Progress: Active Development**
+> TrackSeerr is currently under active development. Core features, API schemas, and deployment topologies are undergoing rapid implementation and refinement. Please stand by for upcoming tagged releases and milestone announcements before relying on this software in production homelab environments.
+
+---
+
 ## Overview
 
 **TrackSeerr** is a self-hosted music discovery, request, and library management suite for **Plex Media Server**, **Plexamp**, and homelab music pipelines. It combines an **Overseerr-style frontend** for family discovery and request management with an **Arr-style media management and acquisition backend**.
