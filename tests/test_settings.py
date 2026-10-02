@@ -266,6 +266,25 @@ class TestMediaManagementAPI:
         assert db_settings["staging_folder_path"] == "/data/downloads/completed"
         assert db_settings["import_mode"] == "hardlink"
 
+    def test_update_media_management_library_mode(self, app_and_client, test_db, test_config, seeded_users):
+        _, client = app_and_client
+        admin_headers = _auth_headers(seeded_users["admin"], test_db, test_config)
+
+        # 1. Default should be 'native'
+        resp = client.get("/api/settings/media-management", headers=admin_headers)
+        assert resp.status_code == 200
+        assert resp.json()["settings"]["library_mode"] == "native"
+
+        # 2. Update to 'lidarr'
+        payload = {"library_mode": "lidarr"}
+        resp_up = client.post("/api/settings/media-management", json=payload, headers=admin_headers)
+        assert resp_up.status_code == 200
+        assert resp_up.json()["library_mode"] == "lidarr"
+
+        # 3. Verify DB persisted
+        db_settings = test_db.get_media_management_settings()
+        assert db_settings["library_mode"] == "lidarr"
+
 
 class TestLidarrSettingsAPI:
     """Validates Lidarr settings API endpoints, auth checks, secret masking, and test connection."""

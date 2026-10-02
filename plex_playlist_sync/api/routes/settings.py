@@ -102,6 +102,7 @@ class MediaManagementSettingsModel(BaseModel):
     save_cover_art_file: bool = Field(True, description="Whether to save cover.jpg in album directory")
     delete_completed_transfers: bool = Field(False, description="Whether to delete completed transfers from client")
     enable_quality_upgrades: bool = Field(True, description="Whether to monitor for quality cutoff upgrades")
+    library_mode: str = Field("native", description="Library management mode: native or lidarr")
     updated_at: str | None = None
 
 
@@ -121,6 +122,7 @@ class MediaManagementUpdateModel(BaseModel):
     save_cover_art_file: bool | None = None
     delete_completed_transfers: bool | None = None
     enable_quality_upgrades: bool | None = None
+    library_mode: str | None = None
 
 
 class PreviewRequestModel(BaseModel):
@@ -136,6 +138,7 @@ class PreviewRequestModel(BaseModel):
     import_mode: str | None = None
     delete_completed_transfers: bool | None = None
     enable_quality_upgrades: bool | None = None
+    library_mode: str | None = None
 
 
 class PreviewItemModel(BaseModel):

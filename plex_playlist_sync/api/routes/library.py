@@ -277,14 +277,15 @@ def delete_artist(
 def list_albums(
     artist_id: Optional[str] = None,
     monitored_only: bool = False,
+    query: Optional[str] = None,
     limit: int = Query(100, ge=1, le=1000),
     offset: int = Query(0, ge=0),
     db: Database = Depends(get_db),
     _user: dict[str, Any] = Depends(require_user),
 ) -> list[dict[str, Any]]:
-    """Lists library albums with optional artist filtering and pagination, attaching artist name and track count."""
+    """Lists library albums with optional artist filtering, search query, and pagination, attaching artist name and track count."""
     albums = db.list_library_albums(
-        artist_id=artist_id, monitored_only=monitored_only, limit=limit, offset=offset
+        artist_id=artist_id, monitored_only=monitored_only, query=query, limit=limit, offset=offset
     )
     if not albums:
         return []
@@ -385,6 +386,7 @@ def list_tracks(
     album_id: Optional[str] = None,
     artist_id: Optional[str] = None,
     monitored_only: bool = False,
+    query: Optional[str] = None,
     limit: int = Query(200, ge=1, le=1000),
     offset: int = Query(0, ge=0),
     db: Database = Depends(get_db),
@@ -395,10 +397,31 @@ def list_tracks(
         album_id=album_id,
         artist_id=artist_id,
         monitored_only=monitored_only,
+        query=query,
         limit=limit,
         offset=offset,
     )
+    artist_cache: dict[str, str] = {}
+    album_cache: dict[str, str] = {}
     for t in tracks:
+        art_id = t.get("artist_id")
+        if art_id:
+            if art_id not in artist_cache:
+                art = db.get_library_artist(art_id)
+                artist_cache[art_id] = art["name"] if art else "Unknown Artist"
+            t["artist_name"] = artist_cache[art_id]
+        else:
+            t["artist_name"] = "Unknown Artist"
+
+        alb_id = t.get("album_id")
+        if alb_id:
+            if alb_id not in album_cache:
+                alb = db.get_library_album(alb_id)
+                album_cache[alb_id] = alb["title"] if alb else "Unknown Album"
+            t["album_title"] = album_cache[alb_id]
+        else:
+            t["album_title"] = "Unknown Album"
+
         t["file"] = db.get_library_file_for_track(t["id"])
     return tracks
 

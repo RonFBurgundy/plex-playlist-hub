@@ -2864,6 +2864,7 @@ class Database:
         self,
         artist_id: Optional[str] = None,
         monitored_only: bool = False,
+        query: Optional[str] = None,
         limit: int = 100,
         offset: int = 0,
     ) -> list[dict[str, Any]]:
@@ -2875,6 +2876,10 @@ class Database:
             params.append(str(artist_id))
         if monitored_only:
             sql += " AND monitored = 1"
+        if query:
+            clean_q = clean_library_name(query)
+            sql += " AND (clean_title LIKE ? OR title LIKE ?)"
+            params.extend([f"%{clean_q}%", f"%{query}%"])
         sql += " ORDER BY year DESC, title COLLATE NOCASE ASC LIMIT ? OFFSET ?"
         params.extend([int(limit), int(offset)])
 
@@ -3004,6 +3009,7 @@ class Database:
         album_id: Optional[str] = None,
         artist_id: Optional[str] = None,
         monitored_only: bool = False,
+        query: Optional[str] = None,
         limit: int = 200,
         offset: int = 0,
     ) -> list[dict[str, Any]]:
@@ -3018,6 +3024,10 @@ class Database:
             params.append(str(artist_id))
         if monitored_only:
             sql += " AND monitored = 1"
+        if query:
+            clean_q = clean_library_name(query)
+            sql += " AND (clean_title LIKE ? OR title LIKE ?)"
+            params.extend([f"%{clean_q}%", f"%{query}%"])
         sql += " ORDER BY disc_number ASC, track_number ASC LIMIT ? OFFSET ?"
         params.extend([int(limit), int(offset)])
 
