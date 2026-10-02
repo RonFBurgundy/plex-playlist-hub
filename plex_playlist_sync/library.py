@@ -5,7 +5,10 @@ Extracts tags, stream metrics, and codecs via Mutagen with cross-platform collis
 
 import base64
 import logging
+import os
 import re
+import tarfile
+import zipfile
 from pathlib import Path
 from typing import Any
 
@@ -20,6 +23,21 @@ from mutagen.oggvorbis import OggVorbis
 from plex_playlist_sync.naming import format_quality
 
 logger = logging.getLogger(__name__)
+
+AUDIO_EXTENSIONS = {".flac", ".mp3", ".m4a", ".aac", ".ogg", ".opus", ".wav", ".aiff"}
+ARCHIVE_EXTENSIONS = {".zip", ".tar", ".tar.gz", ".tgz", ".tar.bz2"}
+
+
+def is_archive_file(path: Path | str) -> bool:
+    """Checks if a file has a supported archive extension."""
+    name = Path(path).name.lower()
+    return (
+        name.endswith(".zip")
+        or name.endswith(".tar")
+        or name.endswith(".tar.gz")
+        or name.endswith(".tgz")
+        or name.endswith(".tar.bz2")
+    )
 
 
 def _parse_int(val: Any) -> int | None:
@@ -462,4 +480,58 @@ def embed_album_artwork(file_path: str | Path, image_data: bytes) -> bool:
         logger.warning("Cannot embed empty image data into %s", file_path)
         return False
     return write_audio_tags(file_path=file_path, tags={}, cover_art_bytes=image_data)
+
+
+def extract_archive(archive_path: Path | str, target_dir: Path | str) -> list[Path]:
+    """Extracts an archive (.zip, .tar, .tar.gz, .tgz, .tar.bz2) safely into target_dir.
+
+    Validates that target_dir exists and protects against path traversal attacks.
+    Returns a sorted list of discovered audio files matching AUDIO_EXTENSIONS.
+    """
+    archive = Path(archive_path).resolve()
+    if not archive.is_file():
+        raise FileNotFoundError(f"Archive file not found: {archive}")
+
+    target = Path(target_dir).resolve()
+    if not target.exists():
+        raise FileNotFoundError(f"Target directory does not exist: {target}")
+    if not target.is_dir():
+        raise NotADirectoryError(f"Target path is not a directory: {target}")
+
+    name = archive.name.lower()
+    if name.endswith(".zip"):
+        with zipfile.ZipFile(archive, "r") as zf:
+            for member in zf.infolist():
+                norm_name = member.filename.replace("\\", "/")
+                member_target = (target / norm_name).resolve()
+                if not member_target.is_relative_to(target):
+                    raise ValueError(f"Path traversal detected in zip archive: {member.filename}")
+            zf.extractall(target)
+    elif (
+        name.endswith(".tar.gz")
+        or name.endswith(".tgz")
+        or name.endswith(".tar.bz2")
+        or name.endswith(".tar")
+    ):
+        with tarfile.open(archive, "r:*") as tf:
+            for member in tf.getmembers():
+                norm_name = member.name.replace("\\", "/")
+                member_target = (target / norm_name).resolve()
+                if not member_target.is_relative_to(target):
+                    raise ValueError(f"Path traversal detected in tar archive: {member.name}")
+            try:
+                tf.extractall(target, filter="data")
+            except (tarfile.FilterError, tarfile.TarError) as e:
+                raise ValueError(f"Unsafe tar archive extraction failed: {e}") from e
+    else:
+        raise ValueError(f"Unsupported archive format: {archive.name}")
+
+    extracted_audio: list[Path] = []
+    for root, _, files in os.walk(str(target)):
+        for f in files:
+            f_path = Path(root) / f
+            if f_path.suffix.lower() in AUDIO_EXTENSIONS:
+                extracted_audio.append(f_path)
+
+    return sorted(extracted_audio)
 

@@ -206,6 +206,7 @@ class AcquisitionCoordinator:
         request_id: Optional[str] = None,
         db: Optional[Database] = None,
         quality_profile_id: Optional[str] = None,
+        min_score: Optional[int] = None,
     ) -> dict[str, Any]:
         """Searches indexers, ranks releases against the Quality Profile, and dispatches grab.
 
@@ -239,10 +240,16 @@ class AcquisitionCoordinator:
 
         # 3. Evaluate and rank
         ranked = self.evaluate_and_rank(candidates=candidates, profile=profile)
+        if min_score is not None:
+            ranked = [item for item in ranked if item[1].score > min_score]
         if not ranked:
             return {
                 "success": False,
-                "message": "No acceptable releases found meeting quality profile criteria",
+                "message": (
+                    "No acceptable releases found meeting quality profile criteria"
+                    if min_score is None
+                    else f"No candidate release score exceeds current score {min_score}"
+                ),
                 "candidates_count": len(candidates),
             }
 

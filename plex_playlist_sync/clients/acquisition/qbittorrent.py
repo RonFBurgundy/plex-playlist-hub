@@ -218,3 +218,30 @@ class QbittorrentDriver(AcquisitionDriver):
         except Exception as e:
             logger.error("Failed to delete qBittorrent torrent %s: %s", download_id, e)
             return False
+
+    def cleanup_completed(self, download_id: str, delete_files: bool = False) -> bool:
+        """Removes completed torrent from qBittorrent with optional file deletion."""
+        if not is_safe_service_url(self.host_url):
+            return False
+
+        del_url = f"{self.host_url}/api/v2/torrents/delete"
+        payload = {"hashes": download_id.lower(), "deleteFiles": str(delete_files).lower()}
+        try:
+            with httpx.Client(timeout=self.timeout) as client:
+                if self._cookie:
+                    client.headers["Cookie"] = self._cookie
+                else:
+                    self._login(client)
+                    if self._cookie:
+                        client.headers["Cookie"] = self._cookie
+
+                resp = client.post(del_url, data=payload)
+                if resp.status_code == 403:
+                    self._login(client)
+                    if self._cookie:
+                        client.headers["Cookie"] = self._cookie
+                    resp = client.post(del_url, data=payload)
+                return resp.status_code == 200
+        except Exception as e:
+            logger.error("Failed to cleanup completed qBittorrent torrent %s: %s", download_id, e)
+            return False

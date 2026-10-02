@@ -18,23 +18,26 @@ from typing import Any, Optional
 
 import httpx
 
+from plex_playlist_sync.acquisition_coordinator import _to_quality_profile
 from plex_playlist_sync.clients.acquisition import get_acquisition_driver
 from plex_playlist_sync.clients.plex import PlexClient
 from plex_playlist_sync.library import (
+    AUDIO_EXTENSIONS,
     embed_album_artwork,
+    extract_archive,
     inspect_audio_file,
+    is_archive_file,
     resolve_collision,
     write_audio_tags,
 )
 from plex_playlist_sync.models import DownloadStatus, NotificationEvent, RequestStatus
 from plex_playlist_sync.naming import build_track_path
 from plex_playlist_sync.notifications import notification_dispatcher
+from plex_playlist_sync.quality import evaluate_release, parse_release_title
 from plex_playlist_sync.security import is_safe_service_url
 from plex_playlist_sync.storage import Database
 
 logger = logging.getLogger(__name__)
-
-AUDIO_EXTENSIONS = {".flac", ".mp3", ".m4a", ".aac", ".ogg", ".opus", ".wav", ".aiff"}
 
 
 def _is_safe_cover_url(url: Optional[str]) -> bool:
@@ -240,7 +243,11 @@ class AcquisitionWorker:
             self._is_running = False
 
     def _find_audio_files(self, candidate_path: Optional[str | Path], search_term: str) -> list[Path]:
-        """Locates downloaded audio files from source path or staging directory."""
+        """Locates downloaded audio files from source path or staging directory.
+
+        Automatically extracts archives (.zip, .tar, etc.) encountered in candidate_path
+        or staging into a temporary subfolder in staging and discovers extracted audio files.
+        """
         found: list[Path] = []
         staging_path = Path(self.staging_dir).resolve()
 
@@ -249,26 +256,64 @@ class AcquisitionWorker:
             if not src_path.is_relative_to(staging_path):
                 logger.warning("Rejecting source path outside staging directory: %s", candidate_path)
             else:
-                if src_path.is_file() and src_path.suffix.lower() in AUDIO_EXTENSIONS:
-                    return [src_path]
+                if src_path.is_file():
+                    if src_path.suffix.lower() in AUDIO_EXTENSIONS:
+                        return [src_path]
+                    elif is_archive_file(src_path):
+                        extract_dir = staging_path / f"_extracted_{src_path.stem}_{os.getpid()}_{time.time_ns()}"
+                        extract_dir.mkdir(parents=True, exist_ok=True)
+                        try:
+                            extracted = extract_archive(src_path, extract_dir)
+                            if extracted:
+                                return sorted(extracted)
+                        except Exception as e:
+                            logger.warning("Failed to extract candidate archive %s: %s", src_path, e)
                 elif src_path.is_dir():
+                    archives_in_src: list[Path] = []
                     for root, _, files in os.walk(str(src_path)):
                         for f in files:
                             f_path = (Path(root) / f).resolve()
-                            if f_path.is_relative_to(staging_path) and f_path.suffix.lower() in AUDIO_EXTENSIONS:
-                                found.append(f_path)
+                            if f_path.is_relative_to(staging_path):
+                                if f_path.suffix.lower() in AUDIO_EXTENSIONS:
+                                    found.append(f_path)
+                                elif is_archive_file(f_path):
+                                    archives_in_src.append(f_path)
+                    if found:
+                        return sorted(found)
+                    for arc_path in archives_in_src:
+                        extract_dir = staging_path / f"_extracted_{arc_path.stem}_{os.getpid()}_{time.time_ns()}"
+                        extract_dir.mkdir(parents=True, exist_ok=True)
+                        try:
+                            extracted = extract_archive(arc_path, extract_dir)
+                            found.extend(extracted)
+                        except Exception as e:
+                            logger.warning("Failed to extract archive %s in candidate dir: %s", arc_path, e)
                     if found:
                         return sorted(found)
 
         # Fallback: scan staging directory for files matching search term
         if staging_path.exists():
             clean_term = search_term.lower()
+            staging_archives: list[Path] = []
             for root, _, files in os.walk(str(staging_path)):
                 for f in files:
                     f_path = (Path(root) / f).resolve()
-                    if f_path.is_relative_to(staging_path) and f_path.suffix.lower() in AUDIO_EXTENSIONS:
+                    if f_path.is_relative_to(staging_path):
                         if clean_term in f.lower() or clean_term in root.lower():
-                            found.append(f_path)
+                            if f_path.suffix.lower() in AUDIO_EXTENSIONS:
+                                found.append(f_path)
+                            elif is_archive_file(f_path):
+                                staging_archives.append(f_path)
+
+            if not found and staging_archives:
+                for arc_path in staging_archives:
+                    extract_dir = staging_path / f"_extracted_{arc_path.stem}_{os.getpid()}_{time.time_ns()}"
+                    extract_dir.mkdir(parents=True, exist_ok=True)
+                    try:
+                        extracted = extract_archive(arc_path, extract_dir)
+                        found.extend(extracted)
+                    except Exception as e:
+                        logger.warning("Failed to extract fallback archive %s: %s", arc_path, e)
 
         return sorted(found)
 
@@ -471,6 +516,7 @@ class AcquisitionWorker:
                     elif cover_url:
                         logger.warning("Cover art URL rejected by SSRF protection: %s", cover_url)
 
+                last_metadata: dict[str, Any] = {}
                 for af in audio_files:
                     try:
                         metadata = inspect_audio_file(af)
@@ -492,6 +538,7 @@ class AcquisitionWorker:
                         metadata["artist"] = item.get("artist") or "Unknown Artist"
                     if not metadata.get("title"):
                         metadata["title"] = item.get("title") or af.stem
+                    last_metadata = metadata
 
                     target_str = build_track_path(metadata, media_settings)
                     final_target = resolve_collision(target_str)
@@ -558,6 +605,47 @@ class AcquisitionWorker:
                 )
                 if item.get("request_id"):
                     db.update_request_status(item["request_id"], RequestStatus.AVAILABLE.value)
+                    try:
+                        parsed = parse_release_title(item.get("title") or "")
+                        if parsed.quality == "Unknown" and last_metadata:
+                            codec = str(last_metadata.get("codec", "")).upper()
+                            if codec == "FLAC":
+                                parsed.quality = "FLAC 24bit" if (last_metadata.get("bits_per_sample") or 16) > 16 else "FLAC 16bit"
+                            elif codec == "MP3":
+                                br = last_metadata.get("bitrate") or 320
+                                parsed.quality = "MP3 320" if br >= 310 or br >= 300000 else "MP3 192"
+                            elif codec in ("AAC", "M4A"):
+                                parsed.quality = "AAC 256"
+
+                        profile_dict = None
+                        if req and req.get("quality_profile_id"):
+                            profile_dict = db.get_quality_profile(req["quality_profile_id"])
+                        if not profile_dict:
+                            profile_dict = db.get_default_quality_profile()
+
+                        if profile_dict:
+                            profile = _to_quality_profile(profile_dict)
+                            eval_res = evaluate_release(
+                                release=parsed,
+                                profile=profile,
+                                size_bytes=item.get("size_bytes"),
+                            )
+                            current_q = eval_res.parsed_quality
+                            cutoff_met_val = 1 if eval_res.meets_cutoff else 0
+                            db.update_request_quality(
+                                item["request_id"],
+                                current_quality=current_q,
+                                cutoff_met=cutoff_met_val,
+                            )
+                    except Exception as ex:
+                        logger.warning("Error evaluating release quality for request %s: %s", item.get("request_id"), ex)
+
+                if media_settings.get("delete_completed_transfers"):
+                    try:
+                        driver.cleanup_completed(target_lookup, delete_files=False)
+                    except Exception as ex:
+                        logger.warning("Error during cleanup_completed for %s: %s", target_lookup, ex)
+
                 stats["imported"] += 1
 
                 try:

@@ -149,6 +149,7 @@ class Database:
                 (11, self._migration_v11),
                 (12, self._migration_v12),
                 (13, self._migration_v13),
+                (14, self._migration_v14),
             ]
 
             for version, migration_fn in migrations:
@@ -612,6 +613,26 @@ class Database:
         )
         cur.execute(
             "CREATE INDEX IF NOT EXISTS idx_media_issues_user ON media_issues(user_id);"
+        )
+
+    def _migration_v14(self, cur: sqlite3.Cursor) -> None:
+        cur.execute(
+            "ALTER TABLE music_requests ADD COLUMN quality_profile_id TEXT REFERENCES quality_profiles(id);"
+        )
+        cur.execute(
+            "ALTER TABLE music_requests ADD COLUMN current_quality TEXT;"
+        )
+        cur.execute(
+            "ALTER TABLE music_requests ADD COLUMN cutoff_met INTEGER NOT NULL DEFAULT 1;"
+        )
+        cur.execute(
+            "ALTER TABLE media_management_settings ADD COLUMN delete_completed_transfers INTEGER NOT NULL DEFAULT 0;"
+        )
+        cur.execute(
+            "ALTER TABLE media_management_settings ADD COLUMN enable_quality_upgrades INTEGER NOT NULL DEFAULT 1;"
+        )
+        cur.execute(
+            "CREATE INDEX IF NOT EXISTS idx_music_requests_cutoff ON music_requests(status, cutoff_met);"
         )
 
     # -------------------------------------------------------------------------
@@ -1218,14 +1239,20 @@ class Database:
     def create_request(self, request: MusicRequest) -> dict[str, Any]:
         """Creates a new music request."""
         status_val = request.status.value if isinstance(request.status, RequestStatus) else str(request.status)
+        qp_id = getattr(request, "quality_profile_id", None)
+        curr_q = getattr(request, "current_quality", None)
+        cutoff_m = getattr(request, "cutoff_met", 1)
+        cutoff_val = 1 if (cutoff_m is None or cutoff_m) else 0
+
         with self._lock:
             self.conn.execute(
                 """
                 INSERT INTO music_requests (
                     id, user_id, item_type, title, artist, album,
                     cover_url, preview_url, status, release_date, foreign_id,
+                    quality_profile_id, current_quality, cutoff_met,
                     created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
                 """,
                 (
                     str(request.id),
@@ -1239,6 +1266,9 @@ class Database:
                     status_val,
                     request.release_date,
                     request.foreign_id,
+                    qp_id,
+                    curr_q,
+                    cutoff_val,
                 ),
             )
             self.conn.commit()
@@ -1254,6 +1284,7 @@ class Database:
                 """
                 SELECT r.id, r.user_id, r.item_type, r.title, r.artist, r.album,
                        r.cover_url, r.preview_url, r.status, r.release_date, r.foreign_id,
+                       r.quality_profile_id, r.current_quality, r.cutoff_met,
                        r.created_at, r.updated_at, u.username
                 FROM music_requests r
                 LEFT JOIN users u ON r.user_id = u.id
@@ -1271,6 +1302,7 @@ class Database:
         query = """
             SELECT r.id, r.user_id, r.item_type, r.title, r.artist, r.album,
                    r.cover_url, r.preview_url, r.status, r.release_date, r.foreign_id,
+                   r.quality_profile_id, r.current_quality, r.cutoff_met,
                    r.created_at, r.updated_at, u.username
             FROM music_requests r
             LEFT JOIN users u ON r.user_id = u.id
@@ -1290,6 +1322,38 @@ class Database:
         with self._lock:
             cur = self.conn.execute(query, params)
             return [dict(row) for row in cur.fetchall()]
+
+    def get_cutoff_unmet_requests(self) -> list[dict[str, Any]]:
+        """Returns requests where status = 'available' AND cutoff_met = 0."""
+        query = """
+            SELECT r.id, r.user_id, r.item_type, r.title, r.artist, r.album,
+                   r.cover_url, r.preview_url, r.status, r.release_date, r.foreign_id,
+                   r.quality_profile_id, r.current_quality, r.cutoff_met,
+                   r.created_at, r.updated_at, u.username
+            FROM music_requests r
+            LEFT JOIN users u ON r.user_id = u.id
+            WHERE r.status = 'available' AND r.cutoff_met = 0
+            ORDER BY r.created_at ASC
+        """
+        with self._lock:
+            cur = self.conn.execute(query)
+            return [dict(row) for row in cur.fetchall()]
+
+    def update_request_quality(
+        self, request_id: str, current_quality: Optional[str], cutoff_met: int = 1
+    ) -> bool:
+        """Updates the current quality and cutoff_met status of a request."""
+        with self._lock:
+            cur = self.conn.execute(
+                """
+                UPDATE music_requests
+                SET current_quality = ?, cutoff_met = ?, updated_at = CURRENT_TIMESTAMP
+                WHERE id = ?
+                """,
+                (current_quality, int(cutoff_met), str(request_id)),
+            )
+            self.conn.commit()
+            return cur.rowcount > 0
 
     def update_request_status(
         self, request_id: str, status: Union[RequestStatus, str]
@@ -1333,6 +1397,7 @@ class Database:
                 """
                 SELECT r.id, r.user_id, r.item_type, r.title, r.artist, r.album,
                        r.cover_url, r.preview_url, r.status, r.release_date, r.foreign_id,
+                       r.quality_profile_id, r.current_quality, r.cutoff_met,
                        r.created_at, r.updated_at, u.username
                 FROM music_requests r
                 LEFT JOIN users u ON r.user_id = u.id
@@ -1389,6 +1454,8 @@ class Database:
             res["save_cover_art_file"] = bool(res.get("save_cover_art_file", 1))
             res["staging_folder_path"] = str(res.get("staging_folder_path") or "/data/downloads")
             res["import_mode"] = str(res.get("import_mode") or "move")
+            res["delete_completed_transfers"] = bool(res.get("delete_completed_transfers", 0))
+            res["enable_quality_upgrades"] = bool(res.get("enable_quality_upgrades", 1))
             return res
 
     def update_media_management_settings(self, settings: dict[str, Any]) -> dict[str, Any]:
@@ -1407,11 +1474,20 @@ class Database:
             "write_audio_tags",
             "embed_artwork",
             "save_cover_art_file",
+            "delete_completed_transfers",
+            "enable_quality_upgrades",
         }
         updates: dict[str, Any] = {}
         for k, v in settings.items():
             if k in allowed_keys and v is not None:
-                if k in ("clean_artist_names", "write_audio_tags", "embed_artwork", "save_cover_art_file"):
+                if k in (
+                    "clean_artist_names",
+                    "write_audio_tags",
+                    "embed_artwork",
+                    "save_cover_art_file",
+                    "delete_completed_transfers",
+                    "enable_quality_upgrades",
+                ):
                     updates[k] = 1 if v else 0
                 else:
                     updates[k] = str(v)

@@ -207,3 +207,21 @@ class SabnzbdDriver(AcquisitionDriver):
         except Exception as e:
             logger.error("Failed to cancel SABnzbd download %s: %s", download_id, e)
             return False
+
+    def cleanup_completed(self, download_id: str, delete_files: bool = False) -> bool:
+        """Removes a completed download from SABnzbd history."""
+        if not is_safe_service_url(self.host_url):
+            return False
+
+        del_files_val = 1 if delete_files else 0
+        url = self._api_url("history", name="delete", val=download_id, del_files=del_files_val)
+        try:
+            with httpx.Client(timeout=self.timeout) as client:
+                resp = client.get(url)
+                if resp.status_code == 200:
+                    data = resp.json()
+                    return bool(data.get("status", True))
+                return False
+        except Exception as e:
+            logger.error("Failed to cleanup completed SABnzbd download %s: %s", download_id, e)
+            return False

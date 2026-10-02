@@ -215,6 +215,9 @@ class WantedBacklogWorker:
             requests = []
             errors_count += 1
 
+        media_settings = db.get_media_management_settings()
+        enable_upgrades = bool(media_settings.get("enable_quality_upgrades", True))
+
         unfulfilled_requests = [
             r
             for r in requests
@@ -226,6 +229,23 @@ class WantedBacklogWorker:
             )
             not in active_artist_titles
         ]
+
+        if enable_upgrades:
+            try:
+                cutoff_unmet = db.get_cutoff_unmet_requests()
+                for r in cutoff_unmet:
+                    if (
+                        r.get("id") not in active_req_ids
+                        and (
+                            (r.get("artist") or "").strip().lower(),
+                            (r.get("title") or "").strip().lower(),
+                        )
+                        not in active_artist_titles
+                    ):
+                        unfulfilled_requests.append(r)
+            except Exception as e:
+                logger.error("WantedBacklogWorker error querying cutoff unmet requests: %s", e)
+                errors_count += 1
 
         # 3. Query unfulfilled missing tracks: lidarr_status != 'monitored'
         try:
@@ -246,9 +266,24 @@ class WantedBacklogWorker:
             not in active_artist_titles
         ]
 
-        # Items to search: (artist, title, album, item_type, request_id, missing_track_id)
-        items_to_search: list[tuple[str, str, Optional[str], str, Optional[str], Optional[int]]] = []
+        # Items to search: (artist, title, album, item_type, request_id, missing_track_id, quality_profile_id, min_score)
+        items_to_search: list[tuple[str, str, Optional[str], str, Optional[str], Optional[int], Optional[str], Optional[int]]] = []
         for r in unfulfilled_requests:
+            is_upgrade = (r.get("status") == "available" or r.get("cutoff_met") == 0)
+            min_score = None
+            qp_id = r.get("quality_profile_id")
+            if is_upgrade:
+                profile_dict = db.get_quality_profile(qp_id) if qp_id else db.get_default_quality_profile()
+                if profile_dict:
+                    prof = _to_quality_profile(profile_dict)
+                    cur_q = r.get("current_quality")
+                    if cur_q:
+                        cur_p = parse_release_title(cur_q)
+                        if cur_p.quality == "Unknown":
+                            cur_p.quality = cur_q
+                        min_score = evaluate_release(cur_p, prof).score
+                    else:
+                        min_score = 0
             items_to_search.append(
                 (
                     r.get("artist", "").strip(),
@@ -257,6 +292,8 @@ class WantedBacklogWorker:
                     r.get("item_type", "track"),
                     r.get("id"),
                     None,
+                    qp_id,
+                    min_score,
                 )
             )
 
@@ -269,10 +306,12 @@ class WantedBacklogWorker:
                     "track",
                     None,
                     int(t["id"]),
+                    None,
+                    None,
                 )
             )
 
-        for artist, title, album, item_type, req_id, missing_id in items_to_search:
+        for artist, title, album, item_type, req_id, missing_id, qp_id, min_score in items_to_search:
             if self._stop_event.is_set():
                 logger.info("WantedBacklogWorker sweep interrupted by stop event")
                 break
@@ -289,6 +328,8 @@ class WantedBacklogWorker:
                     item_type=item_type,
                     request_id=req_id,
                     db=db,
+                    quality_profile_id=qp_id,
+                    min_score=min_score,
                 )
                 if res.get("success"):
                     items_grabbed += 1
@@ -438,12 +479,25 @@ class RSSSyncWorker:
             all_requests = []
             errors_count += 1
 
+        media_settings = db.get_media_management_settings()
+        enable_upgrades = bool(media_settings.get("enable_quality_upgrades", True))
+
         wanted_requests = [
             r
             for r in all_requests
             if r.get("status") in ("processing", "pending")
             and r.get("id") not in active_req_ids
         ]
+
+        if enable_upgrades:
+            try:
+                cutoff_unmet = db.get_cutoff_unmet_requests()
+                for r in cutoff_unmet:
+                    if r.get("id") not in active_req_ids and r not in wanted_requests:
+                        wanted_requests.append(r)
+            except Exception as e:
+                logger.error("RSSSyncWorker error querying cutoff unmet requests: %s", e)
+                errors_count += 1
 
         if not indexers or not wanted_requests:
             with self._lock:
@@ -501,11 +555,20 @@ class RSSSyncWorker:
 
                 # Evaluate candidate against quality profile
                 eval_res = None
-                if profile:
+                req_profile = profile
+                if matched_req.get("quality_profile_id"):
+                    try:
+                        p_dict = db.get_quality_profile(matched_req["quality_profile_id"])
+                        if p_dict:
+                            req_profile = _to_quality_profile(p_dict)
+                    except Exception as e:
+                        logger.warning("Error fetching quality profile for request %s: %s", matched_req["id"], e)
+
+                if req_profile:
                     parsed = parse_release_title(candidate.title)
                     eval_res = evaluate_release(
                         release=parsed,
-                        profile=profile,
+                        profile=req_profile,
                         size_bytes=candidate.size_bytes if candidate.size_bytes > 0 else None,
                     )
                     if not eval_res.is_acceptable:
@@ -516,6 +579,26 @@ class RSSSyncWorker:
                             eval_res.rejection_reasons,
                         )
                         continue
+
+                    # If this is a cutoff-unmet request, verify candidate.score > current_score
+                    if matched_req.get("cutoff_met") == 0 or matched_req.get("status") == "available":
+                        current_quality = matched_req.get("current_quality")
+                        current_score = 0
+                        if current_quality:
+                            cur_p = parse_release_title(current_quality)
+                            if cur_p.quality == "Unknown":
+                                cur_p.quality = current_quality
+                            current_score = evaluate_release(cur_p, req_profile).score
+
+                        if eval_res.score <= current_score:
+                            logger.debug(
+                                "RSS candidate '%s' score %d does not exceed current score %d for upgrade request %s",
+                                candidate.title,
+                                eval_res.score,
+                                current_score,
+                                matched_req["id"],
+                            )
+                            continue
 
                 # Find download client for protocol
                 client = acquisition_coordinator.find_client_for_protocol(

@@ -83,6 +83,9 @@ class MusicRequest:
     release_date: Optional[str] = None
     foreign_id: Optional[str] = None
     preview_url: Optional[str] = None
+    quality_profile_id: Optional[str] = None
+    current_quality: Optional[str] = None
+    cutoff_met: int = 1
     created_at: Optional[str] = None
     updated_at: Optional[str] = None
     username: Optional[str] = None  # Joined for display
@@ -100,6 +103,9 @@ class MusicRequest:
             "release_date": self.release_date,
             "foreign_id": self.foreign_id,
             "preview_url": self.preview_url,
+            "quality_profile_id": self.quality_profile_id,
+            "current_quality": self.current_quality,
+            "cutoff_met": self.cutoff_met,
             "created_at": self.created_at,
             "updated_at": self.updated_at,
             "username": self.username,

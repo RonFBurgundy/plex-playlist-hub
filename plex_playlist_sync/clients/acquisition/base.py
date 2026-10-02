@@ -78,3 +78,15 @@ class AcquisitionDriver(ABC):
             bool: True if successfully cancelled/removed, False otherwise.
         """
         raise NotImplementedError
+
+    def cleanup_completed(self, download_id: str, delete_files: bool = False) -> bool:
+        """Removes a completed download from the client.
+
+        Args:
+            download_id: Unique download ID or hash.
+            delete_files: If True, delete downloaded files. Default False.
+
+        Returns:
+            bool: True if successfully cleaned up, False otherwise.
+        """
+        return False

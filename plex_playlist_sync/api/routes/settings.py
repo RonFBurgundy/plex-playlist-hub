@@ -100,6 +100,8 @@ class MediaManagementSettingsModel(BaseModel):
     write_audio_tags: bool = Field(True, description="Whether to normalize audio tags on import")
     embed_artwork: bool = Field(True, description="Whether to embed cover artwork in audio files")
     save_cover_art_file: bool = Field(True, description="Whether to save cover.jpg in album directory")
+    delete_completed_transfers: bool = Field(False, description="Whether to delete completed transfers from client")
+    enable_quality_upgrades: bool = Field(True, description="Whether to monitor for quality cutoff upgrades")
     updated_at: str | None = None
 
 
@@ -117,6 +119,8 @@ class MediaManagementUpdateModel(BaseModel):
     write_audio_tags: bool | None = None
     embed_artwork: bool | None = None
     save_cover_art_file: bool | None = None
+    delete_completed_transfers: bool | None = None
+    enable_quality_upgrades: bool | None = None
 
 
 class PreviewRequestModel(BaseModel):
@@ -130,6 +134,8 @@ class PreviewRequestModel(BaseModel):
     clean_artist_names: bool | None = None
     staging_folder_path: str | None = None
     import_mode: str | None = None
+    delete_completed_transfers: bool | None = None
+    enable_quality_upgrades: bool | None = None
 
 
 class PreviewItemModel(BaseModel):

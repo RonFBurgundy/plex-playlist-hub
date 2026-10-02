@@ -301,3 +301,24 @@ class SlskdDriver(AcquisitionDriver):
         except Exception as e:
             logger.error("Failed to cancel slskd transfer %s: %s", download_id, e)
             return False
+
+    def cleanup_completed(self, download_id: str, delete_files: bool = False) -> bool:
+        """Removes completed transfer from slskd or returns True."""
+        if not is_safe_service_url(self.host_url):
+            return False
+
+        if "::" not in download_id:
+            return True
+
+        parts = download_id.split("::", 1)
+        target_user = parts[0]
+        target_file = unquote(parts[1])
+
+        url = f"{self.host_url}/api/v0/transfers/downloads/{quote(target_user)}"
+        try:
+            with httpx.Client(timeout=self.timeout) as client:
+                resp = client.request("DELETE", url, headers=self._headers(), json=[{"filename": target_file}])
+                return resp.status_code in (200, 204, 404)
+        except Exception as e:
+            logger.warning("Error cleaning up slskd completed transfer %s: %s", download_id, e)
+            return True
