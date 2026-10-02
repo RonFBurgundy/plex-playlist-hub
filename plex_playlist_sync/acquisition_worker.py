@@ -22,6 +22,7 @@ import httpx
 
 from plex_playlist_sync.acquisition_coordinator import _to_quality_profile
 from plex_playlist_sync.clients.acquisition import get_acquisition_driver
+from plex_playlist_sync.clients.mbid_enricher import MbidEnricherClient
 from plex_playlist_sync.clients.plex import PlexClient
 from plex_playlist_sync.library import (
     AUDIO_EXTENSIONS,
@@ -68,6 +69,8 @@ def _is_safe_cover_url(url: Optional[str]) -> bool:
             "last.fm",
             "musicbrainz.org",
             "discogs.com",
+            "coverartarchive.org",
+            "archive.org",
         )
         if any(hostname == d or hostname.endswith("." + d) for d in whitelisted_domains):
             return True
@@ -792,6 +795,43 @@ class AcquisitionWorker:
                         "discnumber": metadata.get("disc_number"),
                         "totaldiscs": metadata.get("total_discs"),
                     }
+
+                    # Asynchronously enrich with MBIDs if enabled
+                    if media_settings.get("enrich_mbids", True):
+                        try:
+                            enricher = MbidEnricherClient(
+                                base_url=media_settings.get("mb_mirror_url", "https://api.brainzmash.org")
+                            )
+                            artist_query = str(tags_to_write.get("artist") or "")
+                            album_query = str(tags_to_write.get("album") or "")
+                            title_query = str(tags_to_write.get("title") or "")
+                            track_isrc = metadata.get("isrc")
+                            resolved_mbids = enricher.lookup_track_mbids(
+                                artist_query, album_query, title_query, isrc=track_isrc
+                            )
+                            if resolved_mbids:
+                                for mb_key in (
+                                    "musicbrainz_artistid",
+                                    "musicbrainz_albumid",
+                                    "musicbrainz_releasegroupid",
+                                    "musicbrainz_trackid",
+                                ):
+                                    if resolved_mbids.get(mb_key):
+                                        tags_to_write[mb_key] = resolved_mbids[mb_key]
+
+                            if not cover_bytes and (embed_art or save_cover):
+                                rg_id = resolved_mbids.get("musicbrainz_releasegroupid") if resolved_mbids else None
+                                rel_id = resolved_mbids.get("musicbrainz_albumid") if resolved_mbids else None
+                                resolved_cover_url = enricher.get_cover_art_url(release_group_id=rg_id, release_id=rel_id)
+                                if resolved_cover_url and _is_safe_cover_url(resolved_cover_url):
+                                    try:
+                                        resp = httpx.get(resolved_cover_url, timeout=5.0, follow_redirects=True)
+                                        if resp.status_code == 200 and resp.content:
+                                            cover_bytes = resp.content
+                                    except Exception as exc:
+                                        logger.debug("Failed fetching cover art from Cover Art Archive %s: %s", resolved_cover_url, exc)
+                        except Exception as e:
+                            logger.warning("AcquisitionWorker: MBID enrichment error: %s", e)
 
                     if write_tags:
                         art_to_embed = cover_bytes if embed_art else None

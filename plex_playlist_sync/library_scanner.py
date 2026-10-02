@@ -62,6 +62,11 @@ def _inspect_audio_file_worker(file_path: Path, root: Path) -> tuple[Path, dict[
             "duration": 0.0,
             "quality_full": file_path.suffix.lstrip(".").upper() or "UNKNOWN",
             "file_path": str(file_path),
+            "musicbrainz_artistid": None,
+            "musicbrainz_albumid": None,
+            "musicbrainz_releasegroupid": None,
+            "musicbrainz_trackid": None,
+            "isrc": None,
         }
     return file_path, metadata
 
@@ -377,6 +382,7 @@ class LibraryScanner:
                         total_tracks = metadata.get("total_tracks")
 
                         # Resolve/Upsert Artist
+                        mb_artist_id = metadata.get("musicbrainz_artistid")
                         artist_row = artist_cache.get(artist_name) or db.get_library_artist_by_name(artist_name)
                         if not artist_row:
                             artist_id = str(uuid.uuid4())
@@ -385,20 +391,48 @@ class LibraryScanner:
                                 if (parent != root and grandparent != root and grandparent != parent)
                                 else str(parent)
                             )
+                            foreign_artist_id = f"musicbrainz:artist:{mb_artist_id}" if mb_artist_id else None
                             artist_row = db.upsert_library_artist(
                                 LibraryArtist(
                                     id=artist_id,
                                     name=artist_name,
                                     path=artist_path,
                                     monitored=True,
+                                    mbid=mb_artist_id,
+                                    foreign_artist_id=foreign_artist_id,
                                 )
                             )
                             with self._lock:
                                 self._status["artists_created"] += 1
+                        else:
+                            need_artist_update = False
+                            new_mbid = artist_row.get("mbid")
+                            new_foreign = artist_row.get("foreign_artist_id")
+                            if not new_mbid and mb_artist_id:
+                                new_mbid = mb_artist_id
+                                need_artist_update = True
+                            if not new_foreign and mb_artist_id:
+                                new_foreign = f"musicbrainz:artist:{mb_artist_id}"
+                                need_artist_update = True
+                            if need_artist_update:
+                                artist_row = db.upsert_library_artist({
+                                    **artist_row,
+                                    "mbid": new_mbid,
+                                    "foreign_artist_id": new_foreign,
+                                })
                         artist_cache[artist_name] = artist_row
                         artist_id = str(artist_row["id"])
 
                         # Resolve/Upsert Album
+                        mb_rg_id = metadata.get("musicbrainz_releasegroupid")
+                        mb_rel_id = metadata.get("musicbrainz_albumid")
+                        local_cover: Optional[str] = None
+                        for cover_name in ("cover.jpg", "cover.png", "folder.jpg", "folder.png"):
+                            candidate = parent / cover_name
+                            if candidate.is_file():
+                                local_cover = str(candidate)
+                                break
+
                         album_key = (artist_id, album_title)
                         album_row = album_cache.get(album_key) or db.get_library_album_by_title(artist_id, album_title)
                         if not album_row:
@@ -411,16 +445,42 @@ class LibraryScanner:
                                     title=album_title,
                                     year=year,
                                     path=album_path,
+                                    cover_url=local_cover,
                                     total_tracks=total_tracks,
                                     monitored=True,
+                                    mb_release_group_id=mb_rg_id,
+                                    mb_release_id=mb_rel_id,
                                 )
                             )
                             with self._lock:
                                 self._status["albums_created"] += 1
+                        else:
+                            need_album_update = False
+                            new_rg = album_row.get("mb_release_group_id")
+                            new_rel = album_row.get("mb_release_id")
+                            new_cov = album_row.get("cover_url")
+                            if not new_rg and mb_rg_id:
+                                new_rg = mb_rg_id
+                                need_album_update = True
+                            if not new_rel and mb_rel_id:
+                                new_rel = mb_rel_id
+                                need_album_update = True
+                            if not new_cov and local_cover:
+                                new_cov = local_cover
+                                need_album_update = True
+                            if need_album_update:
+                                album_row = db.upsert_library_album({
+                                    **album_row,
+                                    "mb_release_group_id": new_rg,
+                                    "mb_release_id": new_rel,
+                                    "cover_url": new_cov,
+                                })
                         album_cache[album_key] = album_row
                         album_id = str(album_row["id"])
 
                         # Resolve/Upsert Track
+                        mb_rec_id = metadata.get("musicbrainz_trackid")
+                        track_isrc = metadata.get("isrc")
                         track_key = (album_id, track_title, int(track_number))
                         track_row = track_cache.get(track_key) or db.get_library_track_by_title(album_id, track_title, track_number)
                         if not track_row:
@@ -435,10 +495,28 @@ class LibraryScanner:
                                     disc_number=int(disc_number),
                                     duration_seconds=duration_seconds,
                                     monitored=True,
+                                    mb_recording_id=mb_rec_id,
+                                    isrc=track_isrc,
                                 )
                             )
                             with self._lock:
                                 self._status["tracks_created"] += 1
+                        else:
+                            need_track_update = False
+                            new_rec = track_row.get("mb_recording_id")
+                            new_isrc = track_row.get("isrc")
+                            if not new_rec and mb_rec_id:
+                                new_rec = mb_rec_id
+                                need_track_update = True
+                            if not new_isrc and track_isrc:
+                                new_isrc = track_isrc
+                                need_track_update = True
+                            if need_track_update:
+                                track_row = db.upsert_library_track({
+                                    **track_row,
+                                    "mb_recording_id": new_rec,
+                                    "isrc": new_isrc,
+                                })
                         track_cache[track_key] = track_row
                         track_id_cache[str(track_row["id"])] = track_row
                         track_id = str(track_row["id"])

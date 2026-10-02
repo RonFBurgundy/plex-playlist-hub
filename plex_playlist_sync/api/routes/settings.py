@@ -114,6 +114,9 @@ class MediaManagementSettingsModel(BaseModel):
     library_mode: str = Field("native", description="Library management mode: native or lidarr")
     seed_ratio_limit: float | None = Field(None, description="Target seed ratio before transfer cleanup")
     seed_time_limit_minutes: int | None = Field(None, description="Target seeding duration in minutes before transfer cleanup")
+    enrich_mbids: bool = Field(True, description="Whether to enrich tracks and albums with MusicBrainz IDs")
+    acoustid_api_key: str | None = Field(None, description="AcoustID API key for Chromaprint fingerprinting")
+    mb_mirror_url: str = Field("https://api.brainzmash.org", description="MusicBrainz / BrainzMash API mirror base URL")
     updated_at: str | None = None
 
 
@@ -136,6 +139,9 @@ class MediaManagementUpdateModel(BaseModel):
     library_mode: str | None = None
     seed_ratio_limit: float | None = None
     seed_time_limit_minutes: int | None = None
+    enrich_mbids: bool | None = None
+    acoustid_api_key: str | None = None
+    mb_mirror_url: str | None = None
 
 
 class PreviewRequestModel(BaseModel):

@@ -20,6 +20,7 @@ from plex_playlist_sync.models import (
     IndexerConfig,
     LibraryAlbum,
     LibraryArtist,
+    LibraryCollection,
     LibraryFile,
     LibraryMode,
     LibraryTrack,
@@ -172,6 +173,7 @@ class Database:
                 (17, self._migration_v17),
                 (18, self._migration_v18),
                 (19, self._migration_v19),
+                (20, self._migration_v20),
             ]
 
             for version, migration_fn in migrations:
@@ -875,6 +877,84 @@ class Database:
             cur.execute(
                 "ALTER TABLE media_management_settings ADD COLUMN seed_time_limit_minutes INTEGER;"
             )
+
+    def _migration_v20(self, cur: sqlite3.Cursor) -> None:
+        cur.execute("PRAGMA table_info(media_management_settings);")
+        mm_cols = [row[1] for row in cur.fetchall()]
+        if "enrich_mbids" not in mm_cols:
+            cur.execute(
+                "ALTER TABLE media_management_settings ADD COLUMN enrich_mbids INTEGER NOT NULL DEFAULT 1;"
+            )
+        if "acoustid_api_key" not in mm_cols:
+            cur.execute(
+                "ALTER TABLE media_management_settings ADD COLUMN acoustid_api_key TEXT;"
+            )
+        if "mb_mirror_url" not in mm_cols:
+            cur.execute(
+                "ALTER TABLE media_management_settings ADD COLUMN mb_mirror_url TEXT NOT NULL DEFAULT 'https://api.brainzmash.org';"
+            )
+
+        cur.execute("PRAGMA table_info(library_artists);")
+        art_cols = [row[1] for row in cur.fetchall()]
+        if "mbid" not in art_cols:
+            cur.execute("ALTER TABLE library_artists ADD COLUMN mbid TEXT;")
+        if "image_url" not in art_cols:
+            cur.execute("ALTER TABLE library_artists ADD COLUMN image_url TEXT;")
+        if "banner_url" not in art_cols:
+            cur.execute("ALTER TABLE library_artists ADD COLUMN banner_url TEXT;")
+        if "bio" not in art_cols:
+            cur.execute("ALTER TABLE library_artists ADD COLUMN bio TEXT;")
+        if "genres" not in art_cols:
+            cur.execute("ALTER TABLE library_artists ADD COLUMN genres TEXT;")
+        if "country" not in art_cols:
+            cur.execute("ALTER TABLE library_artists ADD COLUMN country TEXT;")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_lib_artists_mbid ON library_artists(mbid);")
+
+        cur.execute("PRAGMA table_info(library_albums);")
+        alb_cols = [row[1] for row in cur.fetchall()]
+        if "mb_release_group_id" not in alb_cols:
+            cur.execute("ALTER TABLE library_albums ADD COLUMN mb_release_group_id TEXT;")
+        if "mb_release_id" not in alb_cols:
+            cur.execute("ALTER TABLE library_albums ADD COLUMN mb_release_id TEXT;")
+        if "genres" not in alb_cols:
+            cur.execute("ALTER TABLE library_albums ADD COLUMN genres TEXT;")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_lib_albums_mb_rg ON library_albums(mb_release_group_id);")
+
+        cur.execute("PRAGMA table_info(library_tracks);")
+        trk_cols = [row[1] for row in cur.fetchall()]
+        if "mb_recording_id" not in trk_cols:
+            cur.execute("ALTER TABLE library_tracks ADD COLUMN mb_recording_id TEXT;")
+        if "isrc" not in trk_cols:
+            cur.execute("ALTER TABLE library_tracks ADD COLUMN isrc TEXT;")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_lib_tracks_mb_rec ON library_tracks(mb_recording_id);")
+
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS library_collections (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                clean_name TEXT NOT NULL,
+                summary TEXT,
+                poster_url TEXT,
+                monitored INTEGER NOT NULL DEFAULT 1,
+                foreign_id TEXT,
+                created_at TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP),
+                updated_at TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP)
+            );
+            """
+        )
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_lib_collections_clean_name ON library_collections(clean_name);")
+
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS library_collection_albums (
+                collection_id TEXT NOT NULL REFERENCES library_collections(id) ON DELETE CASCADE,
+                album_id TEXT NOT NULL REFERENCES library_albums(id) ON DELETE CASCADE,
+                order_index INTEGER NOT NULL DEFAULT 0,
+                PRIMARY KEY (collection_id, album_id)
+            );
+            """
+        )
 
     # -------------------------------------------------------------------------
     # Users CRUD
@@ -1704,6 +1784,11 @@ class Database:
             res["seed_time_limit_minutes"] = (
                 int(res["seed_time_limit_minutes"]) if res.get("seed_time_limit_minutes") is not None else None
             )
+            res["enrich_mbids"] = bool(res.get("enrich_mbids", 1))
+            res["acoustid_api_key"] = (
+                str(res["acoustid_api_key"]) if res.get("acoustid_api_key") is not None else None
+            )
+            res["mb_mirror_url"] = str(res.get("mb_mirror_url") or "https://api.brainzmash.org")
             return res
 
     def update_media_management_settings(self, settings: dict[str, Any]) -> dict[str, Any]:
@@ -1727,6 +1812,9 @@ class Database:
             "library_mode",
             "seed_ratio_limit",
             "seed_time_limit_minutes",
+            "enrich_mbids",
+            "acoustid_api_key",
+            "mb_mirror_url",
         }
         updates: dict[str, Any] = {}
         for k, v in settings.items():
@@ -1738,6 +1826,7 @@ class Database:
                     "save_cover_art_file",
                     "delete_completed_transfers",
                     "enable_quality_upgrades",
+                    "enrich_mbids",
                 ):
                     if v is not None:
                         updates[k] = 1 if v else 0
@@ -1745,6 +1834,8 @@ class Database:
                     updates[k] = float(v) if v is not None else None
                 elif k == "seed_time_limit_minutes":
                     updates[k] = int(v) if v is not None else None
+                elif k == "acoustid_api_key":
+                    updates[k] = str(v) if v is not None else None
                 elif v is not None:
                     updates[k] = str(v)
 
@@ -2910,6 +3001,12 @@ class Database:
             metadata_json = json.dumps(metadata_json)
         elif metadata_json is not None:
             metadata_json = str(metadata_json)
+        mbid = str(d["mbid"]) if d.get("mbid") is not None else None
+        image_url = str(d["image_url"]) if d.get("image_url") is not None else None
+        banner_url = str(d["banner_url"]) if d.get("banner_url") is not None else None
+        bio = str(d["bio"]) if d.get("bio") is not None else None
+        genres = str(d["genres"]) if d.get("genres") is not None else None
+        country = str(d["country"]) if d.get("country") is not None else None
         created_at = d.get("created_at")
 
         with self._lock:
@@ -2917,16 +3014,23 @@ class Database:
                 """
                 INSERT INTO library_artists (
                     id, name, clean_name, foreign_artist_id, path, monitored,
-                    quality_profile_id, metadata_json, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, COALESCE(?, CURRENT_TIMESTAMP), CURRENT_TIMESTAMP)
+                    quality_profile_id, metadata_json, mbid, image_url, banner_url,
+                    bio, genres, country, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, COALESCE(?, CURRENT_TIMESTAMP), CURRENT_TIMESTAMP)
                 ON CONFLICT(id) DO UPDATE SET
                     name = excluded.name,
                     clean_name = excluded.clean_name,
-                    foreign_artist_id = excluded.foreign_artist_id,
-                    path = excluded.path,
+                    foreign_artist_id = COALESCE(excluded.foreign_artist_id, library_artists.foreign_artist_id),
+                    path = COALESCE(excluded.path, library_artists.path),
                     monitored = excluded.monitored,
-                    quality_profile_id = excluded.quality_profile_id,
-                    metadata_json = excluded.metadata_json,
+                    quality_profile_id = COALESCE(excluded.quality_profile_id, library_artists.quality_profile_id),
+                    metadata_json = COALESCE(excluded.metadata_json, library_artists.metadata_json),
+                    mbid = COALESCE(excluded.mbid, library_artists.mbid),
+                    image_url = COALESCE(excluded.image_url, library_artists.image_url),
+                    banner_url = COALESCE(excluded.banner_url, library_artists.banner_url),
+                    bio = COALESCE(excluded.bio, library_artists.bio),
+                    genres = COALESCE(excluded.genres, library_artists.genres),
+                    country = COALESCE(excluded.country, library_artists.country),
                     updated_at = CURRENT_TIMESTAMP
                 """,
                 (
@@ -2938,6 +3042,12 @@ class Database:
                     monitored,
                     quality_profile_id,
                     metadata_json,
+                    mbid,
+                    image_url,
+                    banner_url,
+                    bio,
+                    genres,
+                    country,
                     created_at,
                 ),
             )
@@ -3055,6 +3165,9 @@ class Database:
         path = str(d["path"]) if d.get("path") is not None else None
         cover_url = str(d["cover_url"]) if d.get("cover_url") is not None else None
         total_tracks = int(d["total_tracks"]) if d.get("total_tracks") is not None else None
+        mb_release_group_id = str(d["mb_release_group_id"]) if d.get("mb_release_group_id") is not None else None
+        mb_release_id = str(d["mb_release_id"]) if d.get("mb_release_id") is not None else None
+        genres = str(d["genres"]) if d.get("genres") is not None else None
         created_at = d.get("created_at")
 
         with self._lock:
@@ -3063,20 +3176,24 @@ class Database:
                 INSERT INTO library_albums (
                     id, artist_id, title, clean_title, foreign_album_id, release_date,
                     year, album_type, monitored, path, cover_url, total_tracks,
+                    mb_release_group_id, mb_release_id, genres,
                     created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, COALESCE(?, CURRENT_TIMESTAMP), CURRENT_TIMESTAMP)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, COALESCE(?, CURRENT_TIMESTAMP), CURRENT_TIMESTAMP)
                 ON CONFLICT(id) DO UPDATE SET
                     artist_id = excluded.artist_id,
                     title = excluded.title,
                     clean_title = excluded.clean_title,
-                    foreign_album_id = excluded.foreign_album_id,
-                    release_date = excluded.release_date,
-                    year = excluded.year,
+                    foreign_album_id = COALESCE(excluded.foreign_album_id, library_albums.foreign_album_id),
+                    release_date = COALESCE(excluded.release_date, library_albums.release_date),
+                    year = COALESCE(excluded.year, library_albums.year),
                     album_type = excluded.album_type,
                     monitored = excluded.monitored,
-                    path = excluded.path,
-                    cover_url = excluded.cover_url,
-                    total_tracks = excluded.total_tracks,
+                    path = COALESCE(excluded.path, library_albums.path),
+                    cover_url = COALESCE(excluded.cover_url, library_albums.cover_url),
+                    total_tracks = COALESCE(excluded.total_tracks, library_albums.total_tracks),
+                    mb_release_group_id = COALESCE(excluded.mb_release_group_id, library_albums.mb_release_group_id),
+                    mb_release_id = COALESCE(excluded.mb_release_id, library_albums.mb_release_id),
+                    genres = COALESCE(excluded.genres, library_albums.genres),
                     updated_at = CURRENT_TIMESTAMP
                 """,
                 (
@@ -3092,6 +3209,9 @@ class Database:
                     path,
                     cover_url,
                     total_tracks,
+                    mb_release_group_id,
+                    mb_release_id,
+                    genres,
                     created_at,
                 ),
             )
@@ -3209,6 +3329,8 @@ class Database:
         duration_seconds = float(d["duration_seconds"]) if d.get("duration_seconds") is not None else None
         monitored = 1 if d.get("monitored", True) else 0
         foreign_track_id = str(d["foreign_track_id"]) if d.get("foreign_track_id") is not None else None
+        mb_recording_id = str(d["mb_recording_id"]) if d.get("mb_recording_id") is not None else None
+        isrc = str(d["isrc"]) if d.get("isrc") is not None else None
         created_at = d.get("created_at")
 
         with self._lock:
@@ -3217,8 +3339,9 @@ class Database:
                 INSERT INTO library_tracks (
                     id, album_id, artist_id, title, clean_title, track_number,
                     disc_number, duration_seconds, monitored, foreign_track_id,
+                    mb_recording_id, isrc,
                     created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, COALESCE(?, CURRENT_TIMESTAMP), CURRENT_TIMESTAMP)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, COALESCE(?, CURRENT_TIMESTAMP), CURRENT_TIMESTAMP)
                 ON CONFLICT(id) DO UPDATE SET
                     album_id = excluded.album_id,
                     artist_id = excluded.artist_id,
@@ -3226,9 +3349,11 @@ class Database:
                     clean_title = excluded.clean_title,
                     track_number = excluded.track_number,
                     disc_number = excluded.disc_number,
-                    duration_seconds = excluded.duration_seconds,
+                    duration_seconds = COALESCE(excluded.duration_seconds, library_tracks.duration_seconds),
                     monitored = excluded.monitored,
-                    foreign_track_id = excluded.foreign_track_id,
+                    foreign_track_id = COALESCE(excluded.foreign_track_id, library_tracks.foreign_track_id),
+                    mb_recording_id = COALESCE(excluded.mb_recording_id, library_tracks.mb_recording_id),
+                    isrc = COALESCE(excluded.isrc, library_tracks.isrc),
                     updated_at = CURRENT_TIMESTAMP
                 """,
                 (
@@ -3242,6 +3367,8 @@ class Database:
                     duration_seconds,
                     monitored,
                     foreign_track_id,
+                    mb_recording_id,
+                    isrc,
                     created_at,
                 ),
             )
@@ -3773,6 +3900,154 @@ class Database:
         with self._lock:
             cur = self.conn.execute(sql, (int(limit),))
             return [dict(r) for r in cur.fetchall()]
+
+    # -------------------------------------------------------------------------
+    # Library Collections CRUD
+    # -------------------------------------------------------------------------
+
+    def _map_library_collection(self, row: sqlite3.Row) -> dict[str, Any]:
+        res = dict(row)
+        res["monitored"] = bool(res.get("monitored", 1))
+        if "album_count" in res and res["album_count"] is not None:
+            res["album_count"] = int(res["album_count"])
+        return res
+
+    def upsert_library_collection(
+        self, collection_data: Union[LibraryCollection, dict[str, Any]]
+    ) -> dict[str, Any]:
+        """Creates or updates a native library collection."""
+        d = collection_data.to_dict() if hasattr(collection_data, "to_dict") else dict(collection_data)
+        col_id = str(d.get("id") or uuid.uuid4())
+        name = str(d.get("name") or "")
+        clean_name = clean_library_name(d.get("clean_name") or name)
+        summary = str(d["summary"]) if d.get("summary") is not None else None
+        poster_url = str(d["poster_url"]) if d.get("poster_url") is not None else None
+        monitored = 1 if d.get("monitored", True) else 0
+        foreign_id = str(d["foreign_id"]) if d.get("foreign_id") is not None else None
+        created_at = d.get("created_at")
+
+        with self._lock:
+            self.conn.execute(
+                """
+                INSERT INTO library_collections (
+                    id, name, clean_name, summary, poster_url, monitored, foreign_id,
+                    created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, COALESCE(?, CURRENT_TIMESTAMP), CURRENT_TIMESTAMP)
+                ON CONFLICT(id) DO UPDATE SET
+                    name = excluded.name,
+                    clean_name = excluded.clean_name,
+                    summary = COALESCE(excluded.summary, library_collections.summary),
+                    poster_url = COALESCE(excluded.poster_url, library_collections.poster_url),
+                    monitored = excluded.monitored,
+                    foreign_id = COALESCE(excluded.foreign_id, library_collections.foreign_id),
+                    updated_at = CURRENT_TIMESTAMP
+                """,
+                (col_id, name, clean_name, summary, poster_url, monitored, foreign_id, created_at),
+            )
+            self.conn.commit()
+
+        col = self.get_library_collection(col_id)
+        if col is None:
+            raise RuntimeError(f"Failed to upsert library collection {col_id}")
+        return col
+
+    def get_library_collection(self, collection_id: str) -> Optional[dict[str, Any]]:
+        """Retrieves a single library collection by ID."""
+        with self._lock:
+            cur = self.conn.execute(
+                """
+                SELECT c.*, (
+                    SELECT COUNT(*) FROM library_collection_albums ca WHERE ca.collection_id = c.id
+                ) AS album_count
+                FROM library_collections c
+                WHERE c.id = ?
+                """,
+                (str(collection_id),),
+            )
+            row = cur.fetchone()
+            return self._map_library_collection(row) if row else None
+
+    def list_library_collections(
+        self, limit: int = 100, offset: int = 0, query: Optional[str] = None
+    ) -> list[dict[str, Any]]:
+        """Lists library collections with optional search query and pagination."""
+        sql = """
+            SELECT c.*, (
+                SELECT COUNT(*) FROM library_collection_albums ca WHERE ca.collection_id = c.id
+            ) AS album_count
+            FROM library_collections c
+            WHERE 1=1
+        """
+        params: list[Any] = []
+        if query:
+            clean_q = clean_library_name(query)
+            sql += " AND (c.clean_name LIKE ? OR c.name LIKE ?)"
+            params.extend([f"%{clean_q}%", f"%{query}%"])
+        sql += " ORDER BY c.name COLLATE NOCASE ASC LIMIT ? OFFSET ?"
+        params.extend([int(limit), int(offset)])
+
+        with self._lock:
+            cur = self.conn.execute(sql, params)
+            return [self._map_library_collection(row) for row in cur.fetchall()]
+
+    def delete_library_collection(self, collection_id: str) -> bool:
+        """Deletes a library collection and cascades to collection albums."""
+        with self._lock:
+            cur = self.conn.execute(
+                "DELETE FROM library_collections WHERE id = ?",
+                (str(collection_id),),
+            )
+            self.conn.commit()
+            return cur.rowcount > 0
+
+    def add_album_to_collection(
+        self, collection_id: str, album_id: str, order_index: int = 0
+    ) -> bool:
+        """Associates an album with a collection."""
+        with self._lock:
+            self.conn.execute(
+                """
+                INSERT INTO library_collection_albums (collection_id, album_id, order_index)
+                VALUES (?, ?, ?)
+                ON CONFLICT(collection_id, album_id) DO UPDATE SET
+                    order_index = excluded.order_index
+                """,
+                (str(collection_id), str(album_id), int(order_index)),
+            )
+            self.conn.commit()
+            return True
+
+    def remove_album_from_collection(self, collection_id: str, album_id: str) -> bool:
+        """Removes an album association from a collection."""
+        with self._lock:
+            cur = self.conn.execute(
+                "DELETE FROM library_collection_albums WHERE collection_id = ? AND album_id = ?",
+                (str(collection_id), str(album_id)),
+            )
+            self.conn.commit()
+            return cur.rowcount > 0
+
+    def get_collection_albums(self, collection_id: str) -> list[dict[str, Any]]:
+        """Retrieves all albums associated with a collection, ordered by order_index, year, title."""
+        with self._lock:
+            cur = self.conn.execute(
+                """
+                SELECT a.*, ca.order_index
+                FROM library_collection_albums ca
+                JOIN library_albums a ON a.id = ca.album_id
+                WHERE ca.collection_id = ?
+                ORDER BY ca.order_index ASC, a.year DESC, a.title COLLATE NOCASE ASC
+                """,
+                (str(collection_id),),
+            )
+            rows = cur.fetchall()
+            results = []
+            for r in rows:
+                d = self._map_library_album(r)
+                d["order_index"] = int(r["order_index"])
+                results.append(d)
+            return results
+
 
 
 

@@ -205,12 +205,16 @@ _ALLOWED_IMAGE_HOSTS = {
     "wrapped-images.spotifycdn.com",
     "e-cdns-images.dzcdn.net",
     "cdns-images.dzcdn.net",
+    "coverartarchive.org",
+    "archive.org",
 }
 
 _ALLOWED_IMAGE_SUFFIXES = (
     ".scdn.co",
     ".spotifycdn.com",
     ".dzcdn.net",
+    ".coverartarchive.org",
+    ".archive.org",
 )
 
 

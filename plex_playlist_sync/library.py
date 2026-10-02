@@ -10,11 +10,11 @@ import re
 import tarfile
 import zipfile
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
 
 import mutagen
 from mutagen.flac import FLAC, Picture
-from mutagen.id3 import APIC, ID3, TALB, TDRC, TIT2, TPOS, TPE1, TPE2, TRCK
+from mutagen.id3 import APIC, ID3, TALB, TDRC, TIT2, TPOS, TPE1, TPE2, TRCK, TSRC, TXXX, UFID
 from mutagen.mp3 import MP3
 from mutagen.mp4 import MP4, MP4Cover
 from mutagen.oggopus import OggOpus
@@ -111,6 +111,11 @@ def inspect_audio_file(file_path: str | Path) -> dict[str, Any]:
     sample_rate: int | None = None
     bits_per_sample: int | None = None
     duration: float = 0.0
+    musicbrainz_artistid: str | None = None
+    musicbrainz_albumid: str | None = None
+    musicbrainz_releasegroupid: str | None = None
+    musicbrainz_trackid: str | None = None
+    isrc: str | None = None
 
     tags = getattr(audio, "tags", None)
     info = getattr(audio, "info", None)
@@ -136,6 +141,11 @@ def inspect_audio_file(file_path: str | Path) -> dict[str, Any]:
             disc_number, total_discs = _parse_num_total(tags.get("discnumber", [None])[0])
             if total_discs is None:
                 total_discs = _parse_int(tags.get("disctotal", [None])[0] or tags.get("totaldiscs", [None])[0])
+            musicbrainz_artistid = tags.get("musicbrainz_artistid", [None])[0]
+            musicbrainz_albumid = tags.get("musicbrainz_albumid", [None])[0]
+            musicbrainz_releasegroupid = tags.get("musicbrainz_releasegroupid", [None])[0]
+            musicbrainz_trackid = tags.get("musicbrainz_trackid", [None])[0]
+            isrc = tags.get("isrc", [None])[0]
 
     # 2. MP3 (ID3)
     elif isinstance(audio, MP3):
@@ -156,6 +166,18 @@ def inspect_audio_file(file_path: str | Path) -> dict[str, Any]:
             year = _extract_year(id3_val("TDRC") or id3_val("TYER"))
             track_number, total_tracks = _parse_num_total(id3_val("TRCK"))
             disc_number, total_discs = _parse_num_total(id3_val("TPOS"))
+            musicbrainz_artistid = id3_val("TXXX:MusicBrainz Artist Id")
+            musicbrainz_albumid = id3_val("TXXX:MusicBrainz Album Id")
+            musicbrainz_releasegroupid = id3_val("TXXX:MusicBrainz Release Group Id")
+            ufid = tags.get("UFID:http://musicbrainz.org")
+            if ufid and hasattr(ufid, "data") and ufid.data:
+                try:
+                    musicbrainz_trackid = ufid.data.decode("ascii")
+                except Exception:
+                    musicbrainz_trackid = str(ufid.data)
+            if not musicbrainz_trackid:
+                musicbrainz_trackid = id3_val("TXXX:MusicBrainz Track Id") or id3_val("TXXX:MusicBrainz Recording Id")
+            isrc = id3_val("TSRC") or id3_val("TXXX:ISRC")
 
     # 3. MP4 / M4A / AAC / ALAC
     elif isinstance(audio, MP4):
@@ -164,7 +186,10 @@ def inspect_audio_file(file_path: str | Path) -> dict[str, Any]:
             def mp4_val(key: str) -> str | None:
                 v = tags.get(key)
                 if v and isinstance(v, list) and v:
-                    return str(v[0])
+                    raw = v[0]
+                    if isinstance(raw, (bytes, bytearray)):
+                        return raw.decode("utf-8", errors="ignore")
+                    return str(raw)
                 return None
 
             title = mp4_val("\xa9nam")
@@ -181,6 +206,12 @@ def inspect_audio_file(file_path: str | Path) -> dict[str, Any]:
             if disk and isinstance(disk, list) and disk:
                 disc_number, total_discs = _parse_num_total(disk[0])
 
+            musicbrainz_artistid = mp4_val("----:com.apple.iTunes:MusicBrainz Artist Id")
+            musicbrainz_albumid = mp4_val("----:com.apple.iTunes:MusicBrainz Album Id")
+            musicbrainz_releasegroupid = mp4_val("----:com.apple.iTunes:MusicBrainz Release Group Id")
+            musicbrainz_trackid = mp4_val("----:com.apple.iTunes:MusicBrainz Track Id")
+            isrc = mp4_val("----:com.apple.iTunes:ISRC")
+
     # 4. Ogg Opus or Ogg Vorbis
     elif isinstance(audio, (OggOpus, OggVorbis)):
         codec = "Opus" if isinstance(audio, OggOpus) else "Vorbis"
@@ -192,6 +223,11 @@ def inspect_audio_file(file_path: str | Path) -> dict[str, Any]:
             year = _extract_year(tags.get("date", [None])[0])
             track_number, total_tracks = _parse_num_total(tags.get("tracknumber", [None])[0])
             disc_number, total_discs = _parse_num_total(tags.get("discnumber", [None])[0])
+            musicbrainz_artistid = tags.get("musicbrainz_artistid", [None])[0]
+            musicbrainz_albumid = tags.get("musicbrainz_albumid", [None])[0]
+            musicbrainz_releasegroupid = tags.get("musicbrainz_releasegroupid", [None])[0]
+            musicbrainz_trackid = tags.get("musicbrainz_trackid", [None])[0]
+            isrc = tags.get("isrc", [None])[0]
 
     # 5. Generic Mutagen File fallback
     else:
@@ -217,6 +253,11 @@ def inspect_audio_file(file_path: str | Path) -> dict[str, Any]:
             year = _extract_year(tags.get("date", [""])[0])
             track_number, total_tracks = _parse_num_total(tags.get("tracknumber", [""])[0])
             disc_number, total_discs = _parse_num_total(tags.get("discnumber", [""])[0])
+            musicbrainz_artistid = str(tags.get("musicbrainz_artistid", [""])[0]) or None
+            musicbrainz_albumid = str(tags.get("musicbrainz_albumid", [""])[0]) or None
+            musicbrainz_releasegroupid = str(tags.get("musicbrainz_releasegroupid", [""])[0]) or None
+            musicbrainz_trackid = str(tags.get("musicbrainz_trackid", [""])[0]) or None
+            isrc = str(tags.get("isrc", [""])[0]) or None
 
     metadata: dict[str, Any] = {
         "title": title,
@@ -236,6 +277,11 @@ def inspect_audio_file(file_path: str | Path) -> dict[str, Any]:
         "duration": round(duration, 2),
         "extension": path.suffix.lower(),
         "file_path": str(path),
+        "musicbrainz_artistid": musicbrainz_artistid,
+        "musicbrainz_albumid": musicbrainz_albumid,
+        "musicbrainz_releasegroupid": musicbrainz_releasegroupid,
+        "musicbrainz_trackid": musicbrainz_trackid,
+        "isrc": isrc,
     }
 
     metadata["quality_full"] = format_quality(metadata)
@@ -305,6 +351,11 @@ def write_audio_tags(
         t_total_tracks = tags.get("totaltracks") or tags.get("total_tracks")
         t_disc = tags.get("discnumber") or tags.get("disc_number")
         t_total_discs = tags.get("totaldiscs") or tags.get("total_discs")
+        mb_artist = tags.get("musicbrainz_artistid")
+        mb_album = tags.get("musicbrainz_albumid")
+        mb_releasegroup = tags.get("musicbrainz_releasegroupid")
+        mb_track = tags.get("musicbrainz_trackid")
+        tag_isrc = tags.get("isrc")
 
         # 1. FLAC
         if suffix == ".flac":
@@ -330,6 +381,16 @@ def write_audio_tags(
                 audio["discnumber"] = [str(t_disc)]
             if t_total_discs is not None:
                 audio["totaldiscs"] = [str(t_total_discs)]
+            if mb_artist is not None:
+                audio["musicbrainz_artistid"] = [str(mb_artist)]
+            if mb_album is not None:
+                audio["musicbrainz_albumid"] = [str(mb_album)]
+            if mb_releasegroup is not None:
+                audio["musicbrainz_releasegroupid"] = [str(mb_releasegroup)]
+            if mb_track is not None:
+                audio["musicbrainz_trackid"] = [str(mb_track)]
+            if tag_isrc is not None:
+                audio["isrc"] = [str(tag_isrc)]
 
             if cover_art_bytes:
                 pic = Picture()
@@ -364,6 +425,28 @@ def write_audio_tags(
             if t_disc is not None:
                 disc_val = f"{t_disc}/{t_total_discs}" if t_total_discs else str(t_disc)
                 audio.tags.setall("TPOS", [TPOS(encoding=3, text=[disc_val])])
+            if mb_artist is not None:
+                audio.tags.setall(
+                    "TXXX:MusicBrainz Artist Id",
+                    [TXXX(encoding=3, desc="MusicBrainz Artist Id", text=[str(mb_artist)])],
+                )
+            if mb_album is not None:
+                audio.tags.setall(
+                    "TXXX:MusicBrainz Album Id",
+                    [TXXX(encoding=3, desc="MusicBrainz Album Id", text=[str(mb_album)])],
+                )
+            if mb_releasegroup is not None:
+                audio.tags.setall(
+                    "TXXX:MusicBrainz Release Group Id",
+                    [TXXX(encoding=3, desc="MusicBrainz Release Group Id", text=[str(mb_releasegroup)])],
+                )
+            if mb_track is not None:
+                audio.tags.setall(
+                    "UFID:http://musicbrainz.org",
+                    [UFID(owner="http://musicbrainz.org", data=str(mb_track).encode("ascii"))],
+                )
+            if tag_isrc is not None:
+                audio.tags.setall("TSRC", [TSRC(encoding=3, text=[str(tag_isrc)])])
 
             if cover_art_bytes:
                 mime = "image/png" if cover_art_bytes.startswith(b"\x89PNG") else "image/jpeg"
@@ -408,6 +491,17 @@ def write_audio_tags(
                 except (ValueError, TypeError):
                     pass
 
+            if mb_artist is not None:
+                audio["----:com.apple.iTunes:MusicBrainz Artist Id"] = [str(mb_artist).encode("utf-8")]
+            if mb_album is not None:
+                audio["----:com.apple.iTunes:MusicBrainz Album Id"] = [str(mb_album).encode("utf-8")]
+            if mb_releasegroup is not None:
+                audio["----:com.apple.iTunes:MusicBrainz Release Group Id"] = [str(mb_releasegroup).encode("utf-8")]
+            if mb_track is not None:
+                audio["----:com.apple.iTunes:MusicBrainz Track Id"] = [str(mb_track).encode("utf-8")]
+            if tag_isrc is not None:
+                audio["----:com.apple.iTunes:ISRC"] = [str(tag_isrc).encode("utf-8")]
+
             if cover_art_bytes:
                 img_fmt = (
                     MP4Cover.FORMAT_PNG
@@ -447,6 +541,16 @@ def write_audio_tags(
                 audio["discnumber"] = [str(t_disc)]
             if t_total_discs is not None:
                 audio["totaldiscs"] = [str(t_total_discs)]
+            if mb_artist is not None:
+                audio["musicbrainz_artistid"] = [str(mb_artist)]
+            if mb_album is not None:
+                audio["musicbrainz_albumid"] = [str(mb_album)]
+            if mb_releasegroup is not None:
+                audio["musicbrainz_releasegroupid"] = [str(mb_releasegroup)]
+            if mb_track is not None:
+                audio["musicbrainz_trackid"] = [str(mb_track)]
+            if tag_isrc is not None:
+                audio["isrc"] = [str(tag_isrc)]
 
             if cover_art_bytes:
                 pic = Picture()
@@ -534,4 +638,42 @@ def extract_archive(archive_path: Path | str, target_dir: Path | str) -> list[Pa
                 extracted_audio.append(f_path)
 
     return sorted(extracted_audio)
+
+
+def fingerprint_audio_file(
+    file_path: str | Path,
+    api_key: Optional[str] = None,
+) -> Optional[dict[str, Any]]:
+    """Calculates Chromaprint fingerprint and looks up match via AcoustID API on demand.
+
+    Safely handles missing acoustid package or fpcalc binary without raising.
+    """
+    path = Path(file_path).resolve()
+    if not path.is_file():
+        logger.warning("fingerprint_audio_file: File not found: %s", path)
+        return None
+
+    try:
+        import acoustid
+    except (ImportError, Exception) as exc:
+        logger.debug("fingerprint_audio_file: acoustid package unavailable: %s", exc)
+        return None
+
+    if not api_key:
+        logger.debug("fingerprint_audio_file: No acoustid_api_key configured.")
+        return None
+
+    try:
+        results = acoustid.match(api_key, str(path))
+        for score, recording_id, title, artist in results:
+            return {
+                "score": float(score),
+                "recording_id": str(recording_id),
+                "title": str(title) if title else None,
+                "artist": str(artist) if artist else None,
+            }
+        return None
+    except Exception as exc:
+        logger.warning("fingerprint_audio_file: AcoustID match failed for %s: %s", path, exc)
+        return None
 

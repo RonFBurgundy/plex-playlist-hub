@@ -559,6 +559,12 @@ class LibraryArtist:
     monitored: bool = True
     quality_profile_id: Optional[str] = None
     metadata_json: Optional[str] = None
+    mbid: Optional[str] = None
+    image_url: Optional[str] = None
+    banner_url: Optional[str] = None
+    bio: Optional[str] = None
+    genres: Optional[str] = None
+    country: Optional[str] = None
     created_at: Optional[str] = None
     updated_at: Optional[str] = None
 
@@ -572,6 +578,12 @@ class LibraryArtist:
             "monitored": bool(self.monitored),
             "quality_profile_id": self.quality_profile_id,
             "metadata_json": self.metadata_json,
+            "mbid": self.mbid,
+            "image_url": self.image_url,
+            "banner_url": self.banner_url,
+            "bio": self.bio,
+            "genres": self.genres,
+            "country": self.country,
             "created_at": self.created_at,
             "updated_at": self.updated_at,
         }
@@ -591,6 +603,9 @@ class LibraryAlbum:
     path: Optional[str] = None
     cover_url: Optional[str] = None
     total_tracks: Optional[int] = None
+    mb_release_group_id: Optional[str] = None
+    mb_release_id: Optional[str] = None
+    genres: Optional[str] = None
     created_at: Optional[str] = None
     updated_at: Optional[str] = None
 
@@ -608,6 +623,9 @@ class LibraryAlbum:
             "path": self.path,
             "cover_url": self.cover_url,
             "total_tracks": int(self.total_tracks) if self.total_tracks is not None else None,
+            "mb_release_group_id": self.mb_release_group_id,
+            "mb_release_id": self.mb_release_id,
+            "genres": self.genres,
             "created_at": self.created_at,
             "updated_at": self.updated_at,
         }
@@ -625,6 +643,8 @@ class LibraryTrack:
     duration_seconds: Optional[float] = None
     monitored: bool = True
     foreign_track_id: Optional[str] = None
+    mb_recording_id: Optional[str] = None
+    isrc: Optional[str] = None
     created_at: Optional[str] = None
     updated_at: Optional[str] = None
 
@@ -640,6 +660,8 @@ class LibraryTrack:
             "duration_seconds": float(self.duration_seconds) if self.duration_seconds is not None else None,
             "monitored": bool(self.monitored),
             "foreign_track_id": self.foreign_track_id,
+            "mb_recording_id": self.mb_recording_id,
+            "isrc": self.isrc,
             "created_at": self.created_at,
             "updated_at": self.updated_at,
         }
@@ -680,6 +702,32 @@ class LibraryFile:
 
 
 @dataclass
+class LibraryCollection:
+    id: str
+    name: str
+    clean_name: str = ""
+    summary: Optional[str] = None
+    poster_url: Optional[str] = None
+    monitored: bool = True
+    foreign_id: Optional[str] = None
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "id": self.id,
+            "name": self.name,
+            "clean_name": self.clean_name,
+            "summary": self.summary,
+            "poster_url": self.poster_url,
+            "monitored": bool(self.monitored),
+            "foreign_id": self.foreign_id,
+            "created_at": self.created_at,
+            "updated_at": self.updated_at,
+        }
+
+
+@dataclass
 class MediaManagementSettings:
     id: int = 1
     root_folder_path: str = "/data/music"
@@ -697,6 +745,9 @@ class MediaManagementSettings:
     library_mode: str = "native"
     seed_ratio_limit: Optional[float] = None
     seed_time_limit_minutes: Optional[int] = None
+    enrich_mbids: bool = True
+    acoustid_api_key: Optional[str] = None
+    mb_mirror_url: str = "https://api.brainzmash.org"
     created_at: Optional[str] = None
     updated_at: Optional[str] = None
 
@@ -718,6 +769,9 @@ class MediaManagementSettings:
             "library_mode": self.library_mode,
             "seed_ratio_limit": float(self.seed_ratio_limit) if self.seed_ratio_limit is not None else None,
             "seed_time_limit_minutes": int(self.seed_time_limit_minutes) if self.seed_time_limit_minutes is not None else None,
+            "enrich_mbids": bool(self.enrich_mbids),
+            "acoustid_api_key": self.acoustid_api_key,
+            "mb_mirror_url": self.mb_mirror_url,
             "created_at": self.created_at,
             "updated_at": self.updated_at,
         }
