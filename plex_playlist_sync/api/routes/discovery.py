@@ -3,7 +3,7 @@
 import logging
 from typing import Any, Optional
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 
 from plex_playlist_sync.api.dependencies import (
     get_db,
@@ -119,3 +119,58 @@ def search_discovery(
     raw_items = discovery.search(query=q, item_type=type, limit=limit)
     annotated = annotate_item_statuses(raw_items, db=db, plex_client=plex_client)
     return {"items": annotated, "query": q, "type": type, "count": len(annotated)}
+
+
+@router.get("/album/{album_id}")
+def get_album(
+    album_id: str,
+    discovery: DiscoveryClient = Depends(get_discovery_client),
+    db: Database = Depends(get_db),
+    plex_client: Optional[PlexClient] = Depends(get_plex_client),
+    _user: dict[str, Any] = Depends(require_user),
+) -> dict[str, Any]:
+    """Retrieves deep album details including tracklist and previews annotated with status."""
+    album_data = discovery.get_album_details(album_id)
+    if not album_data:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Album '{album_id}' not found",
+        )
+
+    album_dict = dict(album_data)
+    album_dict.setdefault("item_type", "album")
+
+    raw_tracks = album_dict.get("tracks", [])
+    for t in raw_tracks:
+        t.setdefault("item_type", "track")
+
+    annotated_tracks = annotate_item_statuses(raw_tracks, db=db, plex_client=plex_client)
+    annotated_album = annotate_item_statuses([album_dict], db=db, plex_client=plex_client)[0]
+    annotated_album["tracks"] = annotated_tracks
+    return annotated_album
+
+
+@router.get("/artist/{artist_id}")
+def get_artist(
+    artist_id: str,
+    discovery: DiscoveryClient = Depends(get_discovery_client),
+    db: Database = Depends(get_db),
+    plex_client: Optional[PlexClient] = Depends(get_plex_client),
+    _user: dict[str, Any] = Depends(require_user),
+) -> dict[str, Any]:
+    """Retrieves artist details and discography grouped into albums, singles_eps, and compilations."""
+    artist_data = discovery.get_artist_details(artist_id)
+    if not artist_data:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Artist '{artist_id}' not found",
+        )
+
+    artist_dict = dict(artist_data)
+    for group_key in ("albums", "singles_eps", "compilations"):
+        items = artist_dict.get(group_key, [])
+        for it in items:
+            it.setdefault("item_type", "album")
+        artist_dict[group_key] = annotate_item_statuses(items, db=db, plex_client=plex_client)
+
+    return artist_dict

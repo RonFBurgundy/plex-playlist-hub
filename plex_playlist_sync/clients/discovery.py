@@ -1,5 +1,6 @@
 """Zero-key music discovery client wrapping iTunes and Deezer public APIs with TTL caching."""
 
+import copy
 import logging
 import threading
 import time
@@ -19,7 +20,7 @@ class DiscoveryClient:
     def __init__(self, ttl_seconds: float = 900.0, timeout: float = 5.0) -> None:
         self.ttl_seconds = float(ttl_seconds)
         self.timeout = float(timeout)
-        self._cache: dict[str, tuple[float, list[dict[str, Any]]]] = {}
+        self._cache: dict[str, tuple[float, Any]] = {}
         self._lock = threading.Lock()
         self.session = requests.Session()
         self.session.headers.update(
@@ -29,19 +30,19 @@ class DiscoveryClient:
             }
         )
 
-    def _get_cached(self, key: str) -> Optional[list[dict[str, Any]]]:
+    def _get_cached(self, key: str) -> Optional[Any]:
         with self._lock:
             entry = self._cache.get(key)
             if entry:
                 timestamp, data = entry
                 if time.time() - timestamp < self.ttl_seconds:
-                    return [dict(d) for d in data]
+                    return copy.deepcopy(data)
                 del self._cache[key]
         return None
 
-    def _set_cached(self, key: str, data: list[dict[str, Any]]) -> None:
+    def _set_cached(self, key: str, data: Any) -> None:
         with self._lock:
-            self._cache[key] = (time.time(), [dict(d) for d in data])
+            self._cache[key] = (time.time(), copy.deepcopy(data))
 
     def clear_cache(self) -> None:
         with self._lock:
@@ -179,6 +180,74 @@ class DiscoveryClient:
         deduped = self._deduplicate_items(items, limit=limit)
         self._set_cached(cache_key, deduped)
         return deduped
+
+    def get_album_details(self, album_id: str) -> Optional[dict[str, Any]]:
+        """Fetches full album details, tracklist, and audio previews from Deezer or iTunes with TTL caching."""
+        clean_id = (album_id or "").strip()
+        if not clean_id:
+            return None
+
+        cache_key = f"album:{clean_id}"
+        cached = self._get_cached(cache_key)
+        if cached is not None:
+            return cached
+
+        result: Optional[dict[str, Any]] = None
+        if clean_id.startswith("deezer:album:"):
+            num_id = clean_id.removeprefix("deezer:album:")
+            result = self._get_deezer_album_details(num_id)
+        elif clean_id.startswith("itunes:album:"):
+            num_id = clean_id.removeprefix("itunes:album:")
+            result = self._get_itunes_album_details(num_id)
+        elif clean_id.isdigit():
+            result = self._get_deezer_album_details(clean_id)
+            if result is None:
+                result = self._get_itunes_album_details(clean_id)
+        elif clean_id.startswith("deezer:"):
+            num_id = clean_id.split(":")[-1]
+            result = self._get_deezer_album_details(num_id)
+        elif clean_id.startswith("itunes:"):
+            num_id = clean_id.split(":")[-1]
+            result = self._get_itunes_album_details(num_id)
+
+        if result is not None:
+            self._set_cached(cache_key, result)
+
+        return result
+
+    def get_artist_details(self, artist_id: str) -> Optional[dict[str, Any]]:
+        """Fetches artist profile and discography grouped into albums, singles_eps, and compilations."""
+        clean_id = (artist_id or "").strip()
+        if not clean_id:
+            return None
+
+        cache_key = f"artist:{clean_id}"
+        cached = self._get_cached(cache_key)
+        if cached is not None:
+            return cached
+
+        result: Optional[dict[str, Any]] = None
+        if clean_id.startswith("deezer:artist:"):
+            num_id = clean_id.removeprefix("deezer:artist:")
+            result = self._get_deezer_artist_details(num_id)
+        elif clean_id.startswith("itunes:artist:"):
+            num_id = clean_id.removeprefix("itunes:artist:")
+            result = self._get_itunes_artist_details(num_id)
+        elif clean_id.isdigit():
+            result = self._get_deezer_artist_details(clean_id)
+            if result is None:
+                result = self._get_itunes_artist_details(clean_id)
+        elif clean_id.startswith("deezer:"):
+            num_id = clean_id.split(":")[-1]
+            result = self._get_deezer_artist_details(num_id)
+        elif clean_id.startswith("itunes:"):
+            num_id = clean_id.split(":")[-1]
+            result = self._get_itunes_artist_details(num_id)
+
+        if result is not None:
+            self._set_cached(cache_key, result)
+
+        return result
 
     # -------------------------------------------------------------------------
     # Internal Helpers
@@ -352,3 +421,389 @@ class DiscoveryClient:
 
         out = list(seen.values())
         return out[:limit]
+
+    def _get_deezer_album_details(self, num_id: str) -> Optional[dict[str, Any]]:
+        """Queries Deezer album details API endpoint."""
+        url = f"https://api.deezer.com/album/{num_id}"
+        try:
+            resp = self.session.get(url, timeout=self.timeout)
+            if resp.status_code != 200:
+                logger.warning("Deezer album query returned status %d for id %s", resp.status_code, num_id)
+                return None
+            data = resp.json()
+            if not isinstance(data, dict) or "error" in data:
+                return None
+
+            alb_id = data.get("id")
+            if not alb_id:
+                return None
+
+            title = str(data.get("title", "")).strip()
+            artist_obj = data.get("artist") if isinstance(data.get("artist"), dict) else {}
+            artist_name = str(artist_obj.get("name", "")).strip() or "Unknown Artist"
+            artist_id_str = f"deezer:artist:{artist_obj.get('id')}" if artist_obj.get("id") else None
+            cover = (
+                data.get("cover_xl")
+                or data.get("cover_big")
+                or data.get("cover_medium")
+                or data.get("cover")
+                or None
+            )
+            rel_date = data.get("release_date") or None
+            label = data.get("label") or None
+
+            genres_obj = data.get("genres") if isinstance(data.get("genres"), dict) else {}
+            genres_list = genres_obj.get("data", []) if isinstance(genres_obj.get("data"), list) else []
+            genres = [
+                str(g.get("name")).strip()
+                for g in genres_list
+                if isinstance(g, dict) and g.get("name")
+            ]
+
+            duration_sec = int(data.get("duration", 0) or 0)
+            nb_tracks = int(data.get("nb_tracks", 0) or 0)
+
+            tracks_obj = data.get("tracks") if isinstance(data.get("tracks"), dict) else {}
+            tracks_raw = tracks_obj.get("data", []) if isinstance(tracks_obj.get("data"), list) else []
+            parsed_tracks: list[dict[str, Any]] = []
+
+            for idx, t in enumerate(tracks_raw, start=1):
+                t_id = t.get("id")
+                t_title = str(t.get("title", "")).strip()
+                t_art = t.get("artist") if isinstance(t.get("artist"), dict) else {}
+                t_art_name = str(t_art.get("name", "")).strip() or artist_name
+                t_pos = int(t.get("track_position") or t.get("track_number") or idx)
+                d_num = int(t.get("disk_number") or 1)
+                t_dur = int(t.get("duration", 0) or 0)
+                t_prev = t.get("preview") or None
+
+                parsed_tracks.append(
+                    {
+                        "id": f"deezer:track:{t_id}",
+                        "item_type": "track",
+                        "title": t_title,
+                        "artist": t_art_name,
+                        "album": title,
+                        "track_number": t_pos,
+                        "disc_number": d_num,
+                        "duration_seconds": t_dur,
+                        "preview_url": t_prev,
+                        "release_date": rel_date,
+                    }
+                )
+
+            if duration_sec == 0 and parsed_tracks:
+                duration_sec = sum(pt["duration_seconds"] for pt in parsed_tracks)
+            if nb_tracks == 0:
+                nb_tracks = len(parsed_tracks)
+
+            return {
+                "id": f"deezer:album:{alb_id}",
+                "item_type": "album",
+                "title": title,
+                "artist": artist_name,
+                "artist_id": artist_id_str,
+                "cover_url": cover,
+                "release_date": rel_date,
+                "label": label,
+                "genres": genres,
+                "duration_seconds": duration_sec,
+                "track_count": nb_tracks,
+                "tracks": parsed_tracks,
+            }
+        except Exception as e:
+            logger.warning("Error fetching Deezer album %s: %s", num_id, e)
+            return None
+
+    def _get_itunes_album_details(self, num_id: str) -> Optional[dict[str, Any]]:
+        """Queries iTunes lookup API endpoint for album details and songs."""
+        url = f"https://itunes.apple.com/lookup?id={num_id}&entity=song"
+        try:
+            resp = self.session.get(url, timeout=self.timeout)
+            if resp.status_code != 200:
+                logger.warning("iTunes album query returned status %d for id %s", resp.status_code, num_id)
+                return None
+            data = resp.json()
+            if not isinstance(data, dict):
+                return None
+            results = data.get("results", [])
+            if not isinstance(results, list) or not results:
+                return None
+
+            col = next((r for r in results if r.get("wrapperType") == "collection"), results[0])
+            col_id = col.get("collectionId")
+            if not col_id:
+                return None
+
+            title = str(col.get("collectionName", "")).strip()
+            artist_name = str(col.get("artistName", "")).strip() or "Unknown Artist"
+            artist_id_str = f"itunes:artist:{col.get('artistId')}" if col.get("artistId") else None
+            cover = col.get("artworkUrl100", "")
+            if cover:
+                cover = cover.replace("100x100bb", "600x600bb")
+            else:
+                cover = None
+            rel_date = col.get("releaseDate") or None
+            label = col.get("copyright") or None
+            primary_genre = col.get("primaryGenreName")
+            genres = [str(primary_genre).strip()] if primary_genre else []
+            nb_tracks = int(col.get("trackCount", 0) or 0)
+
+            song_results = [
+                r for r in results if r.get("wrapperType") == "track" or r.get("kind") == "song"
+            ]
+            parsed_tracks: list[dict[str, Any]] = []
+            for idx, r in enumerate(song_results, start=1):
+                t_id = r.get("trackId")
+                t_title = str(r.get("trackName", "")).strip()
+                t_artist = str(r.get("artistName", "")).strip() or artist_name
+                t_pos = int(r.get("trackNumber") or idx)
+                d_num = int(r.get("discNumber") or 1)
+                millis = r.get("trackTimeMillis", 0) or 0
+                t_dur = int(round(millis / 1000.0))
+                t_prev = r.get("previewUrl") or None
+
+                parsed_tracks.append(
+                    {
+                        "id": f"itunes:track:{t_id}",
+                        "item_type": "track",
+                        "title": t_title,
+                        "artist": t_artist,
+                        "album": title,
+                        "track_number": t_pos,
+                        "disc_number": d_num,
+                        "duration_seconds": t_dur,
+                        "preview_url": t_prev,
+                        "release_date": r.get("releaseDate") or rel_date,
+                    }
+                )
+
+            duration_sec = sum(pt["duration_seconds"] for pt in parsed_tracks)
+            if nb_tracks == 0:
+                nb_tracks = len(parsed_tracks)
+
+            return {
+                "id": f"itunes:album:{col_id}",
+                "item_type": "album",
+                "title": title,
+                "artist": artist_name,
+                "artist_id": artist_id_str,
+                "cover_url": cover,
+                "release_date": rel_date,
+                "label": label,
+                "genres": genres,
+                "duration_seconds": duration_sec,
+                "track_count": nb_tracks,
+                "tracks": parsed_tracks,
+            }
+        except Exception as e:
+            logger.warning("Error fetching iTunes album %s: %s", num_id, e)
+            return None
+
+    def _get_deezer_artist_details(self, num_id: str) -> Optional[dict[str, Any]]:
+        """Queries Deezer artist and discography endpoints."""
+        url = f"https://api.deezer.com/artist/{num_id}"
+        try:
+            resp = self.session.get(url, timeout=self.timeout)
+            if resp.status_code != 200:
+                logger.warning("Deezer artist query returned status %d for id %s", resp.status_code, num_id)
+                return None
+            data = resp.json()
+            if not isinstance(data, dict) or "error" in data:
+                return None
+
+            art_id = data.get("id")
+            if not art_id:
+                return None
+
+            name = str(data.get("name", "")).strip() or "Unknown Artist"
+            image_url = (
+                data.get("picture_xl")
+                or data.get("picture_big")
+                or data.get("picture_medium")
+                or data.get("picture")
+                or None
+            )
+            nb_album = int(data.get("nb_album", 0) or 0)
+            nb_fan = int(data.get("nb_fan", 0) or 0)
+
+            # Query albums
+            albums_url = f"https://api.deezer.com/artist/{num_id}/albums?limit=100"
+            resp_albs = self.session.get(albums_url, timeout=self.timeout)
+            albs_data = resp_albs.json() if resp_albs.status_code == 200 else {}
+            raw_albs = albs_data.get("data", []) if isinstance(albs_data, dict) else []
+
+            albums: list[dict[str, Any]] = []
+            singles_eps: list[dict[str, Any]] = []
+            compilations: list[dict[str, Any]] = []
+
+            for a in raw_albs:
+                a_id = a.get("id")
+                a_title = str(a.get("title", "")).strip()
+                a_cover = (
+                    a.get("cover_xl")
+                    or a.get("cover_big")
+                    or a.get("cover_medium")
+                    or a.get("cover")
+                    or None
+                )
+                a_rel = a.get("release_date") or None
+                rec_type = str(a.get("record_type", "")).lower().strip()
+
+                item = {
+                    "id": f"deezer:album:{a_id}",
+                    "item_type": "album",
+                    "title": a_title,
+                    "artist": name,
+                    "album": a_title,
+                    "cover_url": a_cover,
+                    "release_date": a_rel,
+                    "record_type": rec_type or "album",
+                }
+
+                if rec_type == "album":
+                    albums.append(item)
+                elif rec_type in ("single", "ep"):
+                    singles_eps.append(item)
+                elif rec_type in ("compile", "compilation"):
+                    compilations.append(item)
+                else:
+                    if "single" in rec_type or "ep" in rec_type:
+                        singles_eps.append(item)
+                    elif "compile" in rec_type or "compilation" in rec_type:
+                        compilations.append(item)
+                    else:
+                        albums.append(item)
+
+            if nb_album == 0:
+                nb_album = len(albums) + len(singles_eps) + len(compilations)
+
+            return {
+                "id": f"deezer:artist:{art_id}",
+                "name": name,
+                "image_url": image_url,
+                "nb_album": nb_album,
+                "nb_fan": nb_fan,
+                "albums": albums,
+                "singles_eps": singles_eps,
+                "compilations": compilations,
+            }
+        except Exception as e:
+            logger.warning("Error fetching Deezer artist %s: %s", num_id, e)
+            return None
+
+    def _get_itunes_artist_details(self, num_id: str) -> Optional[dict[str, Any]]:
+        """Queries iTunes lookup API endpoint for artist and discography."""
+        url = f"https://itunes.apple.com/lookup?id={num_id}&entity=album&limit=100"
+        try:
+            resp = self.session.get(url, timeout=self.timeout)
+            if resp.status_code != 200:
+                logger.warning("iTunes artist query returned status %d for id %s", resp.status_code, num_id)
+                return None
+            data = resp.json()
+            if not isinstance(data, dict):
+                return None
+            results = data.get("results", [])
+            if not isinstance(results, list) or not results:
+                return None
+
+            art_entry = next((r for r in results if r.get("wrapperType") == "artist"), None)
+            if art_entry:
+                name = str(art_entry.get("artistName", "")).strip()
+                art_id = art_entry.get("artistId")
+            else:
+                name = str(results[0].get("artistName", "")).strip() or "Unknown Artist"
+                art_id = results[0].get("artistId") or num_id
+
+            col_results = [r for r in results if r.get("wrapperType") == "collection"]
+            albums: list[dict[str, Any]] = []
+            singles_eps: list[dict[str, Any]] = []
+            compilations: list[dict[str, Any]] = []
+            image_url: Optional[str] = None
+
+            for c in col_results:
+                c_id = c.get("collectionId")
+                c_title = str(c.get("collectionName", "")).strip()
+                c_artist = str(c.get("artistName", "")).strip() or name
+                cover = c.get("artworkUrl100", "")
+                if cover:
+                    cover = cover.replace("100x100bb", "600x600bb")
+                else:
+                    cover = None
+
+                if not image_url and cover:
+                    image_url = cover
+
+                rel_date = c.get("releaseDate") or None
+                track_count = int(c.get("trackCount", 0) or 0)
+                col_type = str(c.get("collectionType", "")).lower()
+                title_lower = c_title.lower()
+
+                if (
+                    col_type == "compilation"
+                    or "compilation" in title_lower
+                    or "greatest hits" in title_lower
+                    or "best of" in title_lower
+                ):
+                    rec_type = "compilation"
+                    compilations.append(
+                        {
+                            "id": f"itunes:album:{c_id}",
+                            "item_type": "album",
+                            "title": c_title,
+                            "artist": c_artist,
+                            "album": c_title,
+                            "cover_url": cover,
+                            "release_date": rel_date,
+                            "record_type": rec_type,
+                        }
+                    )
+                elif (
+                    " - single" in title_lower
+                    or " - ep" in title_lower
+                    or "(single)" in title_lower
+                    or "(ep)" in title_lower
+                    or (0 < track_count <= 3)
+                ):
+                    rec_type = "single" if ("single" in title_lower or track_count <= 2) else "ep"
+                    singles_eps.append(
+                        {
+                            "id": f"itunes:album:{c_id}",
+                            "item_type": "album",
+                            "title": c_title,
+                            "artist": c_artist,
+                            "album": c_title,
+                            "cover_url": cover,
+                            "release_date": rel_date,
+                            "record_type": rec_type,
+                        }
+                    )
+                else:
+                    rec_type = "album"
+                    albums.append(
+                        {
+                            "id": f"itunes:album:{c_id}",
+                            "item_type": "album",
+                            "title": c_title,
+                            "artist": c_artist,
+                            "album": c_title,
+                            "cover_url": cover,
+                            "release_date": rel_date,
+                            "record_type": rec_type,
+                        }
+                    )
+
+            total_albums = len(albums) + len(singles_eps) + len(compilations)
+            return {
+                "id": f"itunes:artist:{art_id}",
+                "name": name,
+                "image_url": image_url,
+                "nb_album": total_albums,
+                "nb_fan": 0,
+                "albums": albums,
+                "singles_eps": singles_eps,
+                "compilations": compilations,
+            }
+        except Exception as e:
+            logger.warning("Error fetching iTunes artist %s: %s", num_id, e)
+            return None

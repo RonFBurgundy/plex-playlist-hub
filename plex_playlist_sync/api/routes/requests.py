@@ -39,6 +39,10 @@ class CreateMusicRequestBody(BaseModel):
     preview_url: Optional[str] = None
 
 
+class BatchCreateMusicRequestBody(BaseModel):
+    requests: list[CreateMusicRequestBody] = Field(..., min_length=1)
+
+
 @router.get("")
 def list_requests(
     status_filter: Optional[str] = Query(default=None, alias="status"),
@@ -172,6 +176,172 @@ def create_request(
                 logger.error("Failed to enqueue request %s to Lidarr worker: %s", req_id, e)
 
     return created
+
+
+@router.post("/batch", status_code=status.HTTP_201_CREATED)
+def create_batch_requests(
+    body: BatchCreateMusicRequestBody,
+    db: Database = Depends(get_db),
+    config: Config = Depends(get_config),
+    current_user: dict[str, Any] = Depends(require_user),
+    lidarr_client: Optional[LidarrClient] = Depends(get_lidarr_client),
+) -> dict[str, Any]:
+    """Creates multiple music requests in a single transaction within configured user quotas.
+
+    Non-admin user requests are validated against remaining quota.
+    Duplicates against active requests or within the batch are handled idempotently.
+    Approved requests attempt native grab, falling back to Lidarr trickle worker.
+    """
+    if not current_user.get("is_admin"):
+        existing_user_reqs = db.list_requests(user_id=current_user["id"])
+        active_count = sum(
+            1 for r in existing_user_reqs if r.get("status") in ("pending", "processing", "approved")
+        )
+        remaining_quota = max(0, config.user_request_quota - active_count)
+        if len(body.requests) > remaining_quota:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Active request quota exceeded: batch size ({len(body.requests)}) exceeds remaining allowance ({remaining_quota} remaining of {config.user_request_quota} allowed)",
+            )
+        existing_active_keys = {
+            ((r.get("artist") or "").lower().strip(), (r.get("title") or "").lower().strip())
+            for r in existing_user_reqs
+            if r.get("status") in ("pending", "processing", "approved")
+        }
+        existing_active_foreign_ids = {
+            r.get("foreign_id")
+            for r in existing_user_reqs
+            if r.get("foreign_id") and r.get("status") in ("pending", "processing", "approved")
+        }
+    else:
+        existing_active_keys = set()
+        existing_active_foreign_ids = set()
+
+    seen_keys: set[tuple[str, str]] = set()
+    seen_fids: set[str] = set()
+
+    is_auto_approved = bool(current_user.get("is_admin") or config.auto_approve_requests)
+    initial_status = RequestStatus.PROCESSING if is_auto_approved else RequestStatus.PENDING
+
+    created_items: list[dict[str, Any]] = []
+
+    for req_item in body.requests:
+        clean_title = req_item.title.strip()
+        clean_artist = req_item.artist.strip()
+        clean_album = req_item.album.strip() if req_item.album else None
+        item_key = (clean_artist.lower(), clean_title.lower())
+        fid = req_item.foreign_id.strip() if req_item.foreign_id else None
+
+        # Idempotent deduplication against existing active user requests
+        if not current_user.get("is_admin"):
+            if item_key in existing_active_keys or (fid and fid in existing_active_foreign_ids):
+                continue
+
+        # Idempotent deduplication within the batch
+        if item_key in seen_keys or (fid and fid in seen_fids):
+            continue
+
+        seen_keys.add(item_key)
+        if fid:
+            seen_fids.add(fid)
+
+        req_id = f"req-{uuid.uuid4().hex[:12]}"
+        new_request = MusicRequest(
+            id=req_id,
+            user_id=current_user["id"],
+            item_type=req_item.item_type,
+            title=clean_title,
+            artist=clean_artist,
+            album=clean_album,
+            cover_url=req_item.cover_url,
+            status=initial_status,
+            release_date=req_item.release_date,
+            foreign_id=fid,
+            preview_url=req_item.preview_url,
+        )
+
+        created = db.create_request(new_request)
+        created_items.append(created)
+
+        # Dispatch notification events
+        notification_data = dict(created)
+        if not notification_data.get("username"):
+            notification_data["username"] = current_user.get("username")
+        notification_dispatcher.dispatch(NotificationEvent.REQUEST_CREATED, data=notification_data, db=db)
+        if initial_status == RequestStatus.PROCESSING:
+            notification_dispatcher.dispatch(NotificationEvent.REQUEST_APPROVED, data=notification_data, db=db)
+
+    # Dispatch to native acquisition coordinator if processing, otherwise fall back to Lidarr
+    if initial_status == RequestStatus.PROCESSING and created_items:
+        has_native_clients = any(
+            c.get("enabled") for c in db.list_download_clients() if c.get("driver_type") != "lidarr"
+        )
+        has_indexers = any(i.get("enabled") for i in db.list_indexers()) or any(
+            c.get("driver_type") == "slskd" and c.get("enabled") for c in db.list_download_clients()
+        )
+
+        lidarr_items: list[dict[str, Any]] = []
+
+        for created in created_items:
+            req_id = created["id"]
+            clean_artist = created["artist"]
+            clean_title = created["title"]
+            clean_album = created.get("album")
+            item_type = created.get("item_type", "track")
+
+            grabbed = False
+            if has_native_clients and has_indexers:
+                try:
+                    grab_res = acquisition_coordinator.search_and_grab(
+                        artist=clean_artist,
+                        title=clean_title,
+                        album=clean_album,
+                        item_type=item_type,
+                        request_id=req_id,
+                        db=db,
+                    )
+                    if grab_res.get("success"):
+                        grabbed = True
+                        logger.info(
+                            "Native acquisition grabbed batch request %s (%s - %s)",
+                            req_id,
+                            clean_artist,
+                            clean_title,
+                        )
+                    else:
+                        logger.info(
+                            "Native acquisition found no match for batch request %s: %s",
+                            req_id,
+                            grab_res.get("message"),
+                        )
+                except Exception as e:
+                    logger.error("Error in native acquisition for batch request %s: %s", req_id, e)
+
+            if not grabbed:
+                lidarr_items.append(
+                    {
+                        "id": req_id,
+                        "artist": clean_artist,
+                        "album": clean_album or clean_title,
+                        "title": clean_title,
+                        "is_request": True,
+                    }
+                )
+
+        if lidarr_items and lidarr_client is not None:
+            try:
+                lidarr_worker.start_trickle(
+                    items=lidarr_items,
+                    client=lidarr_client,
+                    db=db,
+                    delay_seconds=config.lidarr_trickle_rate_seconds,
+                    auto_search=config.lidarr_auto_search,
+                )
+                logger.info("Enqueued %d batch requests to Lidarr worker", len(lidarr_trickle_items))
+            except Exception as e:
+                logger.error("Failed to enqueue batch requests to Lidarr worker: %s", e)
+
+    return {"created": created_items, "count": len(created_items)}
 
 
 @router.post("/{request_id}/approve")
