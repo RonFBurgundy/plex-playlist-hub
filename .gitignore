@@ -138,9 +138,14 @@ Notebooks/
 
 # Local Orchestration & Runner Harness
 .opencode/
+.claude/
+.skills/
+skills/
 scripts/
 docs/notes/
 *.notes.md
+handoff*.md
+active_handoff.md
 
 # Runtime data & testing caches
 data/
