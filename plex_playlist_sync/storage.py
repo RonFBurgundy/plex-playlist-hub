@@ -171,6 +171,7 @@ class Database:
                 (16, self._migration_v16),
                 (17, self._migration_v17),
                 (18, self._migration_v18),
+                (19, self._migration_v19),
             ]
 
             for version, migration_fn in migrations:
@@ -850,6 +851,29 @@ class Database:
             cur.execute(
                 "UPDATE general_settings SET api_key = ?, updated_at = CURRENT_TIMESTAMP WHERE id = 1",
                 (secrets.token_hex(16),),
+            )
+
+    def _migration_v19(self, cur: sqlite3.Cursor) -> None:
+        cur.execute("PRAGMA table_info(quality_profiles);")
+        qp_cols = [row[1] for row in cur.fetchall()]
+        if "custom_formats_json" not in qp_cols:
+            cur.execute(
+                "ALTER TABLE quality_profiles ADD COLUMN custom_formats_json TEXT;"
+            )
+        if "min_score" not in qp_cols:
+            cur.execute(
+                "ALTER TABLE quality_profiles ADD COLUMN min_score INTEGER;"
+            )
+
+        cur.execute("PRAGMA table_info(media_management_settings);")
+        mm_cols = [row[1] for row in cur.fetchall()]
+        if "seed_ratio_limit" not in mm_cols:
+            cur.execute(
+                "ALTER TABLE media_management_settings ADD COLUMN seed_ratio_limit REAL;"
+            )
+        if "seed_time_limit_minutes" not in mm_cols:
+            cur.execute(
+                "ALTER TABLE media_management_settings ADD COLUMN seed_time_limit_minutes INTEGER;"
             )
 
     # -------------------------------------------------------------------------
@@ -1674,6 +1698,12 @@ class Database:
             res["delete_completed_transfers"] = bool(res.get("delete_completed_transfers", 0))
             res["enable_quality_upgrades"] = bool(res.get("enable_quality_upgrades", 1))
             res["library_mode"] = str(res.get("library_mode") or "native")
+            res["seed_ratio_limit"] = (
+                float(res["seed_ratio_limit"]) if res.get("seed_ratio_limit") is not None else None
+            )
+            res["seed_time_limit_minutes"] = (
+                int(res["seed_time_limit_minutes"]) if res.get("seed_time_limit_minutes") is not None else None
+            )
             return res
 
     def update_media_management_settings(self, settings: dict[str, Any]) -> dict[str, Any]:
@@ -1695,10 +1725,12 @@ class Database:
             "delete_completed_transfers",
             "enable_quality_upgrades",
             "library_mode",
+            "seed_ratio_limit",
+            "seed_time_limit_minutes",
         }
         updates: dict[str, Any] = {}
         for k, v in settings.items():
-            if k in allowed_keys and v is not None:
+            if k in allowed_keys:
                 if k in (
                     "clean_artist_names",
                     "write_audio_tags",
@@ -1707,8 +1739,13 @@ class Database:
                     "delete_completed_transfers",
                     "enable_quality_upgrades",
                 ):
-                    updates[k] = 1 if v else 0
-                else:
+                    if v is not None:
+                        updates[k] = 1 if v else 0
+                elif k == "seed_ratio_limit":
+                    updates[k] = float(v) if v is not None else None
+                elif k == "seed_time_limit_minutes":
+                    updates[k] = int(v) if v is not None else None
+                elif v is not None:
                     updates[k] = str(v)
 
         if updates:
@@ -2351,6 +2388,15 @@ class Database:
         except (json.JSONDecodeError, TypeError):
             res["ignored_tags"] = []
 
+        try:
+            res["custom_formats"] = json.loads(res.get("custom_formats_json") or "[]")
+        except (json.JSONDecodeError, TypeError):
+            res["custom_formats"] = []
+
+        res["min_score"] = (
+            int(res["min_score"]) if res.get("min_score") is not None else None
+        )
+
         return res
 
     def list_quality_profiles(self) -> list[dict[str, Any]]:
@@ -2389,6 +2435,22 @@ class Database:
                 raise ValueError("No quality profiles configured in the database")
             return self._format_quality_profile_row(row)
 
+    def create_quality_profile(
+        self, profile: Union[QualityProfile, dict[str, Any]]
+    ) -> dict[str, Any]:
+        """Creates a quality profile (alias to upsert_quality_profile)."""
+        return self.upsert_quality_profile(profile)
+
+    def update_quality_profile(
+        self, profile_id: str, updates: dict[str, Any]
+    ) -> Optional[dict[str, Any]]:
+        """Updates an existing quality profile by ID."""
+        existing = self.get_quality_profile(profile_id)
+        if not existing:
+            return None
+        existing.update(updates)
+        return self.upsert_quality_profile(existing)
+
     def upsert_quality_profile(
         self, profile: Union[QualityProfile, dict[str, Any]]
     ) -> dict[str, Any]:
@@ -2405,6 +2467,8 @@ class Database:
             min_size_mb = profile.min_size_mb
             max_size_mb = profile.max_size_mb
             is_default = bool(profile.is_default)
+            custom_formats = profile.custom_formats
+            min_score = profile.min_score
         else:
             p_id = str(profile.get("id"))
             name = str(profile.get("name"))
@@ -2418,6 +2482,8 @@ class Database:
             min_size_mb = profile.get("min_size_mb")
             max_size_mb = profile.get("max_size_mb")
             is_default = bool(profile.get("is_default", False))
+            custom_formats = profile.get("custom_formats", [])
+            min_score = profile.get("min_score")
 
         with self._lock:
             if is_default:
@@ -2429,8 +2495,8 @@ class Database:
                 """
                 INSERT INTO quality_profiles (
                     id, name, cutoff, items_json, preferred_tags_json, ignored_tags_json,
-                    min_size_mb, max_size_mb, is_default, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                    min_size_mb, max_size_mb, is_default, custom_formats_json, min_score, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
                 ON CONFLICT(id) DO UPDATE SET
                     name = excluded.name,
                     cutoff = excluded.cutoff,
@@ -2440,6 +2506,8 @@ class Database:
                     min_size_mb = excluded.min_size_mb,
                     max_size_mb = excluded.max_size_mb,
                     is_default = excluded.is_default,
+                    custom_formats_json = excluded.custom_formats_json,
+                    min_score = excluded.min_score,
                     updated_at = CURRENT_TIMESTAMP
                 """,
                 (
@@ -2452,6 +2520,8 @@ class Database:
                     min_size_mb,
                     max_size_mb,
                     1 if is_default else 0,
+                    json.dumps(custom_formats if isinstance(custom_formats, list) else []),
+                    int(min_score) if min_score is not None else None,
                 ),
             )
 
@@ -3350,6 +3420,75 @@ class Database:
         if fl is None:
             raise RuntimeError(f"Failed to upsert library file {file_id}")
         return fl
+
+    def upsert_library_files_batch(
+        self, files: list[Union[LibraryFile, dict[str, Any]]]
+    ) -> list[dict[str, Any]]:
+        """Batched upsert for library files within a single transaction commit."""
+        if not files:
+            return []
+        with self._lock:
+            for file_data in files:
+                d = file_data.to_dict() if hasattr(file_data, "to_dict") else dict(file_data)
+                file_path = str(d.get("file_path") or "")
+
+                if not d.get("id"):
+                    cur = self.conn.execute(
+                        "SELECT id FROM library_files WHERE file_path = ?", (file_path,)
+                    )
+                    row = cur.fetchone()
+                    file_id = str(row[0]) if row else str(uuid.uuid4())
+                else:
+                    file_id = str(d["id"])
+
+                track_id = str(d.get("track_id") or "")
+                relative_path = str(d.get("relative_path") or "")
+                codec = str(d.get("codec") or "")
+                bitrate = int(d["bitrate"]) if d.get("bitrate") is not None else None
+                sample_rate = int(d["sample_rate"]) if d.get("sample_rate") is not None else None
+                bits_per_sample = int(d["bits_per_sample"]) if d.get("bits_per_sample") is not None else None
+                quality_name = str(d.get("quality_name") or "Unknown")
+                size_bytes = int(d.get("size_bytes", 0))
+                cutoff_met = 1 if d.get("cutoff_met", True) else 0
+                date_added = d.get("date_added")
+
+                self.conn.execute(
+                    """
+                    INSERT INTO library_files (
+                        id, track_id, file_path, relative_path, codec, bitrate,
+                        sample_rate, bits_per_sample, quality_name, size_bytes,
+                        cutoff_met, date_added, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, COALESCE(?, CURRENT_TIMESTAMP), CURRENT_TIMESTAMP)
+                    ON CONFLICT(id) DO UPDATE SET
+                        track_id = excluded.track_id,
+                        file_path = excluded.file_path,
+                        relative_path = excluded.relative_path,
+                        codec = excluded.codec,
+                        bitrate = excluded.bitrate,
+                        sample_rate = excluded.sample_rate,
+                        bits_per_sample = excluded.bits_per_sample,
+                        quality_name = excluded.quality_name,
+                        size_bytes = excluded.size_bytes,
+                        cutoff_met = excluded.cutoff_met,
+                        updated_at = CURRENT_TIMESTAMP
+                    """,
+                    (
+                        file_id,
+                        track_id,
+                        file_path,
+                        relative_path,
+                        codec,
+                        bitrate,
+                        sample_rate,
+                        bits_per_sample,
+                        quality_name,
+                        size_bytes,
+                        cutoff_met,
+                        date_added,
+                    ),
+                )
+            self.conn.commit()
+            return [f.to_dict() if hasattr(f, "to_dict") else dict(f) for f in files]
 
     def get_library_file(self, file_id: str) -> Optional[dict[str, Any]]:
         """Retrieves a library file by ID."""

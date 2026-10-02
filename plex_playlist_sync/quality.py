@@ -265,6 +265,34 @@ def evaluate_release(
 
     total_score = base_score + bonus_score
 
+    # Custom Formats (CF) regex scoring
+    for cf in (profile.custom_formats or []):
+        name = cf.get("name", "Custom Format")
+        try:
+            score = int(cf.get("score", 0))
+        except (ValueError, TypeError):
+            score = 0
+        pattern_str = cf.get("pattern", "")
+        negate = bool(cf.get("negate", False))
+        if not pattern_str:
+            continue
+        try:
+            pattern = re.compile(pattern_str, re.IGNORECASE)
+            matched = bool(pattern.search(release.raw_title))
+        except re.error as e:
+            logger.warning("Invalid regex pattern in custom format '%s': %s", name, e)
+            continue
+
+        if (matched and not negate) or (not matched and negate):
+            total_score += score
+
+    # Minimum score threshold check
+    if profile.min_score is not None and total_score < profile.min_score:
+        is_acceptable = False
+        rejection_reasons.append(
+            f"Score {total_score} is below profile minimum {profile.min_score}"
+        )
+
     # 5. Cutoff Check
     # Lower item index indicates higher quality/preference
     cutoff_index = next(

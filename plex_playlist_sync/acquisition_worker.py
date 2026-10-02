@@ -561,6 +561,35 @@ class AcquisitionWorker:
 
             # If completed or ready to import
             is_ready = cur_status == DownloadStatus.COMPLETED.value or item.get("status") == DownloadStatus.COMPLETED.value
+            already_imported = bool(item.get("target_path"))
+
+            if already_imported and is_ready:
+                # Torrent already imported, currently seeding under governance
+                if media_settings.get("delete_completed_transfers"):
+                    seed_ratio_limit = media_settings.get("seed_ratio_limit")
+                    seed_time_limit_minutes = media_settings.get("seed_time_limit_minutes")
+                    if import_mode == "hardlink" and (seed_ratio_limit is not None or seed_time_limit_minutes is not None):
+                        cur_ratio = float(status_dict.get("ratio") or 0.0)
+                        cur_seeding_sec = int(status_dict.get("seeding_time_seconds") or 0)
+                        ratio_met = seed_ratio_limit is not None and cur_ratio >= float(seed_ratio_limit)
+                        time_met = seed_time_limit_minutes is not None and cur_seeding_sec >= int(seed_time_limit_minutes) * 60
+                        limit_reached = ratio_met or time_met
+                        if limit_reached:
+                            try:
+                                driver.cleanup_completed(target_lookup, delete_files=False)
+                            except Exception as ex:
+                                logger.warning("Error during cleanup_completed for %s: %s", target_lookup, ex)
+                            db.update_download_status(download_id, status=DownloadStatus.IMPORTED.value)
+                        else:
+                            db.update_download_status(download_id, status=DownloadStatus.COMPLETED.value)
+                    else:
+                        try:
+                            driver.cleanup_completed(target_lookup, delete_files=False)
+                        except Exception as ex:
+                            logger.warning("Error during cleanup_completed for %s: %s", target_lookup, ex)
+                        db.update_download_status(download_id, status=DownloadStatus.IMPORTED.value)
+                continue
+
             if is_ready:
                 stats["completed"] += 1
                 db.update_download_status(download_id, status=DownloadStatus.IMPORTING.value)
@@ -811,7 +840,7 @@ class AcquisitionWorker:
                 target_summary = imported_paths[0] if imported_paths else None
                 db.update_download_status(
                     download_id,
-                    status=DownloadStatus.IMPORTED.value,
+                    status=DownloadStatus.IMPORTING.value,
                     target_path=target_summary,
                 )
 
@@ -1056,11 +1085,41 @@ class AcquisitionWorker:
                     except Exception as ex:
                         logger.warning("Error evaluating release quality for request %s: %s", item.get("request_id"), ex)
 
+                should_keep_seeding = False
                 if media_settings.get("delete_completed_transfers"):
-                    try:
-                        driver.cleanup_completed(target_lookup, delete_files=False)
-                    except Exception as ex:
-                        logger.warning("Error during cleanup_completed for %s: %s", target_lookup, ex)
+                    seed_ratio_limit = media_settings.get("seed_ratio_limit")
+                    seed_time_limit_minutes = media_settings.get("seed_time_limit_minutes")
+                    if import_mode == "hardlink" and (seed_ratio_limit is not None or seed_time_limit_minutes is not None):
+                        cur_ratio = float(status_dict.get("ratio") or 0.0)
+                        cur_seeding_sec = int(status_dict.get("seeding_time_seconds") or 0)
+                        ratio_met = seed_ratio_limit is not None and cur_ratio >= float(seed_ratio_limit)
+                        time_met = seed_time_limit_minutes is not None and cur_seeding_sec >= int(seed_time_limit_minutes) * 60
+                        limit_reached = ratio_met or time_met
+                        if limit_reached:
+                            try:
+                                driver.cleanup_completed(target_lookup, delete_files=False)
+                            except Exception as ex:
+                                logger.warning("Error during cleanup_completed for %s: %s", target_lookup, ex)
+                        else:
+                            should_keep_seeding = True
+                    else:
+                        try:
+                            driver.cleanup_completed(target_lookup, delete_files=False)
+                        except Exception as ex:
+                            logger.warning("Error during cleanup_completed for %s: %s", target_lookup, ex)
+
+                if should_keep_seeding:
+                    db.update_download_status(
+                        download_id,
+                        status=DownloadStatus.COMPLETED.value,
+                        target_path=target_summary,
+                    )
+                else:
+                    db.update_download_status(
+                        download_id,
+                        status=DownloadStatus.IMPORTED.value,
+                        target_path=target_summary,
+                    )
 
                 stats["imported"] += 1
 

@@ -411,6 +411,8 @@ class QualityProfile:
     min_size_mb: Optional[float] = None
     max_size_mb: Optional[float] = None
     is_default: bool = False
+    custom_formats: list[dict[str, Any]] = field(default_factory=list)
+    min_score: Optional[int] = None
     created_at: Optional[str] = None
     updated_at: Optional[str] = None
 
@@ -428,6 +430,8 @@ class QualityProfile:
             "min_size_mb": self.min_size_mb,
             "max_size_mb": self.max_size_mb,
             "is_default": bool(self.is_default),
+            "custom_formats": list(self.custom_formats),
+            "min_score": self.min_score,
             "created_at": self.created_at,
             "updated_at": self.updated_at,
         }
@@ -675,4 +679,45 @@ class LibraryFile:
         }
 
 
+@dataclass
+class MediaManagementSettings:
+    id: int = 1
+    root_folder_path: str = "/data/music"
+    staging_folder_path: str = "/data/downloads"
+    artist_folder_format: str = "{Artist Name}"
+    album_folder_format: str = "{Artist Name} - {Album Title} ({Release Year})"
+    track_file_format: str = "{Track:02d} - {Track Title}"
+    import_mode: str = "move"
+    delete_empty_folders: bool = True
+    write_audio_tags: bool = True
+    embed_artwork: bool = True
+    save_cover_art_file: bool = True
+    delete_completed_transfers: bool = False
+    enable_quality_upgrades: bool = True
+    library_mode: str = "native"
+    seed_ratio_limit: Optional[float] = None
+    seed_time_limit_minutes: Optional[int] = None
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
 
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "id": self.id,
+            "root_folder_path": self.root_folder_path,
+            "staging_folder_path": self.staging_folder_path,
+            "artist_folder_format": self.artist_folder_format,
+            "album_folder_format": self.album_folder_format,
+            "track_file_format": self.track_file_format,
+            "import_mode": self.import_mode,
+            "delete_empty_folders": bool(self.delete_empty_folders),
+            "write_audio_tags": bool(self.write_audio_tags),
+            "embed_artwork": bool(self.embed_artwork),
+            "save_cover_art_file": bool(self.save_cover_art_file),
+            "delete_completed_transfers": bool(self.delete_completed_transfers),
+            "enable_quality_upgrades": bool(self.enable_quality_upgrades),
+            "library_mode": self.library_mode,
+            "seed_ratio_limit": float(self.seed_ratio_limit) if self.seed_ratio_limit is not None else None,
+            "seed_time_limit_minutes": int(self.seed_time_limit_minutes) if self.seed_time_limit_minutes is not None else None,
+            "created_at": self.created_at,
+            "updated_at": self.updated_at,
+        }

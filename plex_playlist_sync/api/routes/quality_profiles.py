@@ -37,6 +37,8 @@ class QualityProfilePayload(BaseModel):
     min_size_mb: Optional[float] = None
     max_size_mb: Optional[float] = None
     is_default: bool = False
+    custom_formats: list[dict[str, Any]] = Field(default_factory=list)
+    min_score: Optional[int] = None
 
 
 class QualityProfileResponse(BaseModel):
@@ -49,6 +51,8 @@ class QualityProfileResponse(BaseModel):
     min_size_mb: Optional[float] = None
     max_size_mb: Optional[float] = None
     is_default: bool = False
+    custom_formats: list[dict[str, Any]] = Field(default_factory=list)
+    min_score: Optional[int] = None
     created_at: Optional[str] = None
     updated_at: Optional[str] = None
 
@@ -116,6 +120,8 @@ def create_or_update_quality_profile(
         min_size_mb=payload.min_size_mb,
         max_size_mb=payload.max_size_mb,
         is_default=payload.is_default,
+        custom_formats=payload.custom_formats,
+        min_score=payload.min_score,
     )
     try:
         saved = db.upsert_quality_profile(profile_obj)
@@ -200,6 +206,8 @@ def evaluate_release_title(
         min_size_mb=profile_data.get("min_size_mb"),
         max_size_mb=profile_data.get("max_size_mb"),
         is_default=profile_data.get("is_default", False),
+        custom_formats=profile_data.get("custom_formats", []),
+        min_score=profile_data.get("min_score"),
     )
 
     parsed = parse_release_title(payload.title)

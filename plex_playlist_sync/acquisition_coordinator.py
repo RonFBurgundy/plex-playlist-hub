@@ -84,6 +84,10 @@ def _to_quality_profile(data: Union[QualityProfile, dict[str, Any]]) -> QualityP
             float(data["max_size_mb"]) if data.get("max_size_mb") is not None else None
         ),
         is_default=bool(data.get("is_default", False)),
+        custom_formats=list(data.get("custom_formats") or []),
+        min_score=(
+            int(data["min_score"]) if data.get("min_score") is not None else None
+        ),
     )
 
 
