@@ -740,6 +740,9 @@ class Database:
         cur.execute(
             "CREATE INDEX IF NOT EXISTS idx_lib_tracks_clean_title ON library_tracks(clean_title);"
         )
+        cur.execute(
+            "CREATE INDEX IF NOT EXISTS idx_lib_tracks_foreign ON library_tracks(foreign_track_id);"
+        )
 
         cur.execute(
             """
@@ -2896,6 +2899,18 @@ class Database:
             row = cur.fetchone()
             return self._map_library_artist(row) if row else None
 
+    def get_library_artist_by_foreign_id(
+        self, foreign_id: str
+    ) -> Optional[dict[str, Any]]:
+        """Retrieves a library artist by foreign_artist_id."""
+        with self._lock:
+            cur = self.conn.execute(
+                "SELECT * FROM library_artists WHERE foreign_artist_id = ? LIMIT 1",
+                (str(foreign_id),),
+            )
+            row = cur.fetchone()
+            return self._map_library_artist(row) if row else None
+
     def list_library_artists(
         self,
         monitored_only: bool = False,
@@ -3040,6 +3055,18 @@ class Database:
             row = cur.fetchone()
             return self._map_library_album(row) if row else None
 
+    def get_library_album_by_foreign_id(
+        self, foreign_id: str
+    ) -> Optional[dict[str, Any]]:
+        """Retrieves a library album by foreign_album_id."""
+        with self._lock:
+            cur = self.conn.execute(
+                "SELECT * FROM library_albums WHERE foreign_album_id = ? LIMIT 1",
+                (str(foreign_id),),
+            )
+            row = cur.fetchone()
+            return self._map_library_album(row) if row else None
+
     def list_library_albums(
         self,
         artist_id: Optional[str] = None,
@@ -3162,6 +3189,24 @@ class Database:
                 "SELECT * FROM library_tracks WHERE id = ?",
                 (str(track_id),),
             )
+            row = cur.fetchone()
+            return self._map_library_track(row) if row else None
+
+    def get_library_track_by_foreign_id(
+        self, foreign_id: str, album_id: Optional[str] = None
+    ) -> Optional[dict[str, Any]]:
+        """Retrieves a library track by foreign_track_id and optional album_id."""
+        with self._lock:
+            if album_id:
+                cur = self.conn.execute(
+                    "SELECT * FROM library_tracks WHERE foreign_track_id = ? AND album_id = ? LIMIT 1",
+                    (str(foreign_id), str(album_id)),
+                )
+            else:
+                cur = self.conn.execute(
+                    "SELECT * FROM library_tracks WHERE foreign_track_id = ? LIMIT 1",
+                    (str(foreign_id),),
+                )
             row = cur.fetchone()
             return self._map_library_track(row) if row else None
 
