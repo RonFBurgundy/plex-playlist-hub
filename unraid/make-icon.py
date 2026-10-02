@@ -1,133 +1,139 @@
-import math
-import struct
-import zlib
+#!/usr/bin/env python3
+"""Icon generation utility for TrackSeerr Unraid and Web UI branding assets.
 
-S, SS = 256, 4
-W = S * SS
+Renders high-resolution PNG assets from master vector SVGs using local `rsvg-convert`
+if available, or automatically falling back to an isolated Docker container with
+`librsvg2-bin`.
+"""
 
-BG = (0x0f, 0x17, 0x2a)      # Slate 950/900 background
-PLEX_AMBER = (0xe5, 0xa0, 0x0d) # Plex amber
-SPOTIFY_GREEN = (0x1d, 0xb9, 0x54) # Spotify green
-TEXT_WHITE = (0xf8, 0xfa, 0xfc)    # White accent
-DEEZER_PURPLE = (0xa2, 0x59, 0xff) # Deezer/accent purple
+from __future__ import annotations
 
-
-def seg_d(px, py, a, b):
-    ax, ay = a
-    bx, by = b
-    vx, vy = bx - ax, by - ay
-    wx, wy = px - ax, by - ay
-    L2 = vx * vx + vy * vy
-    t = 0.0 if L2 == 0 else max(0.0, min(1.0, (wx * vx + wy * vy) / L2))
-    return math.hypot(wx - t * vx, wy - t * vy)
+import os
+from pathlib import Path
+import shutil
+import subprocess
+import sys
 
 
-def rrect(px, py, size, r):
-    qx = abs(px - size / 2) - (size / 2 - r)
-    qy = abs(py - size / 2) - (size / 2 - r)
-    return math.hypot(max(qx, 0), max(qy, 0)) - r
+def find_repo_root() -> Path:
+    """Find the root directory of the repository."""
+    current = Path(__file__).resolve().parent
+    if (current / "trackseerr.svg").is_file():
+        # current is 'unraid', parent is repo root
+        return current.parent
+    return Path.cwd()
 
 
-def in_tri(p, a, b, c):
-    def sg(p1, p2, p3):
-        return (p1[0] - p3[0]) * (p2[1] - p3[1]) - (p2[0] - p3[0]) * (p1[1] - p3[1])
+def render_svg_to_png(
+    svg_path: Path | str,
+    png_path: Path | str,
+    width: int = 512,
+    height: int = 512,
+) -> bool:
+    """Render an SVG file to a PNG file of the specified dimensions.
 
-    d1, d2, d3 = sg(p, a, b), sg(p, b, c), sg(p, c, a)
-    return not (((d1 < 0) or (d2 < 0) or (d3 < 0)) and ((d1 > 0) or (d2 > 0) or (d3 > 0)))
+    Uses `rsvg-convert` if available in PATH, otherwise falls back to a docker container.
+
+    Args:
+        svg_path: Path to source SVG file.
+        png_path: Path to output PNG file.
+        width: Target width in pixels.
+        height: Target height in pixels.
+
+    Returns:
+        True if rendering succeeded, False otherwise.
+    """
+    svg = Path(svg_path).resolve()
+    png = Path(png_path).resolve()
+
+    if not svg.is_file():
+        print(f"Error: Source SVG not found at {svg}", file=sys.stderr)
+        return False
+
+    png.parent.mkdir(parents=True, exist_ok=True)
+
+    rsvg_bin = shutil.which("rsvg-convert")
+    if rsvg_bin:
+        print(f"Rendering {svg.name} -> {png.name} ({width}x{height}) via local rsvg-convert...")
+        cmd = [
+            rsvg_bin,
+            "-w",
+            str(width),
+            "-h",
+            str(height),
+            str(svg),
+            "-o",
+            str(png),
+        ]
+        try:
+            subprocess.run(cmd, capture_output=True, text=True, check=True)
+            print(f"Successfully generated {png} ({png.stat().st_size} bytes)")
+            return True
+        except subprocess.CalledProcessError as exc:
+            print(f"Local rsvg-convert failed: {exc.stderr}", file=sys.stderr)
+            # Fall through to Docker fallback
+
+    docker_bin = shutil.which("docker")
+    if docker_bin:
+        print(f"Rendering {svg.name} -> {png.name} ({width}x{height}) via Docker fallback...")
+        repo_root = find_repo_root()
+        try:
+            rel_svg = svg.relative_to(repo_root)
+            rel_png = png.relative_to(repo_root)
+        except ValueError:
+            rel_svg = svg
+            rel_png = png
+
+        cmd = [
+            docker_bin,
+            "run",
+            "--rm",
+            "-v",
+            f"{repo_root}:/app",
+            "debian:bookworm-slim",
+            "sh",
+            "-c",
+            (
+                "apt-get update -qq && "
+                "apt-get install -y -qq librsvg2-bin >/dev/null && "
+                f"rsvg-convert -w {width} -h {height} /app/{rel_svg} -o /app/{rel_png} && "
+                f"chown {os.getuid()}:{os.getgid()} /app/{rel_png}"
+            ),
+        ]
+        try:
+            subprocess.run(cmd, capture_output=True, text=True, check=True)
+            if png.is_file():
+                print(f"Successfully generated {png} ({png.stat().st_size} bytes)")
+                return True
+        except subprocess.CalledProcessError as exc:
+            print(f"Docker fallback failed: {exc.stderr}", file=sys.stderr)
+            return False
+
+    print("Error: Neither 'rsvg-convert' nor 'docker' is available to render SVG.", file=sys.stderr)
+    return False
 
 
-def render(path, segs=(), dots=(), tris=()):
-    rows = []
-    for y in range(W):
-        row = bytearray()
-        py = (y + 0.5) / SS
-        for x in range(W):
-            px = (x + 0.5) / SS
-            if rrect(px, py, S, 52) > 0:
-                row += bytes((0, 0, 0, 0))
-                continue
-            col = BG
-            # Render elements in layer order
-            for c, a, b, w in segs:
-                if seg_d(px, py, a, b) <= w:
-                    col = c
-            for c, ctr, r in dots:
-                if math.hypot(px - ctr[0], py - ctr[1]) <= r:
-                    col = c
-            for c, t in tris:
-                if in_tri((px, py), *t):
-                    col = c
-            row += bytes(col + (255,))
-        rows.append(row)
-
-    out = bytearray()
-    for y in range(S):
-        out.append(0)
-        for x in range(S):
-            acc = [0, 0, 0, 0]
-            for dy in range(SS):
-                r = rows[y * SS + dy]
-                for dx in range(SS):
-                    i = (x * SS + dx) * 4
-                    for k in range(4):
-                        acc[k] += r[i + k]
-            out += bytes(v // (SS * SS) for v in acc)
-
-    def chunk(tag, data):
-        return struct.pack(">I", len(data)) + tag + data + struct.pack(">I", zlib.crc32(tag + data) & 0xFFFFFFFF)
-
-    png_bytes = (
-        b"\x89PNG\r\n\x1a\n"
-        + chunk(b"IHDR", struct.pack(">IIBBBBB", S, S, 8, 6, 0, 0, 0))
-        + chunk(b"IDAT", zlib.compress(bytes(out), 9))
-        + chunk(b"IEND", b"")
-    )
-    with open(path, "wb") as f:
-        f.write(png_bytes)
-    print("Wrote", path)
-
-
-def generate_plex_playlist_hub_icon():
-    # Design:
-    # 1. Three playlist bars on the left in Plex Amber (with rounded pill ends via segs)
-    # 2. A circular badge on bottom right with Spotify green & Deezer purple sync dots / music note
-    # 3. Plex amber chevron/play shape
-
-    segs = [
-        # Playlist Bar 1 (Plex Amber)
-        (PLEX_AMBER, (60, 68), (145, 68), 12),
-        # Playlist Bar 2 (Plex Amber)
-        (PLEX_AMBER, (60, 108), (175, 108), 12),
-        # Playlist Bar 3 (Plex Amber)
-        (PLEX_AMBER, (60, 148), (130, 148), 12),
-        # Sync flow arc from Playlist to Badge
-        (SPOTIFY_GREEN, (60, 188), (115, 188), 12),
-
-        # Musical beamed note stem 1
-        (TEXT_WHITE, (168, 198), (168, 140), 5),
-        # Musical note stem 2
-        (TEXT_WHITE, (200, 190), (200, 130), 5),
-        # Note beam
-        (TEXT_WHITE, (168, 140), (200, 130), 7),
+def build_all_icons() -> bool:
+    """Build all TrackSeerr branding icons."""
+    repo_root = find_repo_root()
+    svg_source = repo_root / "unraid" / "trackseerr.svg"
+    targets = [
+        (svg_source, repo_root / "unraid" / "trackseerr.png", 512, 512),
+        (svg_source, repo_root / "plex_playlist_sync" / "static" / "favicon.png", 64, 64),
     ]
 
-    dots = [
-        # Note head 1
-        (TEXT_WHITE, (158, 202), 14),
-        # Note head 2
-        (TEXT_WHITE, (190, 194), 14),
-        # Service accent dots
-        (SPOTIFY_GREEN, (196, 68), 12),
-        (DEEZER_PURPLE, (196, 100), 8),
-    ]
+    success = True
+    for src, dst, w, h in targets:
+        if not render_svg_to_png(src, dst, w, h):
+            success = False
+    return success
 
-    # Plex arrow/play triangle accent
-    play_triangle = (
-        (PLEX_AMBER, ((178, 60), (178, 76), (190, 68)))
-    )
 
-    render("unraid/plex-playlist-hub.png", segs=segs, dots=dots)
+def main() -> int:
+    """CLI entrypoint."""
+    success = build_all_icons()
+    return 0 if success else 1
 
 
 if __name__ == "__main__":
-    generate_plex_playlist_hub_icon()
+    sys.exit(main())

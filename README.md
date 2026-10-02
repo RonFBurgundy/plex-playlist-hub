@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="unraid/trackseerr.png" alt="TrackSeerr Logo" width="180">
+</p>
+
 # TrackSeerr
 
 [![CI](https://github.com/RonFBurgundy/trackseerr/actions/workflows/ci.yml/badge.svg)](https://github.com/RonFBurgundy/trackseerr/actions/workflows/ci.yml)
