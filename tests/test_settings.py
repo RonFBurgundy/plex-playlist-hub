@@ -404,3 +404,81 @@ class TestLidarrSettingsAPI:
             )
             assert resp.status_code == 200
             mock_client_cls.assert_called_once_with(base_url="http://192.168.1.50:8686", api_key="saved-database-secret")
+
+
+class TestGeneralSettingsAPI:
+    """Tests for GET /api/settings/general and POST /api/settings/general."""
+
+    def test_get_general_settings_rbac(self, app_and_client, test_db, test_config, seeded_users):
+        _, client = app_and_client
+
+        # Unauthenticated request
+        resp_unauth = client.get("/api/settings/general")
+        assert resp_unauth.status_code in (401, 403)
+
+        # Non-admin request
+        alice_headers = _auth_headers(seeded_users["alice"], test_db, test_config)
+        resp_non_admin = client.get("/api/settings/general", headers=alice_headers)
+        assert resp_non_admin.status_code == 403
+
+        # Admin request
+        admin_headers = _auth_headers(seeded_users["admin"], test_db, test_config)
+        resp_admin = client.get("/api/settings/general", headers=admin_headers)
+        assert resp_admin.status_code == 200
+        data = resp_admin.json()
+        assert "application_url" in data
+        assert data["application_url"] == ""
+
+    def test_get_general_settings_env_fallback(self, app_and_client, test_db, test_config, seeded_users, monkeypatch):
+        _, client = app_and_client
+        admin_headers = _auth_headers(seeded_users["admin"], test_db, test_config)
+
+        monkeypatch.setenv("APPLICATION_URL", "https://trackseerr.mydomain.com")
+        resp = client.get("/api/settings/general", headers=admin_headers)
+        assert resp.status_code == 200
+        assert resp.json()["application_url"] == "https://trackseerr.mydomain.com"
+
+    def test_post_general_settings_admin_success(self, app_and_client, test_db, test_config, seeded_users):
+        _, client = app_and_client
+        admin_headers = _auth_headers(seeded_users["admin"], test_db, test_config)
+
+        payload = {"application_url": "https://music.home.arpa"}
+        resp = client.post("/api/settings/general", json=payload, headers=admin_headers)
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["application_url"] == "https://music.home.arpa"
+        assert data["updated_at"] is not None
+
+        # Verify DB directly
+        db_settings = test_db.get_general_settings()
+        assert db_settings["application_url"] == "https://music.home.arpa"
+
+    def test_post_general_settings_strips_trailing_slash(self, app_and_client, test_db, test_config, seeded_users):
+        _, client = app_and_client
+        admin_headers = _auth_headers(seeded_users["admin"], test_db, test_config)
+
+        payload = {"application_url": "https://trackseerr.external.io///"}
+        resp = client.post("/api/settings/general", json=payload, headers=admin_headers)
+        assert resp.status_code == 200
+        assert resp.json()["application_url"] == "https://trackseerr.external.io"
+
+    def test_post_general_settings_invalid_scheme_returns_400(self, app_and_client, test_db, test_config, seeded_users):
+        _, client = app_and_client
+        admin_headers = _auth_headers(seeded_users["admin"], test_db, test_config)
+
+        payload = {"application_url": "ftp://files.example.com"}
+        resp = client.post("/api/settings/general", json=payload, headers=admin_headers)
+        assert resp.status_code == 400
+        assert "http://" in resp.json()["detail"] or "https://" in resp.json()["detail"]
+
+    def test_post_general_settings_clear_url(self, app_and_client, test_db, test_config, seeded_users):
+        _, client = app_and_client
+        admin_headers = _auth_headers(seeded_users["admin"], test_db, test_config)
+
+        test_db.update_general_settings({"application_url": "https://old.domain.com"})
+        assert test_db.get_general_settings()["application_url"] == "https://old.domain.com"
+
+        resp = client.post("/api/settings/general", json={"application_url": ""}, headers=admin_headers)
+        assert resp.status_code == 200
+        assert resp.json()["application_url"] == ""
+

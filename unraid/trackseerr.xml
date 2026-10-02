@@ -19,8 +19,12 @@ Key Capabilities:
 - Real-Time Activity Queue: Live transfer progress, speed monitoring, cancellation, and retry controls.
 - Arr-Grade Media Management: Mutagen audio inspection, token template naming engine ({Artist Name}/{Album Title} ({Release Year})/{track:00} - {Track Title}), collision protection, and automated Plex library refresh pings.
 - Playlist Synchronization: Import and synchronize Spotify and Deezer playlists directly into personal Plexamp profiles with keyless scraping and 1-click browser bookmarklets.
+- Hardened Two-Tier DMZ Architecture: Decouple into a stateless public gateway (ROLE=gateway) and internal acquisition core (ROLE=core) for secure exposure behind reverse proxies and Cloudflare Tunnels.
 
-Note: Lidarr automation, Plex settings, download clients, indexers, media management paths, and quotas are configured dynamically in the WebUI Settings.
+Security Advisory for Public Domains / Reverse Proxies:
+When exposing TrackSeerr to the internet via Cloudflare Tunnels, Nginx, Caddy, or Traefik, we strongly recommend deploying in Hardened Two-Tier DMZ Mode rather than monolithic all-in-one mode. In two-tier mode, the public gateway has zero filesystem mounts and zero downloader credentials, protecting your media library from external exploits.
+
+Note: Lidarr automation, Plex settings, download clients, indexers, media management paths, quotas, and Application URL are configured dynamically in the WebUI Settings.
   </Overview>
   <Category>MediaApp:Music MediaServer:Music Tools:Utilities</Category>
   <WebUI>http://[IP]:[PORT:5250]</WebUI>
@@ -37,11 +41,13 @@ Note: Lidarr automation, Plex settings, download clients, indexers, media manage
   
   <Config Name="WebUI &amp; API Port" Target="5250" Default="5250" Mode="tcp" Description="Web Dashboard and REST API port. Accessible in your browser." Type="Port" Display="always" Required="true" Mask="false">5250</Config>
 
+  <Config Name="Application URL" Target="APPLICATION_URL" Default="" Mode="" Description="The external, off-network URL used to access TrackSeerr from outside your home network (e.g. https://trackseerr.yourdomain.com). Used for notification links (Discord, Telegram, Pushover, Email), Plex OAuth forwardUrl redirects, and reverse proxy / Cloudflare Tunnel routing. SECURITY ADVISORY: If exposing TrackSeerr to the internet via reverse proxy or Cloudflare Tunnels with your domain, it is strongly advised to deploy in Hardened Two-Tier DMZ mode (separating the stateless gateway container from the core internal engine via ROLE=gateway / ROLE=core) rather than monolithic all-in-one mode. See documentation." Type="Variable" Display="always" Required="false" Mask="false"></Config>
+
   <Config Name="AppData Storage" Target="/config" Default="/mnt/user/appdata/trackseerr" Mode="rw" Description="Persistent configuration directory for the SQLite database, sessions, and logs." Type="Path" Display="always" Required="true" Mask="false">/mnt/user/appdata/trackseerr</Config>
 
   <Config Name="Data Storage (TRaSH Guides)" Target="/data" Default="/mnt/user/data" Mode="rw" Description="Unified host data share containing both library (/data/media/music) and download staging (/data/downloads) on a single filesystem to enable instant atomic moves and hardlinks." Type="Path" Display="always" Required="true" Mask="false">/mnt/user/data</Config>
 
-  <Config Name="Execution Role" Target="ROLE" Default="all-in-one" Mode="" Description="Container execution role: 'all-in-one' (default, runs web gateway and acquisition worker) or 'gateway'/'core' for two-tier DMZ architectures." Type="Variable" Display="advanced" Required="false" Mask="false">all-in-one</Config>
+  <Config Name="Execution Role" Target="ROLE" Default="all-in-one" Mode="" Description="Container execution role: 'all-in-one' (default monolithic mode for trusted LANs) or 'gateway'/'core' for hardened two-tier DMZ architectures. If exposing to the internet via reverse proxies or Cloudflare Tunnels, running 'gateway' on your DMZ network with zero storage mounts and 'core' on an isolated internal network is strongly recommended." Type="Variable" Display="advanced" Required="false" Mask="false">all-in-one</Config>
 
   <Config Name="Plex Server URL" Target="PLEX_URL" Default="http://192.168.1.100:32400" Mode="" Description="Base URL of your Plex Media Server, using your server's LAN IP and port 32400. IMPORTANT: Do NOT use localhost on bridge networking." Type="Variable" Display="always" Required="true" Mask="false">http://192.168.1.100:32400</Config>
 

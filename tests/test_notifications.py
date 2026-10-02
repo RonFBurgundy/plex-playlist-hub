@@ -400,6 +400,123 @@ class TestNotificationDispatcherSenders:
         mock_server.send_message.assert_called_once()
 
 
+class TestNotificationApplicationUrlLinkbacks:
+    """Tests that application_url is correctly incorporated into outbound notifications."""
+
+    @patch("httpx.Client.post")
+    def test_discord_includes_application_url(self, mock_post):
+        mock_resp = MagicMock()
+        mock_resp.raise_for_status = MagicMock()
+        mock_post.return_value = mock_resp
+
+        dispatcher = NotificationDispatcher()
+        dispatcher._send_discord(
+            webhook_url="https://discord.com/api/webhooks/123/abc",
+            title="Music Requested",
+            message="User requested track",
+            data={"artist": "Artist", "title": "Track", "application_url": "https://music.mydomain.com"},
+        )
+        payload = mock_post.call_args[1]["json"]
+        embed = payload["embeds"][0]
+        assert embed["url"] == "https://music.mydomain.com"
+        field_values = [f["value"] for f in embed["fields"]]
+        assert any("https://music.mydomain.com" in v for v in field_values)
+
+    @patch("httpx.Client.post")
+    def test_telegram_includes_application_url(self, mock_post):
+        mock_resp = MagicMock()
+        mock_resp.raise_for_status = MagicMock()
+        mock_post.return_value = mock_resp
+
+        dispatcher = NotificationDispatcher()
+        dispatcher._send_telegram(
+            bot_token="token",
+            chat_id="12345",
+            title="Music Requested",
+            message="User requested track",
+            data={"application_url": "https://music.mydomain.com"},
+        )
+        payload = mock_post.call_args[1]["json"]
+        assert '<a href="https://music.mydomain.com">Open in TrackSeerr</a>' in payload["text"]
+
+    @patch("httpx.Client.post")
+    def test_pushover_includes_application_url(self, mock_post):
+        mock_resp = MagicMock()
+        mock_resp.raise_for_status = MagicMock()
+        mock_post.return_value = mock_resp
+
+        dispatcher = NotificationDispatcher()
+        dispatcher._send_pushover(
+            user_key="user",
+            app_token="app",
+            title="Title",
+            message="Message",
+            data={"application_url": "https://music.mydomain.com"},
+        )
+        payload = mock_post.call_args[1]["data"]
+        assert payload["url"] == "https://music.mydomain.com"
+        assert payload["url_title"] == "Open in TrackSeerr"
+
+    @patch("httpx.Client.post")
+    def test_webhook_includes_application_url(self, mock_post):
+        mock_resp = MagicMock()
+        mock_resp.raise_for_status = MagicMock()
+        mock_post.return_value = mock_resp
+
+        dispatcher = NotificationDispatcher()
+        dispatcher._send_webhook(
+            webhook_url="https://example.com/hook",
+            event="item_available",
+            data={"artist": "Artist", "application_url": "https://music.mydomain.com"},
+        )
+        payload = mock_post.call_args[1]["json"]
+        assert payload["application_url"] == "https://music.mydomain.com"
+
+    @patch("smtplib.SMTP")
+    def test_email_includes_application_url(self, mock_smtp):
+        mock_server = MagicMock()
+        mock_smtp.return_value.__enter__.return_value = mock_server
+
+        dispatcher = NotificationDispatcher()
+        dispatcher._send_email(
+            smtp_host="smtp.example.com",
+            smtp_port=587,
+            username="user",
+            password="pwd",
+            use_tls=True,
+            use_ssl=False,
+            from_addr="ts@example.com",
+            to_addr="u@example.com",
+            title="Title",
+            message="Body message",
+            data={"application_url": "https://music.mydomain.com"},
+        )
+        sent_msg = mock_server.send_message.call_args[0][0]
+        content = sent_msg.get_content()
+        assert "Open in TrackSeerr: https://music.mydomain.com" in content
+
+    def test_dispatch_populates_application_url_from_db(self, test_db):
+        test_db.update_general_settings({"application_url": "https://trackseerr.mydomain.com"})
+        test_db.create_notification_channel(
+            NotificationChannel(
+                id="c-url-test",
+                name="URL Test",
+                channel_type="webhook",
+                config={"webhook_url": "https://example.com/hook"},
+                events=["item_available"],
+            )
+        )
+        dispatcher = NotificationDispatcher()
+        captured_data = {}
+
+        def capture_send(ch, event, data):
+            captured_data.update(data)
+
+        with patch.object(dispatcher, "_send_to_channel", side_effect=capture_send):
+            dispatcher._run_dispatch("item_available", {"artist": "Artist"}, db=test_db)
+            assert captured_data.get("application_url") == "https://trackseerr.mydomain.com"
+
+
 # =============================================================================
 # 3. Notification Dispatcher Lifecycle & Isolation Tests
 # =============================================================================

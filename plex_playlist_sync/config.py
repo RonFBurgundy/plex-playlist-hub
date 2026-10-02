@@ -83,6 +83,7 @@ class Config:
     backlog_search_interval_minutes: int = 60
     enable_rss_sync: bool = True
     rss_sync_interval_minutes: int = 15
+    application_url: Optional[str] = None
 
     @classmethod
     def from_env(cls) -> "Config":
@@ -171,6 +172,7 @@ class Config:
             backlog_search_interval_minutes=int(os.getenv("BACKLOG_SEARCH_INTERVAL_MINUTES")) if os.getenv("BACKLOG_SEARCH_INTERVAL_MINUTES") and os.getenv("BACKLOG_SEARCH_INTERVAL_MINUTES").isdigit() else 60,
             enable_rss_sync=_parse_bool(os.getenv("ENABLE_RSS_SYNC"), True),
             rss_sync_interval_minutes=int(os.getenv("RSS_SYNC_INTERVAL_MINUTES")) if os.getenv("RSS_SYNC_INTERVAL_MINUTES") and os.getenv("RSS_SYNC_INTERVAL_MINUTES").isdigit() else 15,
+            application_url=(os.getenv("APPLICATION_URL") or os.getenv("APP_URL") or "").strip().rstrip("/") or None,
         )
 
     @property

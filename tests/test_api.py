@@ -146,6 +146,20 @@ class TestAuthEndpoints:
         assert resp.status_code == 200
         mock_create_pin.assert_called_once_with(forward_url="https://trackseerr.local/")
 
+    @patch("plex_playlist_sync.api.routes.auth.create_plex_pin")
+    def test_generate_pin_uses_application_url_as_fallback_forward_url(self, mock_create_pin, app_and_client, test_db):
+        test_db.update_general_settings({"application_url": "https://trackseerr.mydomain.com"})
+        mock_create_pin.return_value = {
+            "id": 12345,
+            "code": "CODE12",
+            "auth_url": "https://app.plex.tv/auth#?clientID=trackseerr&code=CODE12&forwardUrl=https%3A%2F%2Ftrackseerr.mydomain.com",
+        }
+        _, client = app_and_client
+        resp = client.post("/api/auth/plex/pin")
+        assert resp.status_code == 200
+        mock_create_pin.assert_called_once_with(forward_url="https://trackseerr.mydomain.com")
+
+
 
     @patch("plex_playlist_sync.api.routes.auth.create_plex_pin")
     def test_generate_pin_failure_upstream(self, mock_create_pin, app_and_client):

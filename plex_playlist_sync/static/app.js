@@ -312,6 +312,11 @@ document.addEventListener('alpine:init', () => {
         auto_trickle_interval_minutes: 30,
         updated_at: null
       },
+      generalSettings: {
+        application_url: '',
+        updated_at: null,
+      },
+      isSavingGeneral: false,
       isTestingLidarr: false,
       isSavingLidarr: false,
       lidarrTestResult: null,
@@ -2208,6 +2213,7 @@ document.addEventListener('alpine:init', () => {
           this.settingsState.presets = data.presets;
         }
         await this.updatePreview(true);
+        await this.loadGeneralSettings();
         await this.loadLidarrSettings();
         this.loadDownloadClients();
         this.loadIndexers();
@@ -2263,6 +2269,48 @@ document.addEventListener('alpine:init', () => {
       if (hours > 0) return `${hours}h ${mins}m ${secs}s`;
       if (mins > 0) return `${mins}m ${secs}s`;
       return `${secs}s`;
+    },
+
+    async loadGeneralSettings() {
+      try {
+        const data = await this.apiRequest('/api/settings/general');
+        if (data) {
+          this.settingsState.generalSettings = {
+            application_url: data.application_url || '',
+            updated_at: data.updated_at || null,
+          };
+        }
+      } catch (err) {
+        console.error('Failed to load general settings:', err);
+      }
+    },
+
+    async saveGeneralSettings() {
+      if (!this.currentUser?.is_admin) {
+        this.showToast('Administrator privileges required to save settings', 'error');
+        return;
+      }
+      this.settingsState.isSavingGeneral = true;
+      try {
+        const cleanUrl = (this.settingsState.generalSettings.application_url || '').trim().replace(/\/+$/, '');
+        const res = await this.apiRequest('/api/settings/general', {
+          method: 'POST',
+          body: {
+            application_url: cleanUrl
+          }
+        });
+        if (res) {
+          this.settingsState.generalSettings = {
+            application_url: res.application_url || '',
+            updated_at: res.updated_at || null,
+          };
+          this.showToast('General settings saved successfully!', 'success');
+        }
+      } catch (err) {
+        this.showToast(err.message || 'Failed to save general settings', 'error');
+      } finally {
+        this.settingsState.isSavingGeneral = false;
+      }
     },
 
     async loadLidarrSettings() {

@@ -50,9 +50,19 @@ class VerifyPinRequest(BaseModel):
 def generate_pin(
     req: Optional[CreatePinRequest] = None,
     forward_url: Optional[str] = None,
+    db: Database = Depends(get_db),
 ) -> dict[str, Any]:
     """Generates a Plex OAuth PIN and authorization URL."""
     target_forward_url = (req.forward_url if req and req.forward_url else None) or forward_url
+    if not target_forward_url and db is not None:
+        try:
+            general = db.get_general_settings()
+            app_url = str(general.get("application_url") or "").strip().rstrip("/")
+            if app_url:
+                target_forward_url = app_url
+        except Exception as e:
+            logger.debug("Could not resolve application_url for Plex forward_url: %s", e)
+
     try:
         if target_forward_url:
             pin_data = create_plex_pin(forward_url=target_forward_url)

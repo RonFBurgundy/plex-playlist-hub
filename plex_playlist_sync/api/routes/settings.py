@@ -86,6 +86,15 @@ SAMPLE_PREVIEW_ITEMS: list[dict[str, Any]] = [
 ]
 
 
+class GeneralSettingsModel(BaseModel):
+    application_url: str = Field("", description="External application URL for redirects and notifications")
+    updated_at: str | None = None
+
+
+class GeneralSettingsUpdateModel(BaseModel):
+    application_url: str | None = Field(None, description="External application URL (e.g. https://trackseerr.mydomain.com)")
+
+
 class MediaManagementSettingsModel(BaseModel):
     artist_folder_format: str = Field(..., description="Format for artist directory")
     album_folder_format: str = Field(..., description="Format for album directory")
@@ -393,3 +402,56 @@ def test_lidarr_connection(
             version=None,
             error=str(e),
         )
+
+
+# -----------------------------------------------------------------------------
+# General Application Settings Endpoints
+# -----------------------------------------------------------------------------
+
+
+@router.get(
+    "/general",
+    response_model=GeneralSettingsModel,
+    summary="Get General Application Settings",
+)
+def get_general_settings(
+    db: Database = Depends(get_db),
+    current_user: dict[str, Any] = Depends(require_admin),
+) -> GeneralSettingsModel:
+    """Retrieves general system settings including application URL."""
+    settings = db.get_general_settings()
+    return GeneralSettingsModel(**settings)
+
+
+@router.post(
+    "/general",
+    response_model=GeneralSettingsModel,
+    summary="Update General Application Settings (Admin Only)",
+)
+def update_general_settings(
+    payload: GeneralSettingsUpdateModel,
+    db: Database = Depends(get_db),
+    admin_user: dict[str, Any] = Depends(require_admin),
+) -> GeneralSettingsModel:
+    """Admin-only: updates general system settings in database."""
+    updates = payload.model_dump(exclude_unset=True)
+    if "application_url" in updates and updates["application_url"] is not None:
+        url = updates["application_url"].strip().rstrip("/")
+        if url:
+            if not (url.startswith("http://") or url.startswith("https://")):
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Application URL must start with http:// or https://",
+                )
+        updates["application_url"] = url
+
+    try:
+        updated = db.update_general_settings(updates)
+        return GeneralSettingsModel(**updated)
+    except Exception as e:
+        logger.error("Failed to update general settings: %s", e)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Database update failed: {e}",
+        ) from e
+

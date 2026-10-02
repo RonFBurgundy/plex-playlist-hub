@@ -21,6 +21,12 @@ services:
 
       # --- WebUI & Port ---
       - PORT=5250
+      # Optional: Public domain / external URL (e.g. https://trackseerr.yourdomain.com)
+      # Used for notification link-backs, Plex OAuth redirects, and reverse proxy routing.
+      # SECURITY ADVISORY: If exposing TrackSeerr to the internet via Cloudflare Tunnels, Nginx,
+      # Caddy, or Traefik, we strongly recommend deploying the Hardened Two-Tier DMZ mode
+      # (docker-compose.hardened.yml) where the public gateway is stateless with zero volume mounts.
+      # - APPLICATION_URL=https://trackseerr.yourdomain.com
 
       # --- Plex Media Server ---
       # IMPORTANT: Do NOT use localhost (inside bridge containers, localhost refers to the container).

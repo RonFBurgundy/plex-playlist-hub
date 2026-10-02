@@ -20,6 +20,7 @@ services:
     environment:
       - ROLE=gateway
       - TRACKSEERR_CORE_URL=http://trackseerr-core:5251
+      - APPLICATION_URL=https://trackseerr.yourdomain.com
       - PORT=5250
       - PUID=1000
       - PGID=1000
@@ -52,6 +53,7 @@ services:
       - /path/to/data:/data
     environment:
       - ROLE=core
+      - APPLICATION_URL=https://trackseerr.yourdomain.com
       - PORT=5251
       - PUID=1000
       - PGID=1000

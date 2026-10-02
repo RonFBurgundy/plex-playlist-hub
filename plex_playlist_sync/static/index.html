@@ -1688,6 +1688,12 @@
 
             <!-- Sub-tab Navigation -->
             <div class="flex items-center space-x-1 bg-slate-900 p-1 rounded-xl border border-slate-800 overflow-x-auto">
+              <button @click="settingsSubTab = 'general'; loadGeneralSettings()"
+                      :class="settingsSubTab === 'general' ? 'bg-[#e5a00d] text-slate-950 font-bold' : 'text-slate-400 hover:text-slate-200'"
+                      class="px-3.5 py-1.5 rounded-lg text-xs transition flex items-center space-x-1.5 whitespace-nowrap">
+                <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"></path><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"></path></svg>
+                <span>General</span>
+              </button>
               <button @click="settingsSubTab = 'media'"
                       :class="settingsSubTab === 'media' ? 'bg-[#e5a00d] text-slate-950 font-bold' : 'text-slate-400 hover:text-slate-200'"
                       class="px-3.5 py-1.5 rounded-lg text-xs transition flex items-center space-x-1.5 whitespace-nowrap">
@@ -1726,6 +1732,182 @@
               </button>
             </div>
             </div>
+
+          <!-- ================= SUB-TAB 0: GENERAL & NETWORK SETTINGS ================= -->
+          <div x-show="settingsSubTab === 'general'" class="space-y-6">
+            <!-- Action Header & Save Button -->
+            <div class="glass-panel rounded-xl p-4 border border-slate-800 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+              <div class="space-y-1">
+                <span class="text-xs font-semibold text-slate-300">General Application Configuration:</span>
+                <p class="text-[11px] text-slate-400">Configure base external URL, reverse proxy bindings, and inspect container network tiering.</p>
+              </div>
+              <div class="flex items-center space-x-2">
+                <button type="button" @click="saveGeneralSettings()"
+                        :disabled="settingsState.isSavingGeneral"
+                        class="px-4 py-2 rounded-xl text-xs font-bold bg-[#e5a00d] hover:bg-[#d49208] text-slate-950 transition flex items-center space-x-2 shadow-lg shadow-amber-500/10 disabled:opacity-50">
+                  <svg x-show="!settingsState.isSavingGeneral" class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path></svg>
+                  <svg x-show="settingsState.isSavingGeneral" class="w-4 h-4 animate-spin" fill="none" stroke="currentColor" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>
+                  <span>Save General Settings</span>
+                </button>
+              </div>
+            </div>
+
+            <!-- Application URL Card -->
+            <div class="glass-panel rounded-xl p-5 border border-slate-800 space-y-4">
+              <div class="flex items-center justify-between border-b border-slate-800 pb-3">
+                <div class="flex items-center space-x-2.5">
+                  <div class="p-2 rounded-lg bg-amber-500/10 border border-amber-500/20 text-[#e5a00d]">
+                    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 01-9 9m9-9a9 9 0 00-9-9m9 9H3m9 9a9 9 0 01-9-9m9 9c1.657 0 3-4.03 3-9s-1.343-3-9m-3 9a9 9 0 01-9-9m9 9c-1.657 0-3-4.03-3-9s1.343-9 3-9m-9 9a9 9 0 019-9"></path></svg>
+                  </div>
+                  <div>
+                    <h3 class="text-sm font-semibold text-white">Application URL</h3>
+                    <p class="text-[11px] text-slate-400">The external, public-facing URL used to access TrackSeerr from outside your home network</p>
+                  </div>
+                </div>
+                <span x-show="settingsState.generalSettings.updated_at" class="text-[10px] text-slate-500 font-mono">
+                  Updated: <span x-text="new Date(settingsState.generalSettings.updated_at).toLocaleString()"></span>
+                </span>
+              </div>
+
+              <div class="space-y-2">
+                <label class="block text-xs font-medium text-slate-300">External Domain / Base URL</label>
+                <div class="relative">
+                  <input type="text"
+                         x-model="settingsState.generalSettings.application_url"
+                         placeholder="https://trackseerr.yourdomain.com"
+                         class="w-full bg-slate-900 border border-slate-700 rounded-xl px-3.5 py-2 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-[#e5a00d] transition font-mono">
+                </div>
+                <p class="text-[11px] text-slate-400">
+                  Include protocol (<code class="text-amber-400">http://</code> or <code class="text-amber-400">https://</code>) and subdomain/domain. Do not include a trailing slash.
+                </p>
+              </div>
+
+              <div class="grid grid-cols-1 md:grid-cols-3 gap-3 pt-2">
+                <div class="rounded-lg bg-slate-900/60 border border-slate-800 p-3 space-y-1">
+                  <div class="flex items-center space-x-1.5 text-xs font-semibold text-slate-200">
+                    <svg class="w-3.5 h-3.5 text-amber-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9"></path></svg>
+                    <span>Notification Link-backs</span>
+                  </div>
+                  <p class="text-[11px] text-slate-400">
+                    Discord, Telegram, Pushover, Email, and Webhook notifications will include direct links back to your server.
+                  </p>
+                </div>
+                <div class="rounded-lg bg-slate-900/60 border border-slate-800 p-3 space-y-1">
+                  <div class="flex items-center space-x-1.5 text-xs font-semibold text-slate-200">
+                    <svg class="w-3.5 h-3.5 text-amber-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 16l-4-4m0 0l4-4m-4 4h14m-5 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h7a3 3 0 013 3v1"></path></svg>
+                    <span>Plex OAuth Redirects</span>
+                  </div>
+                  <p class="text-[11px] text-slate-400">
+                    Configures the Plex OAuth <code class="text-slate-300">forwardUrl</code> so users automatically return to your custom domain after authenticating.
+                  </p>
+                </div>
+                <div class="rounded-lg bg-slate-900/60 border border-slate-800 p-3 space-y-1">
+                  <div class="flex items-center space-x-1.5 text-xs font-semibold text-slate-200">
+                    <svg class="w-3.5 h-3.5 text-amber-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z"></path></svg>
+                    <span>Reverse Proxy Routing</span>
+                  </div>
+                  <p class="text-[11px] text-slate-400">
+                    Enables smooth navigation and landing when exposed behind Cloudflare Tunnels, Nginx, Caddy, or Traefik.
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            <!-- Security Advisory & DMZ Two-Tier Architecture Banner -->
+            <div class="rounded-xl border border-amber-500/30 bg-amber-500/10 p-5 space-y-4">
+              <div class="flex items-start space-x-3.5">
+                <div class="p-2 rounded-xl bg-amber-500/20 border border-amber-500/40 text-amber-400 shrink-0 mt-0.5">
+                  <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"></path></svg>
+                </div>
+                <div class="space-y-1.5 flex-1">
+                  <div class="flex flex-wrap items-center justify-between gap-2">
+                    <h4 class="text-sm font-bold text-amber-300 flex items-center gap-2">
+                      <span>Security Advisory: Reverse Proxies &amp; Internet Exposure</span>
+                      <span class="px-2 py-0.5 rounded text-[10px] bg-amber-500/20 text-amber-200 border border-amber-500/40 uppercase tracking-wider font-semibold">Recommended Deployment</span>
+                    </h4>
+                    <!-- Current Container Role Badge -->
+                    <div class="flex items-center space-x-1.5 text-xs">
+                      <span class="text-slate-400 text-[11px]">Runtime Role:</span>
+                      <span class="px-2 py-0.5 rounded text-[11px] font-mono font-bold bg-slate-900 text-slate-200 border border-slate-700"
+                            x-text="systemStatus?.environment?.role || 'all-in-one'"></span>
+                    </div>
+                  </div>
+                  <p class="text-xs text-slate-300 leading-relaxed">
+                    If you are exposing TrackSeerr to the internet (via Cloudflare Tunnels, Nginx Proxy Manager, Traefik, Caddy, or router port forwards) and pointing your custom domain here, <strong>we strongly advise deploying in Hardened Two-Tier DMZ Mode</strong> rather than the default monolithic <code>all-in-one</code> mode.
+                  </p>
+                </div>
+              </div>
+
+              <!-- Two-Tier Mode Architecture Breakdown -->
+              <div class="grid grid-cols-1 md:grid-cols-2 gap-3 pt-1">
+                <!-- Monolithic All-In-One Box -->
+                <div class="rounded-xl bg-slate-950/70 border border-slate-800 p-4 space-y-2">
+                  <div class="flex items-center justify-between">
+                    <span class="text-xs font-bold text-slate-200 flex items-center gap-1.5">
+                      <span class="w-2 h-2 rounded-full bg-slate-500"></span>
+                      All-in-One Mode (Default)
+                    </span>
+                    <span class="text-[10px] px-1.5 py-0.5 rounded bg-slate-800 text-slate-400 font-medium">LAN / Trusted</span>
+                  </div>
+                  <p class="text-[11px] text-slate-400 leading-relaxed">
+                    Runs the public web gateway and background worker in a single container. Mounts <code class="text-slate-300">/music</code> and <code class="text-slate-300">/downloads</code> directly, and stores download client credentials in memory. Suitable for private home networks, but exposes internal storage to external ingress if breached.
+                  </p>
+                </div>
+
+                <!-- Hardened Two-Tier DMZ Box -->
+                <div class="rounded-xl bg-slate-950/70 border border-amber-500/30 p-4 space-y-2 relative overflow-hidden">
+                  <div class="absolute -top-10 -right-10 w-24 h-24 bg-amber-500/5 rounded-full blur-xl pointer-events-none"></div>
+                  <div class="flex items-center justify-between">
+                    <span class="text-xs font-bold text-amber-300 flex items-center gap-1.5">
+                      <span class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
+                      Hardened Two-Tier DMZ Mode
+                    </span>
+                    <span class="text-[10px] px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-200 border border-amber-500/30 font-semibold">Recommended for WAN</span>
+                  </div>
+                  <p class="text-[11px] text-slate-300 leading-relaxed">
+                    Splits the application into two isolated containers across Docker networks:
+                  </p>
+                  <ul class="text-[11px] text-slate-400 space-y-1 list-disc list-inside pl-1">
+                    <li><strong class="text-slate-200">Tier 1 (<code class="text-amber-400">trackseerr-gateway</code>):</strong> Placed on the reverse proxy network. Completely stateless with <em>zero filesystem volume mounts</em>, <em>zero media storage access</em>, and <em>zero downloader credentials</em>.</li>
+                    <li><strong class="text-slate-200">Tier 2 (<code class="text-amber-400">trackseerr-core</code>):</strong> Isolated on a private internal bridge with no WAN exposure. Safely manages downloaders, indexers, <code class="text-slate-300">/music</code>, and <code class="text-slate-300">/downloads</code>.</li>
+                  </ul>
+                </div>
+              </div>
+
+              <!-- Current Posture Status Box -->
+              <div class="rounded-lg bg-slate-900/90 border border-slate-800 p-3 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs">
+                <div class="flex items-center space-x-2">
+                  <template x-if="(systemStatus?.environment?.role || 'all-in-one') === 'all-in-one'">
+                    <div class="flex items-center space-x-2 text-amber-300">
+                      <svg class="w-4 h-4 shrink-0 text-amber-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+                      <span class="text-[11px]">Notice: Container is currently running in <strong>all-in-one</strong> mode. If you are exposing TrackSeerr via public reverse proxy or Cloudflare Tunnels, switch to <code>docker-compose.hardened.yml</code>.</span>
+                    </div>
+                  </template>
+                  <template x-if="(systemStatus?.environment?.role || '') === 'gateway'">
+                    <div class="flex items-center space-x-2 text-emerald-400">
+                      <svg class="w-4 h-4 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+                      <span class="text-[11px]">Hardened Posture Active: Running as <strong>Tier 1 Stateless Gateway</strong>. Media storage is protected from internet ingress.</span>
+                    </div>
+                  </template>
+                  <template x-if="(systemStatus?.environment?.role || '') === 'core'">
+                    <div class="flex items-center space-x-2 text-blue-400">
+                      <svg class="w-4 h-4 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"></path></svg>
+                      <span class="text-[11px]">Core Posture Active: Running as <strong>Tier 2 Internal Core</strong>. Protected on internal Docker bridge.</span>
+                    </div>
+                  </template>
+                </div>
+                <div class="shrink-0">
+                  <a href="https://github.com/RonFBurgundy/trackseerr/blob/main/docs/ARCHITECTURE_AND_SECURITY.md"
+                     target="_blank"
+                     rel="noopener noreferrer"
+                     class="inline-flex items-center space-x-1 text-[11px] text-amber-400 hover:text-amber-300 font-semibold underline underline-offset-2">
+                    <span>View Two-Tier DMZ Deployment Guide</span>
+                    <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"></path></svg>
+                  </a>
+                </div>
+              </div>
+            </div>
+          </div>
 
           <!-- ================= SUB-TAB 1: MEDIA MANAGEMENT ================= -->
           <div x-show="settingsSubTab === 'media'" class="space-y-6">

@@ -371,6 +371,7 @@ class TestDOMIntegrity:
     """Validates HTML tag balance and settings sub-tab hierarchy."""
 
     EXPECTED_SETTINGS_SUBTABS: frozenset[str] = frozenset({
+        "general",
         "media",
         "clients",
         "indexers",

@@ -503,3 +503,33 @@ class TestAcquisitionStorage:
         assert mem_db.get_active_download(dl["id"]) is None
 
 
+class TestGeneralSettingsStorage:
+    """Tests for migration v16 and general_settings CRUD in storage."""
+
+    def test_migration_v16_initializes_general_settings(self, mem_db):
+        cur = mem_db.conn.execute("SELECT * FROM general_settings WHERE id = 1")
+        row = cur.fetchone()
+        assert row is not None
+        assert row["id"] == 1
+        assert row["application_url"] == ""
+
+    def test_get_general_settings_defaults_and_env(self, mem_db, monkeypatch):
+        settings = mem_db.get_general_settings()
+        assert settings["id"] == 1
+        assert settings["application_url"] == ""
+
+        # Test fallback to env when empty in DB
+        monkeypatch.setenv("APPLICATION_URL", "https://app.local.domain")
+        settings_env = mem_db.get_general_settings()
+        assert settings_env["application_url"] == "https://app.local.domain"
+
+    def test_update_general_settings(self, mem_db):
+        updated = mem_db.update_general_settings({"application_url": "https://music.home.arpa/"})
+        assert updated["application_url"] == "https://music.home.arpa"
+
+        retrieved = mem_db.get_general_settings()
+        assert retrieved["application_url"] == "https://music.home.arpa"
+        assert retrieved["updated_at"] is not None
+
+
+

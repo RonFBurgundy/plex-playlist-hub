@@ -189,6 +189,7 @@ services:
     environment:
       - ROLE=gateway
       - TRACKSEERR_CORE_URL=http://trackseerr-core:5251
+      - APPLICATION_URL=https://trackseerr.yourdomain.com
       - PORT=5250
       - PUID=1000
       - PGID=1000
@@ -234,11 +235,29 @@ networks:
 
 ---
 
+### Internet Exposure, Reverse Proxies & Application URL
+
+TrackSeerr includes a first-class **Application URL** setting (configurable in the WebUI under **Settings -> General**, or via the `APPLICATION_URL` environment variable). This setting defines the canonical public-facing domain (e.g. `https://trackseerr.yourdomain.com`) used for:
+- **Notification Link-backs**: Outbound alerts on Discord, Telegram, Pushover, Email, and Webhooks include clickable links directing users back to TrackSeerr on your external domain.
+- **Plex OAuth Redirects**: Sets the Plex `forwardUrl` callback so users are redirected straight back to your custom domain after authenticating with Plex.
+- **Reverse Proxy / Cloudflare Tunnel Routing**: Coordinates external routing, preventing broken redirects and mismatched landing paths.
+
+> [!WARNING]
+> **Security Advisory: Internet Exposure & Reverse Proxies**
+> If you are pointing a public domain or Cloudflare Tunnel to TrackSeerr, **we strongly advise deploying in Hardened Two-Tier DMZ Mode (`docker-compose.hardened.yml`)** rather than the monolithic `all-in-one` mode.
+> 
+> In monolithic `all-in-one` mode, a single container holds both the public web gateway and direct filesystem access to `/music`, `/downloads`, and downloader API keys. In contrast, Two-Tier DMZ mode splits TrackSeerr into:
+> - **Tier 1 (`trackseerr-gateway`)**: Exposed to the reverse proxy / DMZ network with **zero filesystem volume mounts**, **zero media access**, and **zero downloader credentials**.
+> - **Tier 2 (`trackseerr-core`)**: Isolated on a private internal bridge with no public ports, holding your media libraries, Mutagen scanner, and download clients safely behind the network boundary.
+
+---
+
 ## Configuration Reference
 
 | Variable | Default | Description |
 |---|---|---|
 | `ROLE` | `all-in-one` | Container execution mode: `all-in-one`, `gateway`, or `core` |
+| `APPLICATION_URL` | *Optional* | Canonical external URL (e.g. `https://trackseerr.yourdomain.com`) for notifications, Plex OAuth redirects, and reverse proxies |
 | `TRACKSEERR_CORE_URL` | *None* | Core endpoint URL required when running in `gateway` mode |
 | `LIBRARY_MODE` | `native` | Operational mode: `native` for full TrackSeerr catalog & library management, or `lidarr` for external Lidarr delegation |
 | `PORT` | `5250` | Port for the web service |

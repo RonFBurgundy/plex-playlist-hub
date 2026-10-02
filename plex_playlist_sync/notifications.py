@@ -124,6 +124,9 @@ class NotificationDispatcher:
             embed["fields"].append({"name": "Details", "value": str(data["problem_details"])[:1024], "inline": False})
         if data.get("client"):
             embed["fields"].append({"name": "Client", "value": str(data["client"]), "inline": True})
+        if data.get("application_url"):
+            embed["url"] = str(data["application_url"])
+            embed["fields"].append({"name": "TrackSeerr", "value": f"[Open TrackSeerr]({data['application_url']})", "inline": True})
         if data.get("cover_url"):
             embed["thumbnail"] = {"url": str(data["cover_url"])}
 
@@ -152,6 +155,9 @@ class NotificationDispatcher:
         escaped_title = html.escape(title)
         escaped_message = html.escape(message)
         text = f"<b>{escaped_title}</b>\n{escaped_message}"
+        if data.get("application_url"):
+            app_url = html.escape(str(data["application_url"]))
+            text += f'\n\n<a href="{app_url}">Open in TrackSeerr</a>'
 
         payload = {
             "chat_id": str(chat_id),
@@ -182,6 +188,9 @@ class NotificationDispatcher:
             "title": title[:250],
             "message": message[:1024],
         }
+        if data.get("application_url"):
+            payload["url"] = str(data["application_url"])
+            payload["url_title"] = "Open in TrackSeerr"
 
         with httpx.Client(timeout=10.0) as client:
             resp = client.post(url, data=payload)
@@ -207,6 +216,8 @@ class NotificationDispatcher:
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "data": data,
         }
+        if data.get("application_url"):
+            payload["application_url"] = str(data["application_url"])
 
         with httpx.Client(timeout=10.0) as client:
             resp = client.post(webhook_url, json=payload, headers=headers)
@@ -224,6 +235,7 @@ class NotificationDispatcher:
         to_addr: str,
         title: str,
         message: str,
+        data: Optional[dict[str, Any]] = None,
     ) -> None:
         """Dispatches an email notification via standard library SMTP."""
         if not smtp_host:
@@ -233,11 +245,15 @@ class NotificationDispatcher:
         if not to_addr:
             raise ValueError("Missing 'to_addr' in Email configuration")
 
+        body = message
+        if data and data.get("application_url"):
+            body += f"\n\nOpen in TrackSeerr: {data['application_url']}"
+
         msg = EmailMessage()
         msg["Subject"] = f"[TrackSeerr] {title}"
         msg["From"] = from_addr
         msg["To"] = to_addr
-        msg.set_content(message)
+        msg.set_content(body)
 
         port = int(smtp_port) if smtp_port else (465 if use_ssl else 587)
 
@@ -333,6 +349,7 @@ class NotificationDispatcher:
                 to_addr=to_addr or "",
                 title=title,
                 message=message,
+                data=data,
             )
         else:
             raise ValueError(f"Unsupported notification channel type '{channel_type}'")
@@ -354,6 +371,20 @@ class NotificationDispatcher:
                 except Exception as e:
                     logger.warning("Could not resolve database instance for notification dispatch: %s", e)
                     return
+
+            if not data.get("application_url"):
+                try:
+                    if database is not None:
+                        gen_cfg = database.get_general_settings()
+                        if gen_cfg.get("application_url"):
+                            data["application_url"] = gen_cfg["application_url"]
+                except Exception as e:
+                    logger.debug("Could not resolve application_url for notification: %s", e)
+            if not data.get("application_url"):
+                import os
+                env_url = (os.getenv("APPLICATION_URL") or os.getenv("APP_URL") or "").strip().rstrip("/")
+                if env_url:
+                    data["application_url"] = env_url
 
             channels = database.list_notification_channels(enabled_only=True)
         except Exception as e:
@@ -414,6 +445,12 @@ class NotificationDispatcher:
             "username": "admin",
             "item_type": "track",
         }
+        import os
+
+        env_url = (os.getenv("APPLICATION_URL") or os.getenv("APP_URL") or "").strip().rstrip("/")
+        if env_url:
+            synthetic_data["application_url"] = env_url
+
         dummy_channel = {
             "id": "test-channel",
             "name": "Live Test Channel",

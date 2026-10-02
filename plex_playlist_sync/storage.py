@@ -166,6 +166,7 @@ class Database:
                 (13, self._migration_v13),
                 (14, self._migration_v14),
                 (15, self._migration_v15),
+                (16, self._migration_v16),
             ]
 
             for version, migration_fn in migrations:
@@ -763,6 +764,20 @@ class Database:
         )
         cur.execute(
             "CREATE INDEX IF NOT EXISTS idx_lib_files_cutoff ON library_files(cutoff_met);"
+        )
+
+    def _migration_v16(self, cur: sqlite3.Cursor) -> None:
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS general_settings (
+                id INTEGER PRIMARY KEY CHECK (id = 1),
+                application_url TEXT NOT NULL DEFAULT '',
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+            """
+        )
+        cur.execute(
+            "INSERT OR IGNORE INTO general_settings (id, application_url) VALUES (1, '');"
         )
 
     # -------------------------------------------------------------------------
@@ -1634,6 +1649,46 @@ class Database:
                 self.conn.commit()
 
         return self.get_media_management_settings()
+
+    # -------------------------------------------------------------------------
+    # General Settings CRUD
+    # -------------------------------------------------------------------------
+
+    def get_general_settings(self) -> dict[str, Any]:
+        """Retrieves general system settings (singleton row id=1), falling back to env."""
+        with self._lock:
+            cur = self.conn.execute("SELECT * FROM general_settings WHERE id = 1")
+            row = cur.fetchone()
+            if not row:
+                self.conn.execute("INSERT OR IGNORE INTO general_settings (id, application_url) VALUES (1, '')")
+                self.conn.commit()
+                cur = self.conn.execute("SELECT * FROM general_settings WHERE id = 1")
+                row = cur.fetchone()
+            res = dict(row) if row else {"id": 1, "application_url": "", "updated_at": None}
+            res["application_url"] = str(res.get("application_url") or "").strip().rstrip("/")
+            if not res["application_url"]:
+                env_url = (os.getenv("APPLICATION_URL") or os.getenv("APP_URL") or "").strip().rstrip("/")
+                res["application_url"] = env_url
+            return res
+
+    def update_general_settings(self, settings: dict[str, Any]) -> dict[str, Any]:
+        """Updates general system settings (singleton row id=1)."""
+        allowed_keys = {"application_url"}
+        updates: dict[str, Any] = {}
+        for k, v in settings.items():
+            if k in allowed_keys and v is not None:
+                updates[k] = str(v).strip().rstrip("/")
+
+        if updates:
+            set_clauses = [f"{k} = ?" for k in updates.keys()]
+            set_clauses.append("updated_at = CURRENT_TIMESTAMP")
+            values = list(updates.values())
+            query = f"UPDATE general_settings SET {', '.join(set_clauses)} WHERE id = 1"
+            with self._lock:
+                self.conn.execute(query, values)
+                self.conn.commit()
+
+        return self.get_general_settings()
 
     # -------------------------------------------------------------------------
     # Lidarr Settings CRUD

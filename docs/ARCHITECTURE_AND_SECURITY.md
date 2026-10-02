@@ -154,6 +154,7 @@ services:
     environment:
       - ROLE=gateway
       - TRACKSEERR_CORE_URL=http://trackseerr-core:5251
+      - APPLICATION_URL=https://trackseerr.yourdomain.com
       - PORT=5250
       - PUID=1000
       - PGID=1000
@@ -176,6 +177,7 @@ services:
       - /path/to/downloads:/downloads
     environment:
       - ROLE=core
+      - APPLICATION_URL=https://trackseerr.yourdomain.com
       - PORT=5251
       - PUID=1000
       - PGID=1000
@@ -199,6 +201,28 @@ networks:
     name: trackseerr-internal-net
     internal: true
 ```
+
+### Reverse Proxy, Cloudflare Tunnels & Application URL Security Guidance
+
+When exposing TrackSeerr to the internet and configuring a custom domain or Cloudflare Tunnel, an **Application URL** (`APPLICATION_URL`, configured via **Settings -> General** in the web dashboard or container environment) should be specified.
+
+#### Why Application URL is Essential
+1. **Outbound Notification Link-backs**: When TrackSeerr dispatches notifications to Discord, Telegram, Pushover, Email, or Webhooks (e.g. on new requests, approvals, or completed downloads), it generates clickable links pointing users back to the specific resource on your public domain.
+2. **Plex OAuth Redirects (`forwardUrl`)**: During the Plex PIN OAuth flow, TrackSeerr automatically passes the canonical `APPLICATION_URL` as the `forwardUrl` callback. This guarantees that after a user signs in at `app.plex.tv`, Plex redirects the user's browser seamlessly back to your custom domain rather than an inaccessible local IP or loopback address.
+3. **Reverse Proxy and Tunnel Integration**: Eliminates path collisions, incorrect port references, and broken base URLs when routing ingress through Cloudflare Tunnels, Nginx Proxy Manager, Traefik, or Caddy.
+
+#### Why Two-Tier DMZ Mode is Strongly Advised for Internet Exposure
+In a default monolithic homelab deployment (`ROLE=all-in-one`), a single container hosts both the public web interface and has direct volume mounts to `/music`, `/downloads`, and credentials for download clients (slskd, SABnzbd, qBittorrent, Lidarr).
+
+If an attacker were to exploit an ingress vulnerability in the web tier, a monolithic container exposes:
+- Direct read/write/delete access to host music collections and downloaded media.
+- Download client credentials, API tokens, and internal network coordinates.
+- Persistent SQLite application databases and Plex administrator tokens.
+
+**The Hardened Two-Tier Architecture completely neutralizes this threat**:
+- **Tier 1 (`trackseerr-gateway`)** is the only container connected to your reverse proxy network (`proxynet`). It has **zero volume mounts**, **zero media access**, and **zero downloader credentials**. If breached, an attacker gains no access to your media files, download clients, or host storage.
+- **Tier 2 (`trackseerr-core`)** sits isolated on `internal-net` with no ingress from the outside world. All media mutations, Mutagen tag processing, and download client controls remain safely insulated behind the gateway boundary.
+
 
 ### Two-Tier Gateway Library Availability Boundary
 

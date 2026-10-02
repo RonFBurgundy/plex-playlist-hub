@@ -57,13 +57,19 @@ Because both staging and library directories reside on the same `/data` containe
 | **Plex Token** | *(blank)* | Plex admin token (`X-Plex-Token`). Found in any Plex item XML view. |
 | **Plex Music Section** | `Music` | Exact name of your music library section in Plex. |
 | **Plex SSL Verification** | `1` | Set to `0` if using self-signed certificates. |
+| **Application URL** | *(blank)* | Public URL (e.g. `https://music.example.com`) for reverse proxy redirects and notification link-backs. |
 | **Feed Token** | *(blank)* | Optional: Secret key to protect RSS feeds and webhooks. |
 | **PUID / PGID** | `99` / `100` | Unraid nobody:users permissions for file compatibility. |
 | **Umask** | `022` | File creation permissions. |
 
 > [!TIP]
 > **Lidarr & Acquisition Configuration in WebUI**:
-> Lidarr connection URL, API key, auto-search triggers, paced trickle rate, batch sizes, automated trickle schedules, download clients, and indexers are configured dynamically directly within the **WebUI -> Settings** panel, eliminating the need to manage dozens of Docker template variables. |
+> Lidarr connection URL, API key, auto-search triggers, paced trickle rate, batch sizes, automated trickle schedules, download clients, and indexers are configured dynamically directly within the **WebUI -> Settings** panel, eliminating the need to manage dozens of Docker template variables.
+
+### Remote Access and Reverse Proxies
+When exposing TrackSeerr to the internet through Cloudflare Tunnels, Nginx, Traefik, or Caddy:
+1. Configure **Application URL** (`APPLICATION_URL`) with your full public domain (e.g., `https://music.example.com`). This ensures Plex OAuth sign-in redirects and notification links resolve to your public endpoint.
+2. For internet exposure, using the hardened Two-Tier DMZ topology (`ROLE=gateway` in DMZ, `ROLE=core` on internal LAN) is strongly recommended over exposing a single `all-in-one` container. See [Architecture and Security](file:///home/ron/workspaces/trackseerr/docs/ARCHITECTURE_AND_SECURITY.md) for architecture details.
 
 Important note regarding container networking:
 Because Docker containers run in bridge networking mode, `localhost` refers to the container itself, not the Unraid host. Always use your Unraid server's actual LAN IP address (for example, `http://192.168.1.100:32400`) rather than `http://localhost:32400`.
@@ -126,6 +132,7 @@ services:
       - UMASK=022
       - ROLE=all-in-one
       - PORT=5250
+      - APPLICATION_URL=https://music.example.com  # Optional: public reverse proxy URL
       - PLEX_URL=http://192.168.1.100:32400
       - PLEX_TOKEN=your_plex_token_here
       - PLEX_MUSIC_SECTION=Music
