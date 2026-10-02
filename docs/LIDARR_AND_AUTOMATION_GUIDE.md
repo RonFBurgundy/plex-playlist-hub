@@ -11,15 +11,109 @@ Both approaches support automated self-healing, where newly acquired tracks are 
 
 ## Architecture Comparison
 
-| Capability | Native Drivers (slskd, SABnzbd, qBittorrent) | Lidarr Integration |
+| Capability | Native Library Mode (TrackSeerr) | Lidarr Integration Mode |
 |---|---|---|
+| Library cataloging & browsing | Yes (Built-in Library tab & REST API) | Via Lidarr WebUI |
+| Granular monitoring | Full hierarchy (Artist, Album, & Track level) | Artist & Album level only |
+| Filesystem scanner & drift detection | Yes (Recursive `/music` Mutagen scanner) | Delegated to Lidarr disk scan |
+| Interactive manual import | Yes (Glass modal with confidence ratings) | Via Lidarr Manual Import |
+| 1-click Lidarr migration importer | Yes (Extracts catalog, MBIDs & files via API) | N/A |
 | Single-track surgical matching | Yes (via slskd) | No (Lidarr operates at album level) |
 | Usenet acquisition | Yes (via SABnzbd + Newznab) | Yes (via Lidarr download clients) |
 | Torrent acquisition | Yes (via qBittorrent + Torznab) | Yes (via Lidarr download clients) |
 | Tag inspection | Mutagen (FLAC, MP3, M4A, Opus) | Lidarr internal tagger |
 | File renaming and moving | Built-in token template engine | Lidarr media management |
-| External dependencies | Downloader daemon only | Full Lidarr container and database |
+| External dependencies | Downloader daemons only | Full Lidarr container and database |
 | Volume mounts required | `/music` and `/downloads` | None on TrackSeerr (handled by Lidarr) |
+
+---
+
+## Operational Modes: Native TrackSeerr vs External Lidarr
+
+TrackSeerr's operational behavior is controlled by the `LIBRARY_MODE` setting (`native` or `lidarr`), configurable via environment variable or in the Web UI under **Settings** -> **Media Management** -> **Library Management Mode**.
+
+### Mode Behavior Comparison
+
+| Dimension | `LIBRARY_MODE=native` (Default) | `LIBRARY_MODE=lidarr` |
+|---|---|---|
+| **Role** | Standalone Arr-grade media manager & coordinator | Request & discovery gateway for Lidarr |
+| **Catalog Authority** | TrackSeerr SQLite (`library_artists`, `albums`, `tracks`, `files`) | Lidarr SQLite / database |
+| **Acquisition Routing** | Native drivers (slskd, SABnzbd, qBittorrent) | Paced trickle worker pushes to Lidarr |
+| **Media Operations** | Internal scanner, manual importer, batch renamer | Delegated exclusively to Lidarr |
+| **Plex Integration** | Direct refresh notifications from TrackSeerr | Triggered by Lidarr or TrackSeerr webhook |
+
+### Tab Visibility and User Experience
+- **Native Mode**: The **Library** tab is unlocked across desktop transport bays and mobile navigation drawers for all authenticated users (and administrators). Family members and administrators can browse existing catalog artists, albums, and tracks with live playback quality indicators and cutoff status badges.
+- **Lidarr Mode**: The Library tab is concealed from standard users in navigation drawers to streamline the experience into an Overseerr-style request and discovery portal. Administrators retain access to management and settings, while missing music is routed directly through Lidarr's acquisition pipeline.
+
+### Split-Brain Collision Prevention
+Running two autonomous media organizers against the same filesystem leads to critical race conditions:
+1. **File Locking & Incomplete Scans**: If TrackSeerr and Lidarr simultaneously attempt to rename, tag, or move incoming files, cross-process write locks will fail or corrupt audio tags.
+2. **Naming Discrepancies**: Different token formatting templates cause ping-pong renames between tools.
+3. **Database Drift**: Files moved or deleted by one tool become ghost records in the other.
+
+When set to `LIBRARY_MODE=lidarr`, TrackSeerr automatically disables native background filesystem scans, locks disk mutation routes (`/manual-import/commit`, `/rename/apply`), and operates purely as an ingress and trickle gateway. This boundary guarantees zero split-brain collisions.
+
+---
+
+## Native Library Management Suite
+
+In `native` mode, TrackSeerr exposes an Arr-grade media management interface via the **Library** dashboard.
+
+### 1. Library Dashboard & Metric Ribbon
+The top of the Library tab displays a real-time 6-metric summary ribbon:
+- **Artists**: Total catalog artists, annotated with monitored count.
+- **Albums**: Total indexed albums.
+- **Tracks**: Total cataloged tracks, annotated with monitored count.
+- **Disk Files**: Total physical audio files linked in `library_files`.
+- **Below Cutoff**: Tracks currently below the active Quality Profile cutoff, flagged with amber badges indicating available upgrade opportunities.
+- **Total Storage**: Aggregated physical byte footprint formatted with human-readable binary prefixes (GB/TB).
+
+A transport toolbar provides sub-tab switching between **Artists**, **Albums**, and **Tracks**, a 300ms debounced search filter, a monitoring filter dropdown (`All` vs `Monitored Only`), and administrative action triggers: **Scan Disk**, **Manual Import**, **Rename Files**, and **Import Lidarr**.
+
+### 2. Hierarchical Catalog Browsing & Monitoring
+TrackSeerr maintains a 3-tier catalog hierarchy:
+- **Artists Sub-Tab**: Rendered as responsive cards displaying artist names, album and track counts, and an interactive tactile toggle switch. Toggling artist monitoring cascades through all child albums and tracks.
+- **Albums Sub-Tab**: Card grid featuring lazy-loaded cover art (with `/static/placeholder.svg` fallbacks), release year, track counts, drill-down buttons, and album-level monitoring toggles.
+- **Tracks Sub-Tab**: Tabular view displaying track numbers, track titles, artist and album links, audio format badges (FLAC, MP3, AAC, Missing), quality cutoff indicators (**Meets Cutoff**, **Below Cutoff**, **Missing File**), inline monitoring toggles, and manual upgrade triggers opening the interactive release browser.
+
+### 3. Recursive Filesystem Scanner (`/music`)
+TrackSeerr includes a non-destructive recursive filesystem scanner designed to index and synchronize media:
+- **Triggering**: Click **Scan Disk** in the Library toolbar or dispatch `POST /api/library/scan`.
+- **Mutagen Tag & Stream Extraction**: Iterates over all audio files (`.flac`, `.mp3`, `.m4a`, `.aac`, `.opus`, `.ogg`, `.wav`) in `/music`, extracting codec, bitrate, sample rate, bit depth, channel layout, track number, disc number, release year, album artist, artist, and titles.
+- **Catalog Synchronization**: Automatically creates or links records across `library_artists`, `library_albums`, `library_tracks`, and `library_files`.
+- **Quality Cutoff Evaluation**: Compares technical stream metrics against the configured Quality Profile (e.g. FLAC 16-bit / 24-bit, MP3 320), marking `cutoff_met` accordingly.
+- **Pruning Missing Files**: When triggered with `prune_missing=True`, the scanner removes orphaned `library_files` and cleans up empty albums or artists if disk files were deleted externally.
+- **Plex Library Refresh**: Once the scan cycle completes, TrackSeerr automatically signals Plex Media Server to refresh the music library section.
+- **Async Execution & Cancellation**: Runs in a managed background thread with live status polling via `GET /api/library/scan/status` and instant cancellation support via `POST /api/library/scan/cancel`.
+
+### 4. Interactive Manual Import Queue
+For media from external downloads, CD rips, or unorganized staging directories:
+1. Click **Manual Import** in the Library toolbar to open the glass modal.
+2. Enter the folder path within `/downloads` or approved media mounts and click **Scan Folder** (`POST /api/library/manual-import/scan`).
+3. TrackSeerr reads the audio tags of all files and executes fuzzy matching against your catalog, assigning a match confidence score (0–100%).
+4. The candidate table displays detected artist, album, track, format badge, and confidence rating. Operators can reassign metadata or select candidate rows.
+5. Select the **Import Mode**:
+   - `move`: Safely relocates the file into the library structure.
+   - `hardlink`: Creates hardlinks on supported filesystems (TRaSH Guides single-share structure).
+   - `copy`: Duplicates the file, preserving original downloads for seeding.
+6. Optional **Write Standardized Tags**: Check the box to rewrite normalized ID3v2.4 or Vorbis tags using Mutagen before moving.
+7. Click **Import Selected Files** (`POST /api/library/manual-import/commit`) to execute atomic cross-mount moves and register the files in the catalog.
+
+### 5. Token Template Batch Renamer
+To fix non-standard filenames or migrate to a new naming convention:
+1. Click **Rename Files** in the Library toolbar to open the renamer modal (`POST /api/library/rename/preview`).
+2. TrackSeerr compares disk paths for all cataloged files against your configured Arr naming template (e.g. `{Artist Name}/{Album Title} ({Release Year})/{track:00} - {Track Title}{[ (Quality Full)]}`).
+3. A diff table renders existing paths alongside proposed target paths, highlighting modified directories or filenames.
+4. Filter by specific artist or album, or select all files requiring rename.
+5. Click **Apply Renames** (`POST /api/library/rename/apply`). TrackSeerr validates target paths against directory traversal, applies collision protection, executes cross-device safe atomic moves, updates database records, and notifies Plex.
+
+### 6. Quality Cutoffs and Automated Upgrade Paths
+TrackSeerr prevents stagnant low-quality audio:
+- When a track is acquired in lower quality (e.g. MP3 128kbps or 320kbps), it is tagged `cutoff_unmet=True`.
+- The track remains in the monitored state even though it is playable in Plex.
+- During scheduled 15-minute RSS indexer syncs and hourly backlog sweeps, TrackSeerr prioritizes snatched releases that satisfy the configured Quality Profile cutoff (such as lossless FLAC).
+- When a higher-quality release is imported, TrackSeerr replaces the lower-quality file, updates `library_files`, and recalculates cutoff status.
 
 ---
 
@@ -199,6 +293,55 @@ services:
 
 ---
 
+## Migrating from Lidarr to Native TrackSeerr
+
+If you are currently running Lidarr, you can seamlessly migrate your entire library catalog, monitored artist preferences, track files, and MusicBrainz identifiers into TrackSeerr using the built-in 1-click migration engine.
+
+### Prerequisites
+1. Ensure your Lidarr container is running and reachable from TrackSeerr.
+2. Configure your Lidarr connection in TrackSeerr under **Settings** -> **Lidarr**:
+   - **Host URL**: e.g. `http://192.168.1.100:8686` or `http://lidarr:8686`
+   - **API Key**: Lidarr API key from Lidarr **Settings** -> **General** -> **Security**
+3. Click **Test Connection** to confirm HTTP 200 connectivity.
+
+### Executing the 1-Click Migration
+
+#### Via the Web Dashboard
+1. Navigate to the **Library** tab.
+2. In the toolbar, click the amber **Import Lidarr** action button.
+3. Confirm the dialog prompt: *"Migrate your full Lidarr catalog, artists, albums, tracks, and physical files into TrackSeerr? This will automatically switch operational mode to native."*
+4. A progress indicator will display the migration status live.
+
+#### Via the REST API
+Dispatch a POST request to the migration endpoint:
+```bash
+curl -X POST http://localhost:5250/api/library/migrate-lidarr \
+  -H "Content-Type: application/json" \
+  -d '{"auto_switch_mode": true}'
+```
+
+### Migration Pipeline Lifecycle
+The background `LidarrMigrationJob` executes the following steps:
+1. **Catalog Extraction**:
+   - Queries `GET /api/v1/artist` to retrieve all artists, their monitoring status, and MusicBrainz Artist IDs (`foreign_artist_id`).
+   - Queries `GET /api/v1/album` to fetch all albums, release dates, types (Studio, EP, Single), and MusicBrainz Release Group IDs (`foreign_album_id`).
+   - Queries `GET /api/v1/track` to ingest all track numbers, disc numbers, titles, and MusicBrainz Recording IDs (`foreign_track_id`).
+   - Queries `GET /api/v1/trackfile` to extract physical file locations, audio codecs, sample rates, bit depths, bitrates, and file sizes.
+2. **Schema Ingestion & Quality Mapping**:
+   - Upserts records into `library_artists`, `library_albums`, `library_tracks`, and `library_files`.
+   - Normalizes audio quality profiles (e.g. Lidarr's quality definitions are mapped to `FLAC 24bit`, `FLAC 16bit`, `MP3 320`, etc.).
+   - Evaluates cutoff compliance against TrackSeerr's configured Quality Profiles.
+3. **Automatic Mode Transition**:
+   - When `auto_switch_mode=true` (the default), TrackSeerr updates the `library_mode` setting in SQLite to `native`.
+   - The frontend reactively exposes the Library tab, and native background acquisition and monitoring engines take over immediately.
+   - Lidarr can subsequently be stopped or kept as a secondary reference without causing media collisions.
+
+### Monitoring and Cancellation
+- **Check Status**: `GET /api/library/migrate-lidarr/status` returns current counts (`artists_migrated`, `albums_migrated`, `tracks_migrated`, `files_migrated`) and lifecycle phase (`idle`, `running`, `completed`, `failed`, `cancelled`).
+- **Cancel Migration**: Dispatch `POST /api/library/migrate-lidarr/cancel` to safely halt ingestion between batches.
+
+---
+
 ## Automated Self-Healing Webhook Loop
 
 To update user playlists immediately when Lidarr completes a download, configure a webhook in Lidarr pointing to TrackSeerr.
@@ -258,6 +401,7 @@ When set, feed and webhook endpoints require authentication via:
 
 | Variable | Default | Description |
 |---|---|---|
+| `LIBRARY_MODE` | `native` | Operational mode: `native` for full TrackSeerr catalog & library management, or `lidarr` for external Lidarr delegation |
 | `LIDARR_URL` | *None* | Base URL to your Lidarr server (e.g. `http://192.168.1.100:8686`) |
 | `LIDARR_API_KEY` | *None* | Lidarr API Key |
 | `LIDARR_AUTO_SEARCH` | `1` | Automatically trigger interactive searches when pushing to Lidarr (`1` or `0`) |
