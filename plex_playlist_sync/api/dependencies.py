@@ -43,8 +43,13 @@ def get_db() -> Database:
         else:
             db_path = str(Path(db_env).resolve())
     else:
-        # Default to /data/sync_db.sqlite, resolved securely within data_dir
-        base_dir = os.getenv("DATA_DIR", config.data_dir)
+        # Resolve base directory prioritizing CONFIG_DIR, then /config if a dir, then DATA_DIR / config.data_dir
+        if os.getenv("CONFIG_DIR"):
+            base_dir = str(os.getenv("CONFIG_DIR")).strip()
+        elif os.path.isdir("/config"):
+            base_dir = "/config"
+        else:
+            base_dir = os.getenv("DATA_DIR", config.data_dir).strip()
         db_path = str(safe_data_path("sync_db.sqlite", base_dir=base_dir))
 
     with _db_lock:
@@ -176,19 +181,57 @@ def require_admin(current_user: dict[str, Any] = Depends(get_current_user)) -> d
     return current_user
 
 
-def get_lidarr_client(config: Config = Depends(get_config)) -> Optional[LidarrClient]:
-    """Dependency providing LidarrClient if configured."""
-    if not config.has_lidarr:
-        return None
+def get_lidarr_client(
+    db: Database = Depends(get_db),
+    config: Config = Depends(get_config),
+) -> Optional[LidarrClient]:
+    """Dependency providing LidarrClient using DB-backed settings with env fallback."""
+    lidarr_settings = db.get_lidarr_settings()
+    url = lidarr_settings.get("url")
+    api_key = lidarr_settings.get("api_key")
+    auto_search = lidarr_settings.get("auto_search", True)
+    root_folder = lidarr_settings.get("root_folder")
+    quality_profile_id = lidarr_settings.get("quality_profile_id")
+    metadata_profile_id = lidarr_settings.get("metadata_profile_id")
+
+    if not (url and api_key):
+        if config.has_lidarr:
+            url = config.lidarr_url
+            api_key = config.lidarr_api_key
+            auto_search = config.lidarr_auto_search
+            root_folder = config.lidarr_root_folder
+            quality_profile_id = config.lidarr_quality_profile_id
+            metadata_profile_id = config.lidarr_metadata_profile_id
+            # Seed the DB so subsequent requests use DB
+            try:
+                db.update_lidarr_settings(
+                    {
+                        "url": url,
+                        "api_key": api_key,
+                        "auto_search": auto_search,
+                        "root_folder": root_folder,
+                        "quality_profile_id": quality_profile_id,
+                        "metadata_profile_id": metadata_profile_id,
+                        "trickle_rate_seconds": config.lidarr_trickle_rate_seconds,
+                        "trickle_batch_size": config.lidarr_trickle_batch_size,
+                        "auto_trickle": config.lidarr_auto_trickle,
+                        "auto_trickle_interval_minutes": config.lidarr_auto_trickle_interval_minutes,
+                    }
+                )
+            except Exception as e:
+                logger.warning("Failed to seed Lidarr settings to DB: %s", e)
+        else:
+            return None
+
     try:
         return LidarrClient(
-            base_url=config.lidarr_url,  # type: ignore[arg-type]
-            api_key=config.lidarr_api_key,  # type: ignore[arg-type]
+            base_url=str(url),
+            api_key=str(api_key),
             verify_ssl=config.plex_verify_ssl,
-            auto_search=config.lidarr_auto_search,
-            root_folder=config.lidarr_root_folder,
-            quality_profile_id=config.lidarr_quality_profile_id,
-            metadata_profile_id=config.lidarr_metadata_profile_id,
+            auto_search=bool(auto_search),
+            root_folder=root_folder,
+            quality_profile_id=quality_profile_id,
+            metadata_profile_id=metadata_profile_id,
         )
     except Exception as e:
         logger.error("Failed to initialize LidarrClient: %s", e)

@@ -34,7 +34,7 @@ services:
   # ---------------------------------------------------------------------------
   # Tier 2: Core Engine & Downloader Coordinator (Internal Isolated Network)
   # No public port mappings. Exclusively accessible via internal network.
-  # Holds persistent database, music library (/music), and download staging (/downloads).
+  # Holds persistent database (/config) and unified TRaSH Guides data share (/data).
   # Peered directly with slskd, SABnzbd, qBittorrent, and Plex Media Server.
   # ---------------------------------------------------------------------------
   trackseerr-core:
@@ -44,9 +44,12 @@ services:
     expose:
       - "5251"
     volumes:
-      - ./data:/data
-      - /path/to/music:/music
-      - /path/to/downloads:/downloads
+      # AppData storage for persistent SQLite database, auth sessions, and logs
+      - ./appdata:/config
+      # TRaSH Guides recommended unified data share.
+      # Contains both library (/data/media/music) and completed downloads (/data/downloads)
+      # on the same filesystem mount to enable instant atomic moves and hardlinks.
+      - /path/to/data:/data
     environment:
       - ROLE=core
       - PORT=5251

@@ -19,6 +19,8 @@ Key Capabilities:
 - Real-Time Activity Queue: Live transfer progress, speed monitoring, cancellation, and retry controls.
 - Arr-Grade Media Management: Mutagen audio inspection, token template naming engine ({Artist Name}/{Album Title} ({Release Year})/{track:00} - {Track Title}), collision protection, and automated Plex library refresh pings.
 - Playlist Synchronization: Import and synchronize Spotify and Deezer playlists directly into personal Plexamp profiles with keyless scraping and 1-click browser bookmarklets.
+
+Note: Lidarr automation, Plex settings, download clients, indexers, media management paths, and quotas are configured dynamically in the WebUI Settings.
   </Overview>
   <Category>MediaApp:Music MediaServer:Music Tools:Utilities</Category>
   <WebUI>http://[IP]:[PORT:5250]</WebUI>
@@ -35,11 +37,9 @@ Key Capabilities:
   
   <Config Name="WebUI &amp; API Port" Target="5250" Default="5250" Mode="tcp" Description="Web Dashboard and REST API port. Accessible in your browser." Type="Port" Display="always" Required="true" Mask="false">5250</Config>
 
-  <Config Name="AppData Storage" Target="/data" Default="/mnt/user/appdata/trackseerr" Mode="rw" Description="Persistent directory for the SQLite database, sessions, sync logs, and missing track exports." Type="Path" Display="always" Required="true" Mask="false">/mnt/user/appdata/trackseerr</Config>
+  <Config Name="AppData Storage" Target="/config" Default="/mnt/user/appdata/trackseerr" Mode="rw" Description="Persistent configuration directory for the SQLite database, sessions, and logs." Type="Path" Display="always" Required="true" Mask="false">/mnt/user/appdata/trackseerr</Config>
 
-  <Config Name="Music Library Storage" Target="/music" Default="/mnt/user/data/media/music" Mode="rw" Description="Optional: Host path to your organized music directory. Required when using native acquisition drivers (slskd, SABnzbd, qBittorrent) to place organized tracks into Plex. Optional if using Lidarr for file management." Type="Path" Display="advanced" Required="false" Mask="false">/mnt/user/data/media/music</Config>
-
-  <Config Name="Download Staging Storage" Target="/downloads" Default="/mnt/user/data/downloads" Mode="rw" Description="Optional: Host path to your download staging directory. Required when using native acquisition drivers to import completed transfers into your music library. Optional if using Lidarr." Type="Path" Display="advanced" Required="false" Mask="false">/mnt/user/data/downloads</Config>
+  <Config Name="Data Storage (TRaSH Guides)" Target="/data" Default="/mnt/user/data" Mode="rw" Description="Unified host data share containing both library (/data/media/music) and download staging (/data/downloads) on a single filesystem to enable instant atomic moves and hardlinks." Type="Path" Display="always" Required="true" Mask="false">/mnt/user/data</Config>
 
   <Config Name="Execution Role" Target="ROLE" Default="all-in-one" Mode="" Description="Container execution role: 'all-in-one' (default, runs web gateway and acquisition worker) or 'gateway'/'core' for two-tier DMZ architectures." Type="Variable" Display="advanced" Required="false" Mask="false">all-in-one</Config>
 
@@ -52,20 +52,6 @@ Key Capabilities:
   <Config Name="Plex Machine Identifier" Target="PLEX_MACHINE_IDENTIFIER" Default="" Mode="" Description="Plex server machine identifier for multi-user access pinning. Leave blank to auto-detect." Type="Variable" Display="advanced" Required="false" Mask="false"></Config>
 
   <Config Name="Plex SSL Verification" Target="PLEX_VERIFY_SSL" Default="1" Mode="" Description="Set to 0 if your Plex Media Server uses a self-signed certificate without valid chain." Type="Variable" Display="advanced" Required="false" Mask="false">1</Config>
-
-  <Config Name="Lidarr URL" Target="LIDARR_URL" Default="" Mode="" Description="Optional: Base URL to your Lidarr server (e.g. http://192.168.1.100:8686) for automated missing track acquisition." Type="Variable" Display="always" Required="false" Mask="false"></Config>
-
-  <Config Name="Lidarr API Key" Target="LIDARR_API_KEY" Default="" Mode="" Description="Optional: Lidarr API Key (from Settings &gt; General &gt; Security) for automated missing track acquisition." Type="Variable" Display="always" Required="false" Mask="true"></Config>
-
-  <Config Name="Lidarr Auto-Search" Target="LIDARR_AUTO_SEARCH" Default="1" Mode="" Description="Trigger interactive search immediately when queuing missing tracks in Lidarr (1 or 0)." Type="Variable" Display="advanced" Required="false" Mask="false">1</Config>
-
-  <Config Name="Lidarr Trickle Rate (Seconds)" Target="LIDARR_TRICKLE_RATE_SECONDS" Default="3.0" Mode="" Description="Delay in seconds between artist lookups during background trickle push to prevent rate limits." Type="Variable" Display="advanced" Required="false" Mask="false">3.0</Config>
-
-  <Config Name="Lidarr Trickle Batch Size" Target="LIDARR_TRICKLE_BATCH_SIZE" Default="25" Mode="" Description="Number of tracks pushed per manual batch or scheduled drip." Type="Variable" Display="advanced" Required="false" Mask="false">25</Config>
-
-  <Config Name="Lidarr Auto Trickle" Target="LIDARR_AUTO_TRICKLE" Default="0" Mode="" Description="Set to 1 to enable scheduled automated background trickle drips." Type="Variable" Display="advanced" Required="false" Mask="false">0</Config>
-
-  <Config Name="Lidarr Auto Trickle Interval (Minutes)" Target="LIDARR_AUTO_TRICKLE_INTERVAL_MINUTES" Default="30" Mode="" Description="Interval in minutes between automated background trickle runs." Type="Variable" Display="advanced" Required="false" Mask="false">30</Config>
 
   <Config Name="Feed Access Token" Target="FEED_TOKEN" Default="" Mode="" Description="Optional: Secret token to protect RSS feeds, plain text lists, and webhook endpoints if exposed to untrusted networks." Type="Variable" Display="advanced" Required="false" Mask="true"></Config>
 

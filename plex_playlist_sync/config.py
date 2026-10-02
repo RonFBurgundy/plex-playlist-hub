@@ -52,6 +52,7 @@ class Config:
     search_similarity_threshold: float = 0.9
     log_level: str = "INFO"
     data_dir: str = "/data"
+    config_dir: str = "/config"
 
     spotify_client_id: Optional[str] = None
     spotify_client_secret: Optional[str] = None
@@ -115,6 +116,7 @@ class Config:
             wait_sec = 86400
 
         data_path = os.getenv("DATA_DIR", "/data").strip()
+        config_path = (os.getenv("CONFIG_DIR") or ("/config" if os.path.isdir("/config") else os.getenv("DATA_DIR", "/data"))).strip()
 
         try:
             port = int(os.getenv("PORT", "5250"))
@@ -138,6 +140,7 @@ class Config:
             search_similarity_threshold=threshold,
             log_level=os.getenv("LOG_LEVEL", "INFO").upper(),
             data_dir=data_path,
+            config_dir=config_path,
             spotify_client_id=os.getenv("SPOTIFY_CLIENT_ID") or None,
             spotify_client_secret=os.getenv("SPOTIFY_CLIENT_SECRET") or None,
             spotify_user_id=os.getenv("SPOTIFY_USER_ID") or None,

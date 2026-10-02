@@ -227,10 +227,25 @@ document.addEventListener('alpine:init', () => {
         standard_track_format: '{track:00} - {Track Title}{[ (Quality Full)]}',
         compilation_track_format: '{track:00} - {Artist Name} - {Track Title}{[ (Quality Full)]}',
         multi_disc_folder_format: '{Medium Format} {medium:00}',
-        root_folder_path: '/music',
+        root_folder_path: '/data/media/music',
+        staging_folder_path: '/data/downloads',
+        import_mode: 'move',
         colon_replacement_format: ' - ',
         clean_artist_names: true
       },
+      lidarrSettings: {
+        url: '',
+        api_key: '',
+        auto_search: true,
+        trickle_rate_seconds: 3.0,
+        trickle_batch_size: 25,
+        auto_trickle: false,
+        auto_trickle_interval_minutes: 30,
+        updated_at: null
+      },
+      isTestingLidarr: false,
+      isSavingLidarr: false,
+      lidarrTestResult: null,
       presets: {},
       previewPaths: [],
       isLoading: false,
@@ -1808,7 +1823,9 @@ document.addEventListener('alpine:init', () => {
             standard_track_format: data.settings.standard_track_format || '{track:00} - {Track Title}{[ (Quality Full)]}',
             compilation_track_format: data.settings.compilation_track_format || '{track:00} - {Artist Name} - {Track Title}{[ (Quality Full)]}',
             multi_disc_folder_format: data.settings.multi_disc_folder_format || '{Medium Format} {medium:00}',
-            root_folder_path: data.settings.root_folder_path || '/music',
+            root_folder_path: data.settings.root_folder_path || '/data/media/music',
+            staging_folder_path: data.settings.staging_folder_path || '/data/downloads',
+            import_mode: data.settings.import_mode || 'move',
             colon_replacement_format: data.settings.colon_replacement_format || ' - ',
             clean_artist_names: Boolean(data.settings.clean_artist_names),
           };
@@ -1817,12 +1834,87 @@ document.addEventListener('alpine:init', () => {
           this.settingsState.presets = data.presets;
         }
         await this.updatePreview(true);
+        await this.loadLidarrSettings();
         this.loadDownloadClients();
         this.loadIndexers();
       } catch (err) {
         console.error('Failed to load media management settings:', err);
       } finally {
         this.settingsState.isLoading = false;
+      }
+    },
+
+    async loadMediaManagementSettings() {
+      return this.loadSettings();
+    },
+
+    async loadLidarrSettings() {
+      try {
+        const data = await this.apiRequest('/api/settings/lidarr');
+        if (data) {
+          this.settingsState.lidarrSettings = {
+            url: data.url || '',
+            api_key: data.api_key || '',
+            auto_search: data.auto_search !== undefined ? Boolean(data.auto_search) : true,
+            root_folder: data.root_folder || '',
+            quality_profile_id: data.quality_profile_id ?? null,
+            metadata_profile_id: data.metadata_profile_id ?? null,
+            trickle_rate_seconds: data.trickle_rate_seconds !== undefined ? Number(data.trickle_rate_seconds) : 3.0,
+            trickle_batch_size: data.trickle_batch_size !== undefined ? Number(data.trickle_batch_size) : 25,
+            auto_trickle: Boolean(data.auto_trickle),
+            auto_trickle_interval_minutes: data.auto_trickle_interval_minutes !== undefined ? Number(data.auto_trickle_interval_minutes) : 30,
+            updated_at: data.updated_at || null,
+          };
+        }
+      } catch (err) {
+        console.error('Failed to load Lidarr settings:', err);
+      }
+    },
+
+    async saveLidarrSettings() {
+      if (!this.currentUser?.is_admin) {
+        this.showToast('Administrator privileges required to save settings', 'error');
+        return;
+      }
+      this.settingsState.isSavingLidarr = true;
+      try {
+        const res = await this.apiRequest('/api/settings/lidarr', {
+          method: 'POST',
+          body: this.settingsState.lidarrSettings
+        });
+        if (res) {
+          this.settingsState.lidarrSettings = {
+            ...this.settingsState.lidarrSettings,
+            ...res
+          };
+          this.showToast('Lidarr settings saved successfully!', 'success');
+        }
+      } catch (err) {
+        this.showToast(err.message || 'Failed to save Lidarr settings', 'error');
+      } finally {
+        this.settingsState.isSavingLidarr = false;
+      }
+    },
+
+    async testLidarrSettings() {
+      this.settingsState.isTestingLidarr = true;
+      this.settingsState.lidarrTestResult = null;
+      try {
+        const res = await this.apiRequest('/api/settings/lidarr/test', {
+          method: 'POST',
+          body: {
+            url: this.settingsState.lidarrSettings.url,
+            api_key: this.settingsState.lidarrSettings.api_key
+          }
+        });
+        this.settingsState.lidarrTestResult = res;
+      } catch (err) {
+        this.settingsState.lidarrTestResult = {
+          online: false,
+          error: err.message || 'Connection test failed'
+        };
+      } finally {
+        this.settingsState.isTestingLidarr = false;
       }
     },
 

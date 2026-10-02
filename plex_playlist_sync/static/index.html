@@ -1122,6 +1122,12 @@
                 <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"></path></svg>
                 <span>Indexers</span>
               </button>
+              <button @click="settingsSubTab = 'lidarr'; loadLidarrSettings()"
+                      :class="settingsSubTab === 'lidarr' ? 'bg-[#e5a00d] text-slate-950 font-bold' : 'text-slate-400 hover:text-slate-200'"
+                      class="px-3.5 py-1.5 rounded-lg text-xs transition flex items-center space-x-1.5 whitespace-nowrap">
+                <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3"></path></svg>
+                <span>Lidarr Automation</span>
+              </button>
               <button @click="settingsSubTab = 'status'"
                       :class="settingsSubTab === 'status' ? 'bg-[#e5a00d] text-slate-950 font-bold' : 'text-slate-400 hover:text-slate-200'"
                       class="px-3.5 py-1.5 rounded-lg text-xs transition flex items-center space-x-1.5 whitespace-nowrap">
@@ -1180,17 +1186,49 @@
                   <span>Directory & Track Formats</span>
                 </h3>
 
-                <!-- Root Folder Path -->
-                <div class="space-y-1.5">
-                  <label class="text-xs font-semibold text-slate-300">Root Music Folder</label>
-                  <input type="text" x-model="settingsState.mediaManagement.root_folder_path" @input="updatePreview()"
-                         placeholder="/music"
-                         class="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs text-slate-200 focus:outline-none focus:border-amber-500 font-mono">
-                  <p class="text-[11px] text-slate-500">Root directory where library tracks and albums will reside</p>
+                <!-- TRaSH Guides Architecture Callout -->
+                <div class="p-3.5 rounded-xl bg-amber-500/10 border border-amber-500/20 text-xs text-amber-200/90 leading-relaxed space-y-1">
+                  <div class="font-bold flex items-center space-x-1.5 text-amber-400">
+                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+                    <span>TRaSH Guides Volume Alignment</span>
+                  </div>
+                  <p class="text-[11px] text-slate-300">
+                    TRaSH Guides Architecture: Map your host media root to container <code class="px-1 py-0.5 rounded bg-slate-900 text-amber-400 font-mono">/data</code>. When staging (<code class="px-1 py-0.5 rounded bg-slate-900 text-amber-400 font-mono">/data/downloads</code>) and music (<code class="px-1 py-0.5 rounded bg-slate-900 text-amber-400 font-mono">/data/media/music</code>) reside on the same mount, atomic moves and hardlinks execute instantaneously with zero disk duplication.
+                  </p>
                 </div>
 
-                <!-- Colon Replacement & Clean Artist Names -->
-                <div class="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-1">
+                <!-- Storage Paths: Root Music Folder & Staging Folder -->
+                <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <!-- Root Folder Path -->
+                  <div class="space-y-1.5">
+                    <label class="text-xs font-semibold text-slate-300">Root Music Folder</label>
+                    <input type="text" x-model="settingsState.mediaManagement.root_folder_path" @input="updatePreview()"
+                           placeholder="/data/media/music"
+                           class="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs text-slate-200 focus:outline-none focus:border-amber-500 font-mono">
+                    <p class="text-[11px] text-slate-500">Root directory where library tracks and albums will reside</p>
+                  </div>
+
+                  <!-- Staging Folder Path -->
+                  <div class="space-y-1.5">
+                    <label class="text-xs font-semibold text-slate-300">Staging Folder Path</label>
+                    <input type="text" x-model="settingsState.mediaManagement.staging_folder_path"
+                           placeholder="/data/downloads"
+                           class="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs text-slate-200 focus:outline-none focus:border-amber-500 font-mono">
+                    <p class="text-[11px] text-slate-500">Completed transfer directory watched by background organizer</p>
+                  </div>
+                </div>
+
+                <!-- Import Mode & Colon Replacement & Clean Artist Names -->
+                <div class="grid grid-cols-1 sm:grid-cols-3 gap-4 pt-1">
+                  <div class="space-y-1.5">
+                    <label class="text-xs font-semibold text-slate-300">Import Mode</label>
+                    <select x-model="settingsState.mediaManagement.import_mode"
+                            class="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs text-slate-200 focus:outline-none focus:border-amber-500">
+                      <option value="move">Atomic Move (Replaces downloaded file)</option>
+                      <option value="hardlink">Hardlink (Recommended - preserves seeding torrents)</option>
+                    </select>
+                    <p class="text-[11px] text-slate-500">File placement method for completed transfers</p>
+                  </div>
                   <div class="space-y-1.5">
                     <label class="text-xs font-semibold text-slate-300">Colon Replacement Format</label>
                     <select x-model="settingsState.mediaManagement.colon_replacement_format" @change="updatePreview()"
@@ -1199,7 +1237,7 @@
                       <option value="_">Underscore ('_')</option>
                       <option value=" ">Space (' ')</option>
                     </select>
-                    <p class="text-[11px] text-slate-500">Cross-platform replacement for Windows-illegal colons</p>
+                    <p class="text-[11px] text-slate-500">Cross-platform replacement for colons</p>
                   </div>
                   <div class="space-y-1.5 flex flex-col justify-end">
                     <label class="flex items-center space-x-2.5 p-2 rounded-lg bg-slate-950/60 border border-slate-800 cursor-pointer hover:border-slate-700 transition">
@@ -1207,7 +1245,7 @@
                              class="rounded bg-slate-900 border-slate-700 text-amber-500 focus:ring-0">
                       <span class="text-xs text-slate-300 font-medium">Clean Artist Names</span>
                     </label>
-                    <p class="text-[11px] text-slate-500">Strip leading 'The', 'A', 'An' from folders</p>
+                    <p class="text-[11px] text-slate-500">Strip leading 'The', 'A', 'An'</p>
                   </div>
                 </div>
 
@@ -1463,6 +1501,148 @@
                   </div>
                 </div>
               </template>
+            </div>
+          <!-- ================= SUB-TAB: LIDARR AUTOMATION ================= -->
+          <div x-show="settingsSubTab === 'lidarr'" class="space-y-6">
+            <!-- Header & Action Buttons -->
+            <div class="glass-panel rounded-xl p-4 border border-slate-800 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+              <div>
+                <h3 class="text-base font-bold text-white flex items-center space-x-2">
+                  <svg class="w-4 h-4 text-[#e5a00d]" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3"></path></svg>
+                  <span>Lidarr Automation &amp; Pacing Settings</span>
+                </h3>
+                <p class="text-xs text-slate-400">Configure connection to your Lidarr instance, automatic searches, and paced background trickle queuing</p>
+              </div>
+              <div class="flex items-center space-x-3">
+                <!-- Test Connection Button -->
+                <button type="button" @click="testLidarrSettings()"
+                        :disabled="settingsState.isTestingLidarr || !settingsState.lidarrSettings.url"
+                        class="px-3.5 py-2 rounded-xl text-xs font-semibold border border-slate-700 hover:border-slate-600 bg-slate-900 hover:bg-slate-800 text-slate-200 transition flex items-center space-x-1.5 disabled:opacity-50 disabled:cursor-not-allowed">
+                  <template x-if="settingsState.isTestingLidarr">
+                    <div class="w-3.5 h-3.5 border-2 border-amber-400 border-t-transparent rounded-full animate-spin"></div>
+                  </template>
+                  <svg x-show="!settingsState.isTestingLidarr" class="w-3.5 h-3.5 text-amber-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path></svg>
+                  <span>Test Connection</span>
+                </button>
+
+                <!-- Save Lidarr Settings Button -->
+                <button type="button" @click="saveLidarrSettings()"
+                        :disabled="settingsState.isSavingLidarr || !currentUser?.is_admin"
+                        class="px-4 py-2 rounded-xl text-xs font-bold transition flex items-center space-x-2"
+                        :class="currentUser?.is_admin ? 'bg-[#e5a00d] hover:bg-[#d4940c] text-slate-950 shadow-lg shadow-amber-500/10' : 'bg-slate-800 text-slate-500 cursor-not-allowed'">
+                  <template x-if="settingsState.isSavingLidarr">
+                    <div class="w-3.5 h-3.5 border-2 border-slate-950 border-t-transparent rounded-full animate-spin"></div>
+                  </template>
+                  <svg x-show="!settingsState.isSavingLidarr" class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path></svg>
+                  <span>Save Lidarr Settings</span>
+                </button>
+              </div>
+            </div>
+
+            <!-- Test Connection Result Notification -->
+            <template x-if="settingsState.lidarrTestResult">
+              <div class="p-3.5 rounded-xl border flex items-center justify-between text-xs transition"
+                   :class="settingsState.lidarrTestResult.online ? 'bg-emerald-950/40 border-emerald-500/30 text-emerald-300' : 'bg-rose-950/40 border-rose-500/30 text-rose-300'">
+                <div class="flex items-center space-x-2.5">
+                  <template x-if="settingsState.lidarrTestResult.online">
+                    <span class="w-2.5 h-2.5 rounded-full bg-emerald-400"></span>
+                  </template>
+                  <template x-if="!settingsState.lidarrTestResult.online">
+                    <span class="w-2.5 h-2.5 rounded-full bg-rose-500"></span>
+                  </template>
+                  <span x-text="settingsState.lidarrTestResult.online ? ('Connection successful! Lidarr version ' + (settingsState.lidarrTestResult.version || 'detected')) : ('Connection failed: ' + (settingsState.lidarrTestResult.error || 'Unknown error'))"></span>
+                </div>
+                <button type="button" @click="settingsState.lidarrTestResult = null" class="text-slate-400 hover:text-white">&times;</button>
+              </div>
+            </template>
+
+            <!-- Settings Form Cards -->
+            <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 items-start">
+              <!-- Server Connection Card -->
+              <div class="glass-panel rounded-xl p-5 border border-slate-800 space-y-4">
+                <h4 class="text-sm font-bold text-white border-b border-slate-800 pb-2 flex items-center space-x-2">
+                  <svg class="w-4 h-4 text-[#e5a00d]" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 12h14M5 12a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v4a2 2 0 01-2 2M5 12a2 2 0 00-2 2v4a2 2 0 002 2h14a2 2 0 002-2v-4a2 2 0 00-2-2m-2-4h.01M17 16h.01"></path></svg>
+                  <span>Lidarr Server Connection</span>
+                </h4>
+
+                <!-- Host URL -->
+                <div class="space-y-1.5">
+                  <label class="text-xs font-semibold text-slate-300">Host URL</label>
+                  <input type="text" x-model="settingsState.lidarrSettings.url"
+                         placeholder="http://192.168.1.100:8686"
+                         class="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs text-slate-200 focus:outline-none focus:border-amber-500 font-mono">
+                  <p class="text-[11px] text-slate-500">Base URL of your Lidarr server (LAN IP and port, not localhost)</p>
+                </div>
+
+                <!-- API Key -->
+                <div class="space-y-1.5" x-data="{ showKey: false }">
+                  <div class="flex items-center justify-between">
+                    <label class="text-xs font-semibold text-slate-300">API Key</label>
+                    <button type="button" @click="showKey = !showKey" class="text-[10px] text-amber-400 hover:text-amber-300" x-text="showKey ? 'Hide Key' : 'Reveal Key'"></button>
+                  </div>
+                  <input :type="showKey ? 'text' : 'password'" x-model="settingsState.lidarrSettings.api_key"
+                         placeholder="Lidarr API Key"
+                         class="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs text-slate-200 focus:outline-none focus:border-amber-500 font-mono">
+                  <p class="text-[11px] text-slate-500">Found in Lidarr under Settings &gt; General &gt; Security &gt; API Key</p>
+                </div>
+
+                <!-- Auto Search Toggle -->
+                <div class="pt-2">
+                  <label class="flex items-center space-x-2.5 p-3 rounded-lg bg-slate-950/60 border border-slate-800 cursor-pointer hover:border-slate-700 transition">
+                    <input type="checkbox" x-model="settingsState.lidarrSettings.auto_search"
+                           class="rounded bg-slate-900 border-slate-700 text-amber-500 focus:ring-0">
+                    <div>
+                      <span class="text-xs text-slate-200 font-medium">Automatic Interactive Search</span>
+                      <p class="text-[11px] text-slate-400">Trigger automatic search when missing tracks are queued into Lidarr</p>
+                    </div>
+                  </label>
+                </div>
+              </div>
+
+              <!-- Pacing & Automation Card -->
+              <div class="glass-panel rounded-xl p-5 border border-slate-800 space-y-4">
+                <h4 class="text-sm font-bold text-white border-b border-slate-800 pb-2 flex items-center space-x-2">
+                  <svg class="w-4 h-4 text-[#e5a00d]" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+                  <span>Paced Trickle &amp; Background Automation</span>
+                </h4>
+
+                <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <!-- Paced Trickle Rate -->
+                  <div class="space-y-1.5">
+                    <label class="text-xs font-semibold text-slate-300">Paced Trickle Rate (seconds)</label>
+                    <input type="number" step="0.5" min="1.0" x-model.number="settingsState.lidarrSettings.trickle_rate_seconds"
+                           class="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs text-slate-200 focus:outline-none focus:border-amber-500">
+                    <p class="text-[11px] text-slate-500">Delay between artist queries (min 1.0s) to protect MusicBrainz</p>
+                  </div>
+
+                  <!-- Trickle Batch Size -->
+                  <div class="space-y-1.5">
+                    <label class="text-xs font-semibold text-slate-300">Trickle Batch Size</label>
+                    <input type="number" min="1" max="500" x-model.number="settingsState.lidarrSettings.trickle_batch_size"
+                           class="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs text-slate-200 focus:outline-none focus:border-amber-500">
+                    <p class="text-[11px] text-slate-500">Maximum tracks processed per drip batch (1-500)</p>
+                  </div>
+                </div>
+
+                <!-- Auto Trickle Toggle & Interval -->
+                <div class="pt-2 space-y-3">
+                  <label class="flex items-center space-x-2.5 p-3 rounded-lg bg-slate-950/60 border border-slate-800 cursor-pointer hover:border-slate-700 transition">
+                    <input type="checkbox" x-model="settingsState.lidarrSettings.auto_trickle"
+                           class="rounded bg-slate-900 border-slate-700 text-amber-500 focus:ring-0">
+                    <div>
+                      <span class="text-xs text-slate-200 font-medium">Enable Automated Periodic Background Trickle</span>
+                      <p class="text-[11px] text-slate-400">Regularly scan missing unmonitored tracks and drip them to Lidarr automatically</p>
+                    </div>
+                  </label>
+
+                  <div x-show="settingsState.lidarrSettings.auto_trickle" class="space-y-1.5 pl-1">
+                    <label class="text-xs font-semibold text-slate-300">Auto Trickle Interval (minutes)</label>
+                    <input type="number" min="5" max="1440" x-model.number="settingsState.lidarrSettings.auto_trickle_interval_minutes"
+                           class="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs text-slate-200 focus:outline-none focus:border-amber-500">
+                    <p class="text-[11px] text-slate-500">How frequently the automated trickle worker wakes up</p>
+                  </div>
+                </div>
+              </div>
             </div>
           </div>
 

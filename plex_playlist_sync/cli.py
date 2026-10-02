@@ -127,23 +127,24 @@ def main() -> int:
 
     # 3. Web UI & REST Server Mode (Default)
     logger.info("Starting TrackSeerr Web Server on %s:%d (role=%s)", config.host, config.port, role)
+    db_base_dir = config.config_dir if (os.getenv("CONFIG_DIR") or os.path.isdir("/config")) else config.data_dir
     if role == "gateway":
         try:
-            db_path = str(safe_data_path("sync_db.sqlite", base_dir=config.data_dir))
+            db_path = str(safe_data_path("sync_db.sqlite", base_dir=db_base_dir))
             db = Database(db_path)
         except (PermissionError, sqlite3.OperationalError, OSError, ValueError) as e:
             fallback_db_path = "/tmp/trackseerr_gateway.sqlite"
             logger.warning(
                 "Gateway mode unable to open database at '%s': %s. "
                 "Falling back to ephemeral database at '%s'.",
-                config.data_dir,
+                db_base_dir,
                 e,
                 fallback_db_path,
             )
             os.environ["DATABASE_PATH"] = fallback_db_path
             db = Database(fallback_db_path)
     else:
-        db_path = str(safe_data_path("sync_db.sqlite", base_dir=config.data_dir))
+        db_path = str(safe_data_path("sync_db.sqlite", base_dir=db_base_dir))
         try:
             db = Database(db_path)
         except (PermissionError, sqlite3.OperationalError) as e:
@@ -152,7 +153,7 @@ def main() -> int:
                 "Please verify file and directory permissions on '%s' (e.g. Unraid PUID/PGID).",
                 db_path,
                 e,
-                config.data_dir,
+                db_base_dir,
             )
             return 1
 
@@ -211,50 +212,83 @@ def main() -> int:
         bg_thread.start()
 
     # Start periodic Lidarr auto-trickle worker thread if configured
-    if role != "gateway" and config.has_lidarr and config.lidarr_auto_trickle:
+    if role != "gateway":
         from plex_playlist_sync.clients.lidarr import LidarrClient
         from plex_playlist_sync.lidarr_queue import lidarr_worker
 
         def background_lidarr_trickle_worker():
-            interval_sec = max(60, config.lidarr_auto_trickle_interval_minutes * 60)
-            logger.info(
-                "Lidarr auto-trickle scheduler started (interval: %d min, batch: %d, pacing: %.1fs)",
-                config.lidarr_auto_trickle_interval_minutes,
-                config.lidarr_trickle_batch_size,
-                config.lidarr_trickle_rate_seconds,
-            )
-            lidarr_cli = LidarrClient(
-                base_url=config.lidarr_url,
-                api_key=config.lidarr_api_key,
-                verify_ssl=config.plex_verify_ssl,
-                auto_search=config.lidarr_auto_search,
-                root_folder=config.lidarr_root_folder,
-                quality_profile_id=config.lidarr_quality_profile_id,
-                metadata_profile_id=config.lidarr_metadata_profile_id,
-            )
+            logger.info("Lidarr auto-trickle background runner started")
+            last_run_time = 0.0
             while not _shutdown_requested:
-                slept = 0
-                while slept < interval_sec and not _shutdown_requested:
-                    time.sleep(min(1, interval_sec - slept))
-                    slept += 1
+                time.sleep(5)
                 if _shutdown_requested:
                     break
                 try:
+                    lidarr_settings = db.get_lidarr_settings()
+                    if not isinstance(lidarr_settings, dict):
+                        continue
+                    auto_trickle = bool(lidarr_settings.get("auto_trickle", config.lidarr_auto_trickle))
+                    url = lidarr_settings.get("url") or config.lidarr_url
+                    api_key = lidarr_settings.get("api_key") or config.lidarr_api_key
+
+                    if not (auto_trickle and url and api_key):
+                        continue
+
+                    interval_min = int(
+                        lidarr_settings.get("auto_trickle_interval_minutes")
+                        or config.lidarr_auto_trickle_interval_minutes
+                        or 30
+                    )
+                    interval_sec = max(60, interval_min * 60)
+                    now = time.time()
+                    if now - last_run_time < interval_sec:
+                        continue
+
+                    last_run_time = now
+
                     if not lidarr_worker.is_running():
                         all_missing = db.get_missing_tracks()
                         unmonitored = [t for t in all_missing if t.get("lidarr_status") != "monitored"]
                         if unmonitored:
+                            batch_size = int(
+                                lidarr_settings.get("trickle_batch_size")
+                                or config.lidarr_trickle_batch_size
+                                or 25
+                            )
+                            delay_seconds = float(
+                                lidarr_settings.get("trickle_rate_seconds")
+                                or config.lidarr_trickle_rate_seconds
+                                or 3.0
+                            )
+                            auto_search = bool(
+                                lidarr_settings.get("auto_search", config.lidarr_auto_search)
+                            )
+                            root_folder = lidarr_settings.get("root_folder") or config.lidarr_root_folder
+                            qp_id = lidarr_settings.get("quality_profile_id") or config.lidarr_quality_profile_id
+                            mp_id = lidarr_settings.get("metadata_profile_id") or config.lidarr_metadata_profile_id
+
+                            lidarr_cli = LidarrClient(
+                                base_url=str(url),
+                                api_key=str(api_key),
+                                verify_ssl=config.plex_verify_ssl,
+                                auto_search=auto_search,
+                                root_folder=root_folder,
+                                quality_profile_id=qp_id,
+                                metadata_profile_id=mp_id,
+                            )
                             logger.info(
-                                "Auto-trickle: enqueuing %d unmonitored tracks into Lidarr",
-                                min(len(unmonitored), config.lidarr_trickle_batch_size),
+                                "Auto-trickle: enqueuing %d unmonitored tracks into Lidarr (batch: %d, pacing: %.1fs)",
+                                min(len(unmonitored), batch_size),
+                                batch_size,
+                                delay_seconds,
                             )
                             lidarr_worker.start_trickle(
                                 items=unmonitored,
                                 client=lidarr_cli,
                                 db=db,
-                                delay_seconds=config.lidarr_trickle_rate_seconds,
-                                auto_search=config.lidarr_auto_search,
-                                batch_size=config.lidarr_trickle_batch_size,
+                                delay_seconds=delay_seconds,
+                                auto_search=auto_search,
+                                batch_size=batch_size,
                             )
                 except Exception as e:
                     logger.exception("Error in scheduled Lidarr auto-trickle: %s", e)

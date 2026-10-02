@@ -228,21 +228,33 @@ def feed_missing_text(
 def get_lidarr_status(
     _current_user: dict[str, Any] = Depends(get_current_user),
     config: Config = Depends(get_config),
+    db: Database = Depends(get_db),
     lidarr_client: Optional[LidarrClient] = Depends(get_lidarr_client),
 ) -> dict[str, Any]:
-    """Returns Lidarr connection and configuration status."""
-    if not config.has_lidarr or lidarr_client is None:
+    """Returns Lidarr connection and configuration status from DB or config."""
+    db_settings = db.get_lidarr_settings()
+    url = db_settings.get("url") or config.lidarr_url
+    auto_search = (
+        db_settings.get("auto_search")
+        if db_settings.get("url")
+        else config.lidarr_auto_search
+    )
+
+    if lidarr_client is None:
         return {
             "configured": False,
-            "url": None,
+            "url": url,
             "auto_search": False,
-            "status": {"online": False, "message": "Lidarr is not configured in environment (LIDARR_URL and LIDARR_API_KEY)"},
+            "status": {
+                "online": False,
+                "message": "Lidarr is not configured (configure in Settings -> Lidarr Automation or set LIDARR_URL and LIDARR_API_KEY)",
+            },
         }
     conn_result = lidarr_client.test_connection()
     return {
         "configured": True,
-        "url": config.lidarr_url,
-        "auto_search": config.lidarr_auto_search,
+        "url": url,
+        "auto_search": bool(auto_search),
         "status": conn_result,
     }
 
@@ -261,10 +273,10 @@ def push_missing_to_lidarr(
     - Background trickle mode (`trickle=True`) with delay pacing and rate-limit backoff.
     - Synchronous push (`trickle=False`) for targeted or immediate single-item updates.
     """
-    if not config.has_lidarr or lidarr_client is None:
+    if lidarr_client is None:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Lidarr is not configured. Set LIDARR_URL and LIDARR_API_KEY.",
+            detail="Lidarr is not configured. Configure in Settings or set LIDARR_URL and LIDARR_API_KEY.",
         )
 
     all_tracks = db.get_missing_tracks()
@@ -279,13 +291,18 @@ def push_missing_to_lidarr(
         if unmonitored:
             filtered = unmonitored
 
-    batch_size = req.batch_size if (req and req.batch_size is not None) else None
+    lidarr_settings = db.get_lidarr_settings()
+    default_auto_search = lidarr_settings.get("auto_search", config.lidarr_auto_search)
+    default_trickle_rate = lidarr_settings.get("trickle_rate_seconds", config.lidarr_trickle_rate_seconds)
+    default_batch_size = lidarr_settings.get("trickle_batch_size", config.lidarr_trickle_batch_size)
+
+    batch_size = req.batch_size if (req and req.batch_size is not None) else default_batch_size
     if batch_size and batch_size > 0:
         filtered = filtered[:batch_size]
 
-    should_search = req.auto_search if (req and req.auto_search is not None) else config.lidarr_auto_search
+    should_search = req.auto_search if (req and req.auto_search is not None) else default_auto_search
     use_trickle = req.trickle if (req and req.trickle is not None) else False
-    delay = req.delay_seconds if (req and req.delay_seconds is not None) else config.lidarr_trickle_rate_seconds
+    delay = req.delay_seconds if (req and req.delay_seconds is not None) else default_trickle_rate
 
     # Background trickle mode
     if use_trickle:

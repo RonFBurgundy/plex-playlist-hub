@@ -24,11 +24,23 @@ from plex_playlist_sync.models import (
 class Database:
     """Thread-safe SQLite database wrapper with WAL mode, foreign keys, and migrations."""
 
-    def __init__(self, db_path: Union[str, Path] = "/data/playlists.db") -> None:
-        if str(db_path) == ":memory:":
-            self.db_path: Union[str, Path] = ":memory:"
+    def __init__(self, db_path: Optional[Union[str, Path]] = None) -> None:
+        if db_path is not None:
+            if str(db_path) == ":memory:":
+                self.db_path: Union[str, Path] = ":memory:"
+            else:
+                self.db_path = Path(db_path)
         else:
-            self.db_path = Path(db_path)
+            if os.path.isdir("/config"):
+                self.db_path = Path("/config/sync_db.sqlite")
+            elif os.path.exists("/data/sync_db.sqlite"):
+                self.db_path = Path("/data/sync_db.sqlite")
+            else:
+                self.db_path = (
+                    Path("/config/sync_db.sqlite")
+                    if os.path.isdir("/config")
+                    else Path("/data/sync_db.sqlite")
+                )
         self._lock = threading.RLock()
         self._conn: Optional[sqlite3.Connection] = None
         self._ensure_connection()
@@ -126,6 +138,7 @@ class Database:
                 (6, self._migration_v6),
                 (7, self._migration_v7),
                 (8, self._migration_v8),
+                (9, self._migration_v9),
             ]
 
             for version, migration_fn in migrations:
@@ -288,7 +301,7 @@ class Database:
                 standard_track_format TEXT NOT NULL DEFAULT '{track:00} - {Track Title}{[ (Quality Full)]}',
                 compilation_track_format TEXT NOT NULL DEFAULT '{track:00} - {Artist Name} - {Track Title}{[ (Quality Full)]}',
                 multi_disc_folder_format TEXT NOT NULL DEFAULT '{Medium Format} {medium:00}',
-                root_folder_path TEXT NOT NULL DEFAULT '/music',
+                root_folder_path TEXT NOT NULL DEFAULT '/data/media/music',
                 colon_replacement_format TEXT NOT NULL DEFAULT ' - ',
                 clean_artist_names INTEGER NOT NULL DEFAULT 1,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -364,6 +377,41 @@ class Database:
         )
         cur.execute(
             "CREATE INDEX IF NOT EXISTS idx_active_downloads_client ON active_downloads(client_id);"
+        )
+
+    def _migration_v9(self, cur: sqlite3.Cursor) -> None:
+        cur.execute(
+            """
+            ALTER TABLE media_management_settings ADD COLUMN staging_folder_path TEXT NOT NULL DEFAULT '/data/downloads'
+            """
+        )
+        cur.execute(
+            """
+            ALTER TABLE media_management_settings ADD COLUMN import_mode TEXT NOT NULL DEFAULT 'move'
+            """
+        )
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS lidarr_settings (
+                id INTEGER PRIMARY KEY CHECK (id = 1),
+                url TEXT,
+                api_key TEXT,
+                auto_search INTEGER NOT NULL DEFAULT 1,
+                root_folder TEXT,
+                quality_profile_id INTEGER,
+                metadata_profile_id INTEGER,
+                trickle_rate_seconds REAL NOT NULL DEFAULT 3.0,
+                trickle_batch_size INTEGER NOT NULL DEFAULT 25,
+                auto_trickle INTEGER NOT NULL DEFAULT 0,
+                auto_trickle_interval_minutes INTEGER NOT NULL DEFAULT 30,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+            """
+        )
+        cur.execute(
+            """
+            INSERT OR IGNORE INTO lidarr_settings (id) VALUES (1);
+            """
         )
 
     # -------------------------------------------------------------------------
@@ -1030,6 +1078,8 @@ class Database:
                 row = cur.fetchone()
             res = dict(row)
             res["clean_artist_names"] = bool(res.get("clean_artist_names", 1))
+            res["staging_folder_path"] = str(res.get("staging_folder_path") or "/data/downloads")
+            res["import_mode"] = str(res.get("import_mode") or "move")
             return res
 
     def update_media_management_settings(self, settings: dict[str, Any]) -> dict[str, Any]:
@@ -1043,6 +1093,8 @@ class Database:
             "root_folder_path",
             "colon_replacement_format",
             "clean_artist_names",
+            "staging_folder_path",
+            "import_mode",
         }
         updates: dict[str, Any] = {}
         for k, v in settings.items():
@@ -1062,6 +1114,77 @@ class Database:
                 self.conn.commit()
 
         return self.get_media_management_settings()
+
+    # -------------------------------------------------------------------------
+    # Lidarr Settings CRUD
+    # -------------------------------------------------------------------------
+
+    def get_lidarr_settings(self) -> dict[str, Any]:
+        """Retrieves Lidarr automation settings (singleton row id=1)."""
+        with self._lock:
+            cur = self.conn.execute("SELECT * FROM lidarr_settings WHERE id = 1")
+            row = cur.fetchone()
+            if not row:
+                self.conn.execute("INSERT OR IGNORE INTO lidarr_settings (id) VALUES (1)")
+                self.conn.commit()
+                cur = self.conn.execute("SELECT * FROM lidarr_settings WHERE id = 1")
+                row = cur.fetchone()
+            res = dict(row)
+            res["auto_search"] = bool(res.get("auto_search", 1))
+            res["auto_trickle"] = bool(res.get("auto_trickle", 0))
+            res["trickle_rate_seconds"] = float(res.get("trickle_rate_seconds") or 3.0)
+            res["trickle_batch_size"] = int(res.get("trickle_batch_size") or 25)
+            res["auto_trickle_interval_minutes"] = int(
+                res.get("auto_trickle_interval_minutes") or 30
+            )
+            if res.get("quality_profile_id") is not None:
+                res["quality_profile_id"] = int(res["quality_profile_id"])
+            if res.get("metadata_profile_id") is not None:
+                res["metadata_profile_id"] = int(res["metadata_profile_id"])
+            return res
+
+    def update_lidarr_settings(self, settings: dict[str, Any]) -> dict[str, Any]:
+        """Updates Lidarr automation settings (singleton row id=1)."""
+        allowed_keys = {
+            "url",
+            "api_key",
+            "auto_search",
+            "root_folder",
+            "quality_profile_id",
+            "metadata_profile_id",
+            "trickle_rate_seconds",
+            "trickle_batch_size",
+            "auto_trickle",
+            "auto_trickle_interval_minutes",
+        }
+        updates: dict[str, Any] = {}
+        for k, v in settings.items():
+            if k in allowed_keys:
+                if k in ("auto_search", "auto_trickle"):
+                    if v is not None:
+                        updates[k] = 1 if v else 0
+                elif k in (
+                    "quality_profile_id",
+                    "metadata_profile_id",
+                    "trickle_batch_size",
+                    "auto_trickle_interval_minutes",
+                ):
+                    updates[k] = int(v) if v is not None else None
+                elif k == "trickle_rate_seconds":
+                    updates[k] = float(v) if v is not None else 3.0
+                else:
+                    updates[k] = str(v) if v is not None else None
+
+        if updates:
+            set_clauses = [f"{k} = ?" for k in updates.keys()]
+            set_clauses.append("updated_at = CURRENT_TIMESTAMP")
+            values = list(updates.values())
+            query = f"UPDATE lidarr_settings SET {', '.join(set_clauses)} WHERE id = 1"
+            with self._lock:
+                self.conn.execute(query, values)
+                self.conn.commit()
+
+        return self.get_lidarr_settings()
 
     # -------------------------------------------------------------------------
     # Download Clients CRUD

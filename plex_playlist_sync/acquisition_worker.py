@@ -52,6 +52,38 @@ def safe_atomic_move(source_file: Path | str, target_file: Path | str) -> Path:
         return dst
 
 
+def place_audio_file(
+    source_file: Path | str, target_file: Path | str, mode: str = "move"
+) -> Path:
+    """Places source_file at target_file using either atomic move or hardlink.
+
+    - mode="hardlink": Target parent directories created, calls os.link(src, dst).
+      If successful, returns dst (original src preserved untouched for seeding).
+      If os.link fails (e.g. cross-device EXDEV), falls back to shutil.copy2 without unlinking src.
+    - mode="move": Calls safe_atomic_move(source_file, target_file) (atomic replace, unlink source).
+    """
+    src = Path(source_file).resolve()
+    dst = Path(target_file).resolve()
+    dst.parent.mkdir(parents=True, exist_ok=True)
+
+    if mode == "hardlink":
+        try:
+            os.link(str(src), str(dst))
+            logger.info("Successfully hardlinked '%s' -> '%s'", src, dst)
+            return dst
+        except OSError as e:
+            logger.warning(
+                "os.link failed (%s); falling back to shutil.copy2 for '%s' -> '%s'",
+                e,
+                src,
+                dst,
+            )
+            shutil.copy2(str(src), str(dst))
+            return dst
+    else:
+        return safe_atomic_move(source_file, target_file)
+
+
 class AcquisitionWorker:
     """Thread-safe background runner monitoring active downloads and organizing media."""
 
@@ -161,9 +193,12 @@ class AcquisitionWorker:
         plex_client: Optional[PlexClient] = None,
         staging_dir: Optional[str] = None,
     ) -> dict[str, int]:
-        """Executes a single poll cycle across all active downloads."""
+        media_settings = db.get_media_management_settings()
+        import_mode = media_settings.get("import_mode", "move")
         if staging_dir:
             self.staging_dir = staging_dir
+        else:
+            self.staging_dir = media_settings.get("staging_folder_path", self.staging_dir)
 
         stats = {"polled": 0, "completed": 0, "failed": 0, "imported": 0}
         active_items = db.list_active_downloads(
@@ -177,8 +212,6 @@ class AcquisitionWorker:
 
         if not active_items:
             return stats
-
-        media_settings = db.get_media_management_settings()
 
         for item in active_items:
             download_id = item["id"]
@@ -309,7 +342,7 @@ class AcquisitionWorker:
                         logger.error("Destination %s escapes music root %s", target_path, root_path)
                         continue
 
-                    placed_path = safe_atomic_move(af, target_path)
+                    placed_path = place_audio_file(af, target_path, mode=import_mode)
                     imported_paths.append(str(placed_path))
                     logger.info("Successfully imported '%s' -> '%s'", af.name, placed_path)
 

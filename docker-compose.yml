@@ -6,7 +6,12 @@ services:
     ports:
       - "5250:5250"
     volumes:
-      - ./data:/data
+      # AppData storage for persistent SQLite database, auth sessions, and logs
+      - ./appdata:/config
+      # TRaSH Guides recommended unified data share.
+      # Contains both library (/data/media/music) and completed downloads (/data/downloads)
+      # on the same filesystem mount to enable instant atomic moves and hardlinks.
+      - /path/to/data:/data
     environment:
       # --- Permissions ---
       - PUID=1000
@@ -41,10 +46,6 @@ services:
       # --- Deezer (OPTIONAL) ---
       # - DEEZER_USER_ID=
       # - DEEZER_PLAYLIST_ID=
-
-      # --- Lidarr Integration (OPTIONAL) ---
-      # - LIDARR_URL=http://192.168.1.100:8686
-      # - LIDARR_API_KEY=your_lidarr_api_key
 
       # --- Sync Engine & Scheduling ---
       - SECONDS_TO_WAIT=14400 # 4 hours

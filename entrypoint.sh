@@ -34,9 +34,12 @@ if [ "$(id -u)" = "0" ]; then
         useradd -o -u "$PUID" -g "$PGID" -d /home/appuser -m appuser 2>/dev/null || true
     fi
 
-    # Ensure /data, /music, and /downloads exist and adjust ownership
-    mkdir -p /data /music /downloads
-    chown "$PUID:$PGID" /data /music /downloads 2>/dev/null || true
+    # Ensure /config, /data, /music, and /downloads exist and adjust ownership
+    mkdir -p /config /data /data/media/music /data/downloads /music /downloads
+    chown "$PUID:$PGID" /config /data /data/media/music /data/downloads /music /downloads 2>/dev/null || true
+    if [ -n "$(ls -A /config 2>/dev/null)" ]; then
+        chown -R "$PUID:$PGID" /config 2>/dev/null || true
+    fi
     if [ -n "$(ls -A /data 2>/dev/null)" ]; then
         chown -R "$PUID:$PGID" /data 2>/dev/null || true
     fi

@@ -22,14 +22,14 @@ COPY pyproject.toml README.md ./
 COPY entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 
-# Create data, music, and downloads directories and non-root app user
+# Create config, data, music, and downloads directories and non-root app user
 RUN useradd --create-home --uid 1000 appuser && \
-    mkdir -p /data /music /downloads && \
-    chown -R appuser:appuser /app /data /music /downloads
+    mkdir -p /config /data /data/media/music /data/downloads /music /downloads && \
+    chown -R appuser:appuser /app /config /data /music /downloads
 
 EXPOSE 5250
 
-VOLUME ["/data"]
+VOLUME ["/config", "/data"]
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
     CMD python3 -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:5250/api/health')" || exit 1

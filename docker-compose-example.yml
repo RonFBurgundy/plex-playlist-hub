@@ -6,7 +6,12 @@ services:
     ports:
       - "5250:5250"
     volumes:
-      - ./data:/data
+      # AppData storage for persistent SQLite database, auth sessions, and logs
+      - ./appdata:/config
+      # TRaSH Guides recommended unified data share.
+      # Contains both library (/data/media/music) and completed downloads (/data/downloads)
+      # on the same filesystem mount to enable instant atomic moves and hardlinks.
+      - /path/to/data:/data
     environment:
       - PUID=1000
       - PGID=1000
@@ -26,6 +31,3 @@ services:
       # Spotify: leave blank for keyless web scraping!
       - SPOTIFY_CLIENT_ID=
       - SPOTIFY_CLIENT_SECRET=
-      # Lidarr (optional):
-      # - LIDARR_URL=http://192.168.1.100:8686
-      # - LIDARR_API_KEY=your_lidarr_api_key

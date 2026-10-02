@@ -7,7 +7,9 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
 
 from plex_playlist_sync.api.dependencies import get_db, require_admin, require_user
+from plex_playlist_sync.clients.lidarr import LidarrClient
 from plex_playlist_sync.naming import PRESETS, build_track_path
+from plex_playlist_sync.security import is_safe_service_url, mask_secret
 from plex_playlist_sync.storage import Database
 
 logger = logging.getLogger(__name__)
@@ -90,9 +92,11 @@ class MediaManagementSettingsModel(BaseModel):
     standard_track_format: str = Field(..., description="Format for standard track filenames")
     compilation_track_format: str = Field(..., description="Format for compilation track filenames")
     multi_disc_folder_format: str = Field(..., description="Format for multi-disc subdirectories")
-    root_folder_path: str = Field("/music", description="Base music library folder")
+    root_folder_path: str = Field("/data/media/music", description="Base music library folder")
     colon_replacement_format: str = Field(" - ", description="String to replace colons with")
     clean_artist_names: bool = Field(True, description="Whether to strip leading articles from artist names")
+    staging_folder_path: str = Field("/data/downloads", description="Path for staging/downloads folder")
+    import_mode: str = Field("move", description="Import mode: move or hardlink")
     updated_at: str | None = None
 
 
@@ -105,6 +109,8 @@ class MediaManagementUpdateModel(BaseModel):
     root_folder_path: str | None = None
     colon_replacement_format: str | None = None
     clean_artist_names: bool | None = None
+    staging_folder_path: str | None = None
+    import_mode: str | None = None
 
 
 class PreviewRequestModel(BaseModel):
@@ -116,6 +122,8 @@ class PreviewRequestModel(BaseModel):
     root_folder_path: str | None = None
     colon_replacement_format: str | None = None
     clean_artist_names: bool | None = None
+    staging_folder_path: str | None = None
+    import_mode: str | None = None
 
 
 class PreviewItemModel(BaseModel):
@@ -128,6 +136,44 @@ class PreviewItemModel(BaseModel):
 
 class PreviewResponseModel(BaseModel):
     previews: list[PreviewItemModel]
+
+
+class LidarrSettingsModel(BaseModel):
+    url: str | None = None
+    api_key: str | None = None
+    auto_search: bool = True
+    root_folder: str | None = None
+    quality_profile_id: int | None = None
+    metadata_profile_id: int | None = None
+    trickle_rate_seconds: float = 3.0
+    trickle_batch_size: int = 25
+    auto_trickle: bool = False
+    auto_trickle_interval_minutes: int = 30
+    updated_at: str | None = None
+
+
+class LidarrSettingsUpdateModel(BaseModel):
+    url: str | None = None
+    api_key: str | None = None
+    auto_search: bool | None = None
+    root_folder: str | None = None
+    quality_profile_id: int | None = None
+    metadata_profile_id: int | None = None
+    trickle_rate_seconds: float | None = None
+    trickle_batch_size: int | None = None
+    auto_trickle: bool | None = None
+    auto_trickle_interval_minutes: int | None = None
+
+
+class LidarrTestConnectionPayload(BaseModel):
+    url: str
+    api_key: str
+
+
+class LidarrTestConnectionResponse(BaseModel):
+    online: bool
+    version: str | None = None
+    error: str | None = None
 
 
 class MediaManagementGetResponse(BaseModel):
@@ -216,3 +262,119 @@ def preview_media_management_templates(
 
     previews = _render_previews_for_settings(effective_settings)
     return PreviewResponseModel(previews=previews)
+
+
+# -----------------------------------------------------------------------------
+# Lidarr Automation Settings Endpoints
+# -----------------------------------------------------------------------------
+
+
+def _mask_lidarr_settings(settings: dict[str, Any]) -> dict[str, Any]:
+    res = dict(settings)
+    if res.get("api_key"):
+        res["api_key"] = mask_secret(res["api_key"])
+    return res
+
+
+@router.get(
+    "/lidarr",
+    response_model=LidarrSettingsModel,
+    summary="Get Lidarr Automation Settings",
+)
+def get_lidarr_settings(
+    db: Database = Depends(get_db),
+    current_user: dict[str, Any] = Depends(require_admin),
+) -> LidarrSettingsModel:
+    """Retrieves Lidarr automation settings with masked API key."""
+    settings = db.get_lidarr_settings()
+    masked = _mask_lidarr_settings(settings)
+    return LidarrSettingsModel(**masked)
+
+
+@router.post(
+    "/lidarr",
+    response_model=LidarrSettingsModel,
+    summary="Update Lidarr Automation Settings (Admin Only)",
+)
+def update_lidarr_settings(
+    payload: LidarrSettingsUpdateModel,
+    db: Database = Depends(get_db),
+    admin_user: dict[str, Any] = Depends(require_admin),
+) -> LidarrSettingsModel:
+    """Admin-only: updates Lidarr automation settings in database.
+
+    Preserves existing API key if masked or empty.
+    """
+    existing = db.get_lidarr_settings()
+    updates = payload.model_dump(exclude_unset=True)
+
+    if "url" in updates and updates["url"]:
+        clean_url = str(updates["url"]).strip().rstrip("/")
+        if not is_safe_service_url(clean_url):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Prohibited or invalid host URL (SSRF defense)",
+            )
+        updates["url"] = clean_url
+
+    if "api_key" in updates:
+        k = updates["api_key"]
+        # If masked (contains * or •) or empty, keep existing
+        if k and ("*" in k or "•" in k):
+            updates["api_key"] = existing.get("api_key")
+        elif not k:
+            updates["api_key"] = existing.get("api_key")
+        else:
+            updates["api_key"] = k.strip()
+
+    try:
+        updated = db.update_lidarr_settings(updates)
+        masked = _mask_lidarr_settings(updated)
+        return LidarrSettingsModel(**masked)
+    except Exception as e:
+        logger.error("Failed to update Lidarr settings: %s", e)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Database update failed: {e}",
+        ) from e
+
+
+@router.post(
+    "/lidarr/test",
+    response_model=LidarrTestConnectionResponse,
+    summary="Test Lidarr Connection (Admin Only)",
+)
+def test_lidarr_connection(
+    payload: LidarrTestConnectionPayload,
+    db: Database = Depends(get_db),
+    admin_user: dict[str, Any] = Depends(require_admin),
+) -> LidarrTestConnectionResponse:
+    """Admin-only: tests connectivity and credentials for Lidarr instance."""
+    clean_url = str(payload.url).strip().rstrip("/")
+    if not is_safe_service_url(clean_url):
+        return LidarrTestConnectionResponse(
+            online=False,
+            version=None,
+            error="Prohibited or invalid host URL (SSRF defense)",
+        )
+
+    api_key = payload.api_key.strip()
+    if not api_key or "*" in api_key or "•" in api_key:
+        existing = db.get_lidarr_settings()
+        api_key = str(existing.get("api_key") or "")
+
+    try:
+        client = LidarrClient(base_url=clean_url, api_key=api_key)
+        result = client.test_connection()
+        return LidarrTestConnectionResponse(
+            online=bool(result.get("online", False)),
+            version=result.get("version"),
+            error=result.get("error"),
+        )
+    except Exception as e:
+        logger.warning("Lidarr connection test failed with exception: %s", e)
+        return LidarrTestConnectionResponse(
+            online=False,
+            version=None,
+            error=str(e),
+        )

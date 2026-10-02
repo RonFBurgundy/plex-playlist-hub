@@ -5,7 +5,11 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 import pytest
 
-from plex_playlist_sync.acquisition_worker import AcquisitionWorker, safe_atomic_move
+from plex_playlist_sync.acquisition_worker import (
+    AcquisitionWorker,
+    place_audio_file,
+    safe_atomic_move,
+)
 from plex_playlist_sync.models import (
     ActiveDownload,
     DownloadClientConfig,
@@ -34,7 +38,7 @@ def workspace_dirs(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# safe_atomic_move Tests
+# safe_atomic_move & place_audio_file Tests
 # ---------------------------------------------------------------------------
 def test_safe_atomic_move_success(tmp_path):
     src = tmp_path / "temp_download.flac"
@@ -54,6 +58,50 @@ def test_safe_atomic_move_missing_src(tmp_path):
     dst = tmp_path / "library" / "track.mp3"
     with pytest.raises(FileNotFoundError):
         safe_atomic_move(src, dst)
+
+
+def test_place_audio_file_hardlink(tmp_path):
+    src = tmp_path / "downloads" / "track.flac"
+    src.parent.mkdir(parents=True, exist_ok=True)
+    src.write_text("audio stream data")
+
+    dst = tmp_path / "media" / "music" / "track.flac"
+    res = place_audio_file(src, dst, mode="hardlink")
+
+    assert res == dst
+    assert dst.exists()
+    assert src.exists()  # Crucial for torrent seeding!
+    assert os.stat(src).st_ino == os.stat(dst).st_ino
+    assert dst.read_text() == "audio stream data"
+
+
+def test_place_audio_file_move(tmp_path):
+    src = tmp_path / "downloads" / "track.flac"
+    src.parent.mkdir(parents=True, exist_ok=True)
+    src.write_text("audio stream data")
+
+    dst = tmp_path / "media" / "music" / "track.flac"
+    res = place_audio_file(src, dst, mode="move")
+
+    assert res == dst
+    assert dst.exists()
+    assert not src.exists()
+    assert dst.read_text() == "audio stream data"
+
+
+def test_place_audio_file_hardlink_fallback_on_oserror(tmp_path):
+    src = tmp_path / "downloads" / "track.flac"
+    src.parent.mkdir(parents=True, exist_ok=True)
+    src.write_text("fallback stream content")
+
+    dst = tmp_path / "media" / "music" / "track.flac"
+    with patch("os.link", side_effect=OSError("Cross-device link")):
+        res = place_audio_file(src, dst, mode="hardlink")
+
+    assert res == dst
+    assert dst.exists()
+    assert src.exists()
+    assert dst.read_text() == "fallback stream content"
 
 
 # ---------------------------------------------------------------------------

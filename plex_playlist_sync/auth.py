@@ -228,17 +228,29 @@ def get_or_create_secret_key(data_dir: str = "/data") -> bytes:
         )
     secret_path = safe_data_path(".session_secret", base_dir=str(base))
 
-    if secret_path.exists():
-        try:
-            key = secret_path.read_bytes()
-            if len(key) == 32:
-                try:
-                    os.chmod(secret_path, 0o600)
-                except OSError:
-                    pass
-                return key
-        except OSError as e:
-            logger.warning("Could not read existing session secret: %s", e)
+    # Check primary path and /config fallback for existing .session_secret
+    candidate_paths: list[Path] = [secret_path]
+    if os.path.isdir("/config"):
+        candidate_paths.append(safe_data_path(".session_secret", base_dir="/config"))
+
+    for cand in candidate_paths:
+        if cand.exists():
+            try:
+                key = cand.read_bytes()
+                if len(key) == 32:
+                    try:
+                        os.chmod(cand, 0o600)
+                    except OSError:
+                        pass
+                    if cand != secret_path and not secret_path.exists():
+                        try:
+                            secret_path.write_bytes(key)
+                            os.chmod(secret_path, 0o600)
+                        except OSError:
+                            pass
+                    return key
+            except OSError as e:
+                logger.warning("Could not read existing session secret from %s: %s", cand, e)
 
     new_key = secrets.token_bytes(32)
     flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
