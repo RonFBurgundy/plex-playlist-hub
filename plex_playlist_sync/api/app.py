@@ -5,7 +5,7 @@ import os
 from pathlib import Path
 from typing import Optional
 
-from fastapi import APIRouter, FastAPI, Request, Response
+from fastapi import APIRouter, FastAPI, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from starlette.staticfiles import StaticFiles
@@ -128,15 +128,57 @@ def create_app(
 
     app.include_router(api_router)
 
-    # 4. Mount Static Directory & Serve Root
+    # 4. Mount Static Directory & SPA Assets & Serve Root
     static_dir = Path(__file__).resolve().parent.parent / "static"
     static_dir.mkdir(parents=True, exist_ok=True)
     app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
 
+    # Locate SPA dist
+    project_root = Path(__file__).resolve().parent.parent.parent
+    dist_dir = project_root / "frontend" / "dist"
+    if not dist_dir.is_dir():
+        dist_dir = static_dir / "dist"
+
+    assets_dir = dist_dir / "assets"
+    if assets_dir.is_dir():
+        app.mount("/assets", StaticFiles(directory=str(assets_dir)), name="assets")
+
+    # Serve root public PWA assets
+    for public_name in [
+        "manifest.json",
+        "favicon.svg",
+        "favicon.png",
+        "apple-touch-icon.png",
+        "icon-192.png",
+        "icon-512.png",
+        "trackseerr-logo.svg",
+        "placeholder.svg",
+    ]:
+        def _make_public_handler(name: str):
+            def handler() -> FileResponse:
+                dist_target = dist_dir / name
+                if dist_target.is_file():
+                    return FileResponse(str(dist_target))
+                static_target = static_dir / name
+                if static_target.is_file():
+                    return FileResponse(str(static_target))
+                raise HTTPException(status_code=404, detail="Not Found")
+            return handler
+
+        app.add_api_route(
+            f"/{public_name}",
+            _make_public_handler(public_name),
+            methods=["GET", "HEAD"],
+            include_in_schema=False,
+        )
+
     @app.api_route("/", methods=["GET", "HEAD"], response_class=FileResponse, include_in_schema=False)
     def serve_index() -> FileResponse:
-        index_file = static_dir / "index.html"
-        return FileResponse(str(index_file), media_type="text/html")
+        dist_index = dist_dir / "index.html"
+        use_legacy = os.environ.get("TRACKSEERR_LEGACY_UI") == "1"
+        if not use_legacy and dist_index.is_file():
+            return FileResponse(str(dist_index), media_type="text/html")
+        return FileResponse(str(static_dir / "index.html"), media_type="text/html")
 
     return app
 

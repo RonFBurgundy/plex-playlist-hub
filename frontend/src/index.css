@@ -1,0 +1,154 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --bg-canvas: #0a0a0a;
+  --bg-surface: #121212;
+  --bg-surface-elevated: #181818;
+  --bg-card: #141414;
+  --bg-card-hover: #1c1c1c;
+  --border-subtle: #222222;
+  --border-default: #2a2a2a;
+  --border-hover: rgba(229, 160, 13, 0.45);
+  --text-primary: #ffffff;
+  --text-secondary: #a3a3a3;
+  --text-muted: #666666;
+  --accent-amber: #e5a00d;
+  --accent-amber-glow: rgba(229, 160, 13, 0.25);
+  --status-success: #22c55e;
+  --status-error: #ef4444;
+}
+
+body {
+  background-color: var(--bg-canvas);
+  color: var(--text-primary);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  margin: 0;
+  padding: 0;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  overflow-x: hidden;
+}
+
+/* 1. Recessed Transport Bays */
+.tape-transport-bay {
+  background: #0d0d0d;
+  border: 1px solid #1f1f1f;
+  box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.8), 0 1px 0 rgba(255, 255, 255, 0.04);
+  border-radius: 4px;
+  padding: 3px;
+}
+
+/* 2. Physical Mechanical Deck Buttons */
+.tape-deck-btn {
+  background: linear-gradient(180deg, #1f1f1f 0%, #151515 100%);
+  border: 1px solid #2a2a2a;
+  border-top-color: #383838;
+  border-bottom-color: #111111;
+  box-shadow: 0 2px 0 #050505, inset 0 1px 0 rgba(255, 255, 255, 0.08);
+  border-radius: 3px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  transition: all 0.08s ease-out;
+  cursor: pointer;
+  position: relative;
+  user-select: none;
+}
+
+.tape-deck-btn:hover:not(:disabled) {
+  background: linear-gradient(180deg, #262626 0%, #1a1a1a 100%);
+  color: #ffffff;
+}
+
+.tape-deck-btn:active:not(:disabled) {
+  transform: translateY(2px);
+  background: #0f0f0f;
+  box-shadow: inset 0 2px 5px rgba(0, 0, 0, 0.9), inset 0 0 0 1px rgba(255, 255, 255, 0.04);
+}
+
+.tape-deck-btn.engaged {
+  transform: translateY(2px);
+  background: #0f0f0f;
+  box-shadow: inset 0 2px 5px rgba(0, 0, 0, 0.9), inset 0 0 0 1px rgba(255, 255, 255, 0.04);
+  color: #ffffff;
+}
+
+.tape-deck-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+  transform: none;
+  box-shadow: none;
+}
+
+/* 3. Amber Indicator Jewel */
+.tape-deck-indicator {
+  position: absolute;
+  top: 0;
+  left: 15%;
+  right: 15%;
+  height: 2px;
+  background: #e5a00d;
+  box-shadow: 0 0 6px rgba(229, 160, 13, 0.8);
+  border-radius: 1px;
+}
+
+/* 4. Tactile Mechanical Switch */
+.tactile-switch {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  background: #0d0d0d;
+  border: 1px solid #222222;
+  border-radius: 4px;
+  padding: 2px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.tactile-switch-thumb {
+  background: linear-gradient(180deg, #2a2a2a 0%, #1c1c1c 100%);
+  border: 1px solid #383838;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.5);
+  border-radius: 2px;
+  transition: transform 0.1s ease-out;
+}
+
+/* 5. Mobile & Modal Scrolling */
+.modal-body-scroll {
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: thin;
+  scrollbar-color: #2a2a2a transparent;
+}
+
+.modal-body-scroll::-webkit-scrollbar {
+  width: 6px;
+}
+
+.modal-body-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.modal-body-scroll::-webkit-scrollbar-thumb {
+  background-color: #2a2a2a;
+  border-radius: 3px;
+}
+
+/* 6. Safe Area Utilities */
+.pt-safe {
+  padding-top: env(safe-area-inset-top, 0px);
+}
+
+.pb-safe {
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+}
+
+.pl-safe {
+  padding-left: env(safe-area-inset-left, 0px);
+}
+
+.pr-safe {
+  padding-right: env(safe-area-inset-right, 0px);
+}

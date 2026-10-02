@@ -1,0 +1,369 @@
+import React, { useState } from 'react';
+import { RefreshCw, Plus, Play, ExternalLink, Trash2, FileText, Link as LinkIcon, Loader2 } from 'lucide-react';
+import type { Playlist, User } from '@/types/models';
+import {
+  TapeTransportBay,
+  TapeDeckButton,
+  MachinedCard,
+  ObsidianModal,
+  TactileSwitch,
+} from '@/components/ui';
+
+export interface PlaylistsViewProps {
+  playlists: Playlist[];
+  users: User[];
+  currentUserId?: number;
+  onSync: () => Promise<void>;
+  onToggleTarget: (playlistId: number | string, userIds: string[]) => Promise<void>;
+  onImport: (payload: { name: string; source_type: string; source_url?: string; tracks?: string[] }) => Promise<void>;
+  onToggleActive?: (playlistId: number | string, active: boolean) => Promise<void>;
+  onDelete?: (playlistId: number | string) => Promise<void>;
+  isLoading?: boolean;
+  isAdmin?: boolean;
+}
+
+export const PlaylistsView: React.FC<PlaylistsViewProps> = ({
+  playlists,
+  users,
+  currentUserId,
+  onSync,
+  onToggleTarget,
+  onImport,
+  onToggleActive,
+  onDelete,
+  isLoading = false,
+  isAdmin = false,
+}) => {
+  const [isSyncing, setIsSyncing] = useState<boolean>(false);
+  const [isImportModalOpen, setIsImportModalOpen] = useState<boolean>(false);
+  const [importTab, setImportTab] = useState<'link' | 'paste' | 'helper'>('link');
+  const [playlistName, setPlaylistName] = useState<string>('');
+  const [playlistUrl, setPlaylistUrl] = useState<string>('');
+  const [pastedTracks, setPastedTracks] = useState<string>('');
+  const [isSubmittingImport, setIsSubmittingImport] = useState<boolean>(false);
+
+  const handleSyncClick = async () => {
+    setIsSyncing(true);
+    try {
+      await onSync();
+    } finally {
+      setIsSyncing(false);
+    }
+  };
+
+  const handleTargetClick = async (playlist: Playlist, userIdStr: string) => {
+    const existing = playlist.target_user_ids.map(String);
+    const updated = existing.includes(userIdStr)
+      ? existing.filter((id) => id !== userIdStr)
+      : [...existing, userIdStr];
+    await onToggleTarget(playlist.id, updated);
+  };
+
+  const handleImportSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!playlistName.trim()) return;
+
+    setIsSubmittingImport(true);
+    try {
+      if (importTab === 'link') {
+        const sourceType = playlistUrl.includes('deezer') ? 'deezer' : 'spotify';
+        await onImport({
+          name: playlistName.trim(),
+          source_type: sourceType,
+          source_url: playlistUrl.trim(),
+        });
+      } else {
+        const tracks = pastedTracks
+          .split('\n')
+          .map((l) => l.trim())
+          .filter(Boolean);
+        await onImport({
+          name: playlistName.trim(),
+          source_type: 'csv',
+          tracks,
+        });
+      }
+      setIsImportModalOpen(false);
+      setPlaylistName('');
+      setPlaylistUrl('');
+      setPastedTracks('');
+    } finally {
+      setIsSubmittingImport(false);
+    }
+  };
+
+  return (
+    <div className="space-y-6">
+      {/* Action Header */}
+      <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-4">
+        <TapeTransportBay className="flex items-center gap-2">
+          <TapeDeckButton
+            size="sm"
+            variant="amber"
+            onClick={handleSyncClick}
+            disabled={isSyncing}
+            icon={
+              isSyncing ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <RefreshCw className="h-3.5 w-3.5" />
+              )
+            }
+          >
+            {isSyncing ? 'Syncing...' : 'Sync Playlists'}
+          </TapeDeckButton>
+
+          <TapeDeckButton
+            size="sm"
+            onClick={() => setIsImportModalOpen(true)}
+            icon={<Plus className="h-3.5 w-3.5" />}
+          >
+            Add Playlist
+          </TapeDeckButton>
+        </TapeTransportBay>
+
+        <div className="text-xs text-neutral-400 font-mono">
+          {playlists.length} Configured Playlists
+        </div>
+      </div>
+
+      {/* Loading state */}
+      {isLoading && (
+        <div className="flex flex-col items-center justify-center py-16 gap-3">
+          <Loader2 className="h-8 w-8 text-[#e5a00d] animate-spin" />
+          <span className="text-xs uppercase tracking-widest text-neutral-400 font-mono">
+            Calibrating Playlist Synchronizer...
+          </span>
+        </div>
+      )}
+
+      {/* Playlists Grid */}
+      {!isLoading && playlists.length === 0 && (
+        <div className="text-center py-16 text-neutral-500 font-mono text-sm">
+          No playlists configured yet. Click 'Add Playlist' to begin.
+        </div>
+      )}
+
+      {!isLoading && playlists.length > 0 && (
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+          {playlists.map((pl) => (
+            <MachinedCard key={pl.id} className="p-4 flex flex-col justify-between gap-4">
+              <div>
+                <div className="flex items-start justify-between gap-2 mb-2">
+                  <span className="px-2 py-0.5 rounded-[2px] bg-[#1a1a1a] border border-[#2a2a2a] text-[10px] font-mono uppercase text-neutral-300">
+                    {pl.source_type}
+                  </span>
+                  {onToggleActive && (
+                    <TactileSwitch
+                      checked={pl.is_active}
+                      onChange={(val) => onToggleActive(pl.id, val)}
+                      aria-label="Toggle playlist active"
+                    />
+                  )}
+                </div>
+
+                <h4 className="font-bold text-base text-white truncate" title={pl.name}>
+                  {pl.name}
+                </h4>
+
+                <div className="flex items-center gap-3 text-xs text-neutral-400 font-mono mt-2">
+                  <span>{pl.track_count ?? 0} tracks</span>
+                  <span>&middot;</span>
+                  <span>{pl.matched_count ?? 0} matched</span>
+                </div>
+
+                {pl.last_synced && (
+                  <p className="text-[10px] text-neutral-500 font-mono mt-1">
+                    Last sync: {new Date(pl.last_synced).toLocaleString()}
+                  </p>
+                )}
+              </div>
+
+              {/* Target Users Assignment */}
+              <div className="space-y-2 pt-3 border-t border-[#1f1f1f]">
+                <span className="text-[10px] uppercase tracking-wider text-neutral-400 font-mono">
+                  Sync Targets
+                </span>
+                <div className="flex flex-wrap gap-1.5">
+                  {users.map((u) => {
+                    const uIdStr = String(u.id);
+                    const isTarget = pl.target_user_ids.map(String).includes(uIdStr);
+                    const canEdit = isAdmin || u.id === currentUserId;
+
+                    return (
+                      <button
+                        key={u.id}
+                        type="button"
+                        disabled={!canEdit}
+                        onClick={() => handleTargetClick(pl, uIdStr)}
+                        className={`target-pill px-2.5 py-1 rounded-[3px] text-xs font-mono transition-all ${
+                          isTarget
+                            ? 'bg-[#e5a00d]/20 border border-[#e5a00d] text-[#e5a00d]'
+                            : 'bg-[#121212] border border-[#222222] text-neutral-500 hover:text-neutral-300'
+                        } ${!canEdit ? 'cursor-default opacity-80' : 'cursor-pointer'}`}
+                      >
+                        {u.plex_username}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* Actions */}
+              <div className="flex items-center justify-between pt-2 border-t border-[#1f1f1f]">
+                {pl.source_url ? (
+                  <a
+                    href={pl.source_url}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="inline-flex items-center gap-1.5 text-xs text-neutral-400 hover:text-white"
+                  >
+                    <ExternalLink className="h-3 w-3" />
+                    <span>View Source</span>
+                  </a>
+                ) : (
+                  <span />
+                )}
+
+                {isAdmin && onDelete && (
+                  <TapeDeckButton
+                    size="sm"
+                    variant="danger"
+                    onClick={() => {
+                      if (confirm(`Delete playlist "${pl.name}"?`)) {
+                        onDelete(pl.id);
+                      }
+                    }}
+                    icon={<Trash2 className="h-3 w-3" />}
+                    aria-label="Delete playlist"
+                  />
+                )}
+              </div>
+            </MachinedCard>
+          ))}
+        </div>
+      )}
+
+      {/* Add / Import Playlist Modal */}
+      <ObsidianModal
+        isOpen={isImportModalOpen}
+        onClose={() => setIsImportModalOpen(false)}
+        title="Add Playlist"
+        subtitle="Import music tracks from streaming playlists or text"
+      >
+        <div className="space-y-4">
+          <TapeTransportBay className="flex items-center gap-1">
+            <TapeDeckButton
+              size="sm"
+              active={importTab === 'link'}
+              onClick={() => setImportTab('link')}
+              icon={<LinkIcon className="h-3.5 w-3.5" />}
+            >
+              By Link
+            </TapeDeckButton>
+            <TapeDeckButton
+              size="sm"
+              active={importTab === 'paste'}
+              onClick={() => setImportTab('paste')}
+              icon={<FileText className="h-3.5 w-3.5" />}
+            >
+              Paste Tracks
+            </TapeDeckButton>
+            <TapeDeckButton
+              size="sm"
+              active={importTab === 'helper'}
+              onClick={() => setImportTab('helper')}
+              icon={<Play className="h-3.5 w-3.5" />}
+            >
+              1-Click Helper
+            </TapeDeckButton>
+          </TapeTransportBay>
+
+          <form onSubmit={handleImportSubmit} className="space-y-4">
+            <div>
+              <label className="block text-xs uppercase font-mono tracking-wider text-neutral-300 mb-1">
+                Playlist Name
+              </label>
+              <input
+                type="text"
+                required
+                value={playlistName}
+                onChange={(e) => setPlaylistName(e.target.value)}
+                placeholder="e.g. Synthwave Night Drive"
+                className="w-full bg-[#0d0d0d] border border-[#2a2a2a] rounded-[3px] px-3 py-2 text-sm text-white focus:outline-none focus:border-[#e5a00d]"
+              />
+            </div>
+
+            {importTab === 'link' && (
+              <div>
+                <label className="block text-xs uppercase font-mono tracking-wider text-neutral-300 mb-1">
+                  Playlist URL (Spotify or Deezer)
+                </label>
+                <input
+                  type="url"
+                  required
+                  value={playlistUrl}
+                  onChange={(e) => setPlaylistUrl(e.target.value)}
+                  placeholder="https://open.spotify.com/playlist/... or https://www.deezer.com/playlist/..."
+                  className="w-full bg-[#0d0d0d] border border-[#2a2a2a] rounded-[3px] px-3 py-2 text-sm text-white focus:outline-none focus:border-[#e5a00d]"
+                />
+                <p className="text-[11px] text-neutral-500 font-mono mt-1">
+                  Keyless Spotify: No Spotify API Key Needed!
+                </p>
+              </div>
+            )}
+
+            {importTab === 'paste' && (
+              <div>
+                <label className="block text-xs uppercase font-mono tracking-wider text-neutral-300 mb-1">
+                  Tracks (one per line: Artist - Title)
+                </label>
+                <textarea
+                  rows={6}
+                  required
+                  value={pastedTracks}
+                  onChange={(e) => setPastedTracks(e.target.value)}
+                  placeholder={`Kavinsky - Nightcall\nGunship - Tech Noir\nCarpenter Brut - Turbo Killer`}
+                  className="w-full bg-[#0d0d0d] border border-[#2a2a2a] rounded-[3px] px-3 py-2 text-sm text-white font-mono focus:outline-none focus:border-[#e5a00d]"
+                />
+              </div>
+            )}
+
+            {importTab === 'helper' && (
+              <div className="p-3 bg-[#161616] border border-[#222222] rounded-[3px] space-y-2 text-xs text-neutral-300 font-mono">
+                <p className="font-bold text-[#e5a00d]">1-Click Browser Bookmarklet</p>
+                <p>
+                  Drag this helper to your bookmarks toolbar to instantly export any playlist
+                  from Spotify Web Player directly into TrackSeerr with 1 click.
+                </p>
+                <div className="p-2 bg-[#0d0d0d] border border-[#2a2a2a] rounded text-[11px] select-all break-all">
+                  {"javascript:(function(){window.open('" + (typeof window !== 'undefined' ? window.location.origin : '') + "/#import?url='+encodeURIComponent(location.href));})();"}
+                </div>
+              </div>
+            )}
+
+            {importTab !== 'helper' && (
+              <div className="flex justify-end pt-2">
+                <TapeDeckButton
+                  type="submit"
+                  variant="amber"
+                  size="md"
+                  disabled={isSubmittingImport}
+                  icon={
+                    isSubmittingImport ? (
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                    ) : (
+                      <Plus className="h-4 w-4" />
+                    )
+                  }
+                >
+                  {isSubmittingImport ? 'Importing...' : 'Add Playlist'}
+                </TapeDeckButton>
+              </div>
+            )}
+          </form>
+        </div>
+      </ObsidianModal>
+    </div>
+  );
+};

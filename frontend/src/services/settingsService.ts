@@ -1,0 +1,91 @@
+import { apiRequest } from './apiClient';
+import type {
+  GeneralSettings,
+  QualityProfile,
+  DownloadClientItem,
+  IndexerItem,
+  SystemStatusInfo,
+} from '@/types/models';
+
+export async function getGeneralSettings(): Promise<GeneralSettings> {
+  return apiRequest<GeneralSettings>('/api/settings/general');
+}
+
+export async function updateGeneralSettings(settings: Partial<GeneralSettings>): Promise<GeneralSettings> {
+  return apiRequest<GeneralSettings>('/api/settings/general', {
+    method: 'POST',
+    body: settings,
+  });
+}
+
+export async function getQualityProfiles(): Promise<QualityProfile[]> {
+  const res = await apiRequest<QualityProfile[]>('/api/settings/quality-profiles');
+  return res || [];
+}
+
+export async function saveQualityProfile(profile: Partial<QualityProfile>): Promise<QualityProfile> {
+  return apiRequest<QualityProfile>('/api/settings/quality-profiles', {
+    method: 'POST',
+    body: profile,
+  });
+}
+
+export async function deleteQualityProfile(profileId: number): Promise<void> {
+  await apiRequest<void>(`/api/settings/quality-profiles/${profileId}`, {
+    method: 'DELETE',
+  });
+}
+
+export async function getClientSettings(): Promise<DownloadClientItem[]> {
+  const res = await apiRequest<DownloadClientItem[]>('/api/settings/download-clients');
+  return res || [];
+}
+
+export async function saveClientSettings(client: Partial<DownloadClientItem>): Promise<DownloadClientItem> {
+  return apiRequest<DownloadClientItem>('/api/settings/download-clients', {
+    method: 'POST',
+    body: client,
+  });
+}
+
+export async function deleteClientSettings(clientId: number): Promise<void> {
+  await apiRequest<void>(`/api/settings/download-clients/${clientId}`, {
+    method: 'DELETE',
+  });
+}
+
+export async function testClientConnection(client: Partial<DownloadClientItem>): Promise<{ success: boolean; message: string }> {
+  return apiRequest<{ success: boolean; message: string }>('/api/settings/download-clients/test', {
+    method: 'POST',
+    body: client,
+  });
+}
+
+export async function getIndexerSettings(): Promise<IndexerItem[]> {
+  const res = await apiRequest<IndexerItem[]>('/api/settings/indexers');
+  return res || [];
+}
+
+export async function saveIndexer(indexer: Partial<IndexerItem>): Promise<IndexerItem> {
+  return apiRequest<IndexerItem>('/api/settings/indexers', {
+    method: 'POST',
+    body: indexer,
+  });
+}
+
+export async function deleteIndexer(indexerId: number): Promise<void> {
+  await apiRequest<void>(`/api/settings/indexers/${indexerId}`, {
+    method: 'DELETE',
+  });
+}
+
+export async function testIndexer(indexer: Partial<IndexerItem>): Promise<{ success: boolean; message: string }> {
+  return apiRequest<{ success: boolean; message: string }>('/api/settings/indexers/test', {
+    method: 'POST',
+    body: indexer,
+  });
+}
+
+export async function getSystemStatus(): Promise<SystemStatusInfo> {
+  return apiRequest<SystemStatusInfo>('/api/system/status');
+}
