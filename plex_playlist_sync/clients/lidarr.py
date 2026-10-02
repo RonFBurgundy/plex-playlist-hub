@@ -299,3 +299,107 @@ class LidarrClient:
                 "message": res.get("message", ""),
             }
         return res
+
+    def get_all_artists(self, client: Optional[httpx.Client] = None) -> list[dict[str, Any]]:
+        """Retrieves all artists monitored or unmonitored from Lidarr."""
+        url = f"{self.base_url}/api/v1/artist"
+        headers = self._get_headers()
+        try:
+            if client:
+                resp = client.get(url, headers=headers)
+            else:
+                with httpx.Client(verify=self.verify_ssl, timeout=self.timeout) as c:
+                    resp = c.get(url, headers=headers)
+            if resp.status_code == 200:
+                data = resp.json()
+                if isinstance(data, list):
+                    return data
+            else:
+                logger.warning("Failed to fetch Lidarr artists: HTTP %s", resp.status_code)
+        except Exception as e:
+            logger.warning("Exception fetching artists from Lidarr: %s", e)
+        return []
+
+    def get_all_albums(
+        self,
+        artist_id: Optional[int] = None,
+        client: Optional[httpx.Client] = None,
+    ) -> list[dict[str, Any]]:
+        """Retrieves albums from Lidarr, optionally filtered by artist ID."""
+        url = f"{self.base_url}/api/v1/album"
+        params: dict[str, Any] = {}
+        if artist_id is not None:
+            params["artistId"] = artist_id
+        headers = self._get_headers()
+        try:
+            if client:
+                resp = client.get(url, headers=headers, params=params if params else None)
+            else:
+                with httpx.Client(verify=self.verify_ssl, timeout=self.timeout) as c:
+                    resp = c.get(url, headers=headers, params=params if params else None)
+            if resp.status_code == 200:
+                data = resp.json()
+                if isinstance(data, list):
+                    return data
+            else:
+                logger.warning("Failed to fetch Lidarr albums: HTTP %s", resp.status_code)
+        except Exception as e:
+            logger.warning("Exception fetching albums from Lidarr: %s", e)
+        return []
+
+    def get_all_tracks(
+        self,
+        artist_id: Optional[int] = None,
+        album_id: Optional[int] = None,
+        client: Optional[httpx.Client] = None,
+    ) -> list[dict[str, Any]]:
+        """Retrieves tracks from Lidarr, optionally filtered by artistId and/or albumId."""
+        url = f"{self.base_url}/api/v1/track"
+        params: dict[str, Any] = {}
+        if artist_id is not None:
+            params["artistId"] = artist_id
+        if album_id is not None:
+            params["albumId"] = album_id
+        headers = self._get_headers()
+        try:
+            if client:
+                resp = client.get(url, headers=headers, params=params if params else None)
+            else:
+                with httpx.Client(verify=self.verify_ssl, timeout=self.timeout) as c:
+                    resp = c.get(url, headers=headers, params=params if params else None)
+            if resp.status_code == 200:
+                data = resp.json()
+                if isinstance(data, list):
+                    return data
+            else:
+                logger.warning("Failed to fetch Lidarr tracks: HTTP %s", resp.status_code)
+        except Exception as e:
+            logger.warning("Exception fetching tracks from Lidarr: %s", e)
+        return []
+
+    def get_all_track_files(
+        self,
+        artist_id: Optional[int] = None,
+        client: Optional[httpx.Client] = None,
+    ) -> list[dict[str, Any]]:
+        """Retrieves physical track files from Lidarr, optionally filtered by artist ID."""
+        url = f"{self.base_url}/api/v1/trackfile"
+        params: dict[str, Any] = {}
+        if artist_id is not None:
+            params["artistId"] = artist_id
+        headers = self._get_headers()
+        try:
+            if client:
+                resp = client.get(url, headers=headers, params=params if params else None)
+            else:
+                with httpx.Client(verify=self.verify_ssl, timeout=self.timeout) as c:
+                    resp = c.get(url, headers=headers, params=params if params else None)
+            if resp.status_code == 200:
+                data = resp.json()
+                if isinstance(data, list):
+                    return data
+            else:
+                logger.warning("Failed to fetch Lidarr track files: HTTP %s", resp.status_code)
+        except Exception as e:
+            logger.warning("Exception fetching track files from Lidarr: %s", e)
+        return []

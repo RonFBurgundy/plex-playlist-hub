@@ -13,6 +13,7 @@ from plex_playlist_sync.api.dependencies import (
 )
 from plex_playlist_sync.clients.discovery import DiscoveryClient
 from plex_playlist_sync.clients.plex import PlexClient
+from plex_playlist_sync.library_availability import get_item_availability
 from plex_playlist_sync.storage import Database
 
 logger = logging.getLogger(__name__)
@@ -25,7 +26,14 @@ def annotate_item_statuses(
     db: Database,
     plex_client: Optional[PlexClient] = None,
 ) -> list[dict[str, Any]]:
-    """Cross-references discovery items with music_requests and Plex library."""
+    """Cross-references discovery items with music_requests and native library or Plex."""
+    try:
+        media_settings = db.get_media_management_settings()
+        library_mode = media_settings.get("library_mode", "native")
+    except Exception as e:
+        logger.warning("Error loading media management settings for status annotation: %s", e)
+        library_mode = "native"
+
     try:
         all_requests = db.list_requests()
         req_by_foreign_id = {r["foreign_id"]: r for r in all_requests if r.get("foreign_id")}
@@ -46,6 +54,24 @@ def annotate_item_statuses(
         title = (it.get("title") or "").lower().strip()
 
         matched_req = req_by_foreign_id.get(foreign_id) or req_by_artist_title.get((artist, title))
+
+        if library_mode == "native":
+            is_album = (it.get("type") == "album") or (it.get("item_type") == "album")
+            avail = get_item_availability(
+                db,
+                artist_name=it.get("artist"),
+                album_title=it.get("title") if is_album else None,
+                track_title=it.get("title") if not is_album else None,
+                foreign_id=foreign_id,
+            )
+            if avail.get("in_library"):
+                it["status"] = avail["status"]
+                it["quality"] = avail.get("quality")
+                if matched_req:
+                    it["request_id"] = matched_req.get("id")
+                annotated.append(it)
+                continue
+
         if matched_req:
             req_status = matched_req.get("status")
             if req_status in ("available", "completed"):
