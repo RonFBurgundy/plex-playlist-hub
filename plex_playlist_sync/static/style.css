@@ -414,3 +414,22 @@ body.modal-open {
     width: 100% !important;
   }
 }
+
+/* ==========================================================================
+   Native Mobile Landing Page & Touch Ergonomics
+   ========================================================================== */
+.landing-hero {
+  min-height: calc(100dvh - 8rem);
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+}
+
+@media (max-width: 639px) {
+  .landing-hero {
+    min-height: calc(100dvh - 5.5rem);
+    padding-left: 0;
+    padding-right: 0;
+  }
+}
+

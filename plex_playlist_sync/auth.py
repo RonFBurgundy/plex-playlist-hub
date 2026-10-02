@@ -39,7 +39,10 @@ def _sanitize_header_value(value: str) -> str:
     return cleaned
 
 
-def create_plex_pin(client_identifier: str = DEFAULT_CLIENT_IDENTIFIER) -> dict[str, Any]:
+def create_plex_pin(
+    client_identifier: str = DEFAULT_CLIENT_IDENTIFIER,
+    forward_url: Optional[str] = None,
+) -> dict[str, Any]:
     """Request a new Plex PIN for OAuth authentication.
 
     Headers include X-Plex-Product and X-Plex-Client-Identifier.
@@ -69,11 +72,14 @@ def create_plex_pin(client_identifier: str = DEFAULT_CLIENT_IDENTIFIER) -> dict[
     if not pin_id or not pin_code:
         raise PlexAuthError("Plex PIN response missing 'id' or 'code'")
 
-    auth_params = urllib.parse.urlencode({
+    params: dict[str, str] = {
         "clientID": clean_client_id,
         "code": pin_code,
         "context[device][product]": DEFAULT_PRODUCT_NAME,
-    })
+    }
+    if forward_url:
+        params["forwardUrl"] = str(forward_url).strip()
+    auth_params = urllib.parse.urlencode(params)
     auth_url = f"{PLEX_AUTH_APP_URL}?{auth_params}"
 
     return {

@@ -31,6 +31,13 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
+class CreatePinRequest(BaseModel):
+    forward_url: Optional[str] = Field(
+        default=None,
+        description="Optional redirect URL after Plex authorization",
+    )
+
+
 class VerifyPinRequest(BaseModel):
     pin_id: int = Field(..., description="Plex PIN ID returned by create pin endpoint")
     target_machine_id: Optional[str] = Field(
@@ -40,10 +47,17 @@ class VerifyPinRequest(BaseModel):
 
 
 @router.post("/plex/pin")
-def generate_pin() -> dict[str, Any]:
+def generate_pin(
+    req: Optional[CreatePinRequest] = None,
+    forward_url: Optional[str] = None,
+) -> dict[str, Any]:
     """Generates a Plex OAuth PIN and authorization URL."""
+    target_forward_url = (req.forward_url if req and req.forward_url else None) or forward_url
     try:
-        pin_data = create_plex_pin()
+        if target_forward_url:
+            pin_data = create_plex_pin(forward_url=target_forward_url)
+        else:
+            pin_data = create_plex_pin()
         return pin_data
     except PlexAuthError as e:
         logger.error("Failed to generate Plex PIN: %s", e)

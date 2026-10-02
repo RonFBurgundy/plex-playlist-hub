@@ -102,7 +102,8 @@
         </div>
 
         <!-- Live Sync Status Badge (Desktop) -->
-        <div class="hidden lg:flex items-center space-x-2 px-3 py-1 rounded-[4px] bg-slate-900 border border-slate-800 text-xs text-slate-300">
+        <div class="hidden lg:flex items-center space-x-2 px-3 py-1 rounded-[4px] bg-slate-900 border border-slate-800 text-xs text-slate-300"
+             x-show="isAuthenticated">
           <span :class="syncStatus.is_syncing ? 'status-dot syncing' : 'status-dot idle'"></span>
           <span x-text="syncStatus.is_syncing ? 'Syncing...' : 'Idle'"></span>
           <span class="text-slate-600">|</span>
@@ -111,6 +112,7 @@
 
         <!-- Live Sync Status Badge (Mobile / Tablet Compact) -->
         <div class="flex lg:hidden items-center space-x-1.5 px-2.5 py-1 rounded-[4px] bg-slate-900 border border-slate-800 text-xs text-slate-300"
+             x-show="isAuthenticated"
              :title="syncStatus.is_syncing ? 'Syncing...' : 'Idle'">
           <span :class="syncStatus.is_syncing ? 'status-dot syncing' : 'status-dot idle'"></span>
           <span class="hidden sm:inline text-[11px]" x-text="syncStatus.is_syncing ? 'Syncing...' : 'Idle'"></span>
@@ -438,52 +440,129 @@
     
     <!-- UNAUTHENTICATED HERO PROMPT -->
     <template x-if="!isAuthenticated && !isLoading">
-      <div class="glass-panel rounded-2xl p-8 sm:p-12 text-center max-w-2xl mx-auto space-y-6 shadow-2xl border border-slate-800">
-        <div class="w-16 h-16 rounded-2xl bg-[#e5a00d]/10 border border-[#e5a00d]/30 text-[#e5a00d] flex items-center justify-center mx-auto shadow-inner">
-          <svg class="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3"></path>
-          </svg>
-        </div>
-        <div class="space-y-2">
-          <h2 class="text-2xl sm:text-3xl font-bold tracking-tight text-white">Sign In to TrackSeerr</h2>
-          <p class="text-slate-400 text-sm max-w-md mx-auto">
-            Authorize with your Plex account to synchronize your favorite Spotify and Deezer playlists with your Plex Media Server and Home users.
-          </p>
-        </div>
+      <div class="w-full max-w-3xl mx-auto py-2 sm:py-6 landing-hero">
+        <!-- Native Hero Chassis Card -->
+        <div class="relative overflow-hidden rounded-[4px] border border-[#262626] bg-[#121212] p-6 sm:p-10 shadow-2xl space-y-8">
+          
+          <!-- Ambient Warm Amber Glow -->
+          <div class="absolute -top-24 left-1/2 -translate-x-1/2 w-96 h-96 bg-[#e5a00d]/10 rounded-full blur-3xl pointer-events-none"></div>
 
-        <!-- PIN Box -->
-        <template x-if="pin">
-          <div class="bg-slate-950/80 rounded-xl p-6 border border-slate-800/80 space-y-4 max-w-md mx-auto">
-            <div class="text-xs uppercase tracking-wider text-slate-400 font-semibold">Your Plex Verification Code</div>
-            <div class="pin-code-digit text-3xl font-mono text-[#e5a00d] select-all" x-text="pin.code"></div>
+          <!-- Walkman Logo & App Title -->
+          <div class="relative text-center space-y-4">
+            <div class="w-16 h-16 sm:w-20 sm:h-20 rounded-[4px] bg-[#141414] border border-[#262626] flex items-center justify-center mx-auto shadow-xl shadow-[#e5a00d]/10 active:translate-y-[2px] transition duration-75">
+              <img src="/static/trackseerr-logo.svg" alt="TrackSeerr" class="w-12 h-12 sm:w-16 sm:h-16 object-contain drop-shadow-md">
+            </div>
             
-            <div class="pt-2">
-              <button type="button"
-                      @click="openPlexAuth()" 
-                      class="inline-flex items-center justify-center space-x-2 w-full px-5 py-3 rounded-lg bg-[#e5a00d] hover:bg-[#cc8f0c] text-slate-950 font-bold text-sm transition shadow-lg shadow-[#e5a00d]/20">
-                <span>Authorize with Plex</span>
-                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"></path>
+            <div class="space-y-2">
+              <div class="inline-flex items-center space-x-2 px-2.5 py-0.5 rounded-[3px] bg-[#e5a00d]/15 border border-[#e5a00d]/30 text-[#e5a00d] text-[10px] font-mono font-bold uppercase tracking-wider">
+                <span>Plex Music Automation Suite</span>
+              </div>
+              <h2 class="text-2xl sm:text-3xl font-extrabold tracking-tight text-white">
+                Sign In to TrackSeerr
+              </h2>
+              <p class="text-slate-400 text-xs sm:text-sm max-w-lg mx-auto leading-relaxed">
+                Discover trending music, manage multi-user requests with Lidarr, and synchronize Spotify, Apple Music &amp; Deezer playlists directly with Plex Media Server and Plexamp.
+              </p>
+            </div>
+          </div>
+
+          <!-- Native Mobile Feature Pillars (3 Touch Cards) -->
+          <div class="relative grid grid-cols-1 sm:grid-cols-3 gap-3 text-left">
+            <!-- Discovery Card -->
+            <div class="p-3.5 rounded-[4px] bg-[#161616] border border-[#222222] flex flex-col justify-between space-y-1">
+              <div class="flex items-center space-x-2 text-[#e5a00d]">
+                <svg class="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"></path>
                 </svg>
+                <span class="text-xs font-bold text-white uppercase tracking-wider">Music Discovery</span>
+              </div>
+              <p class="text-[11px] text-slate-400 leading-normal">
+                Explore top charts, new releases, and deep album tracklists across Apple Music &amp; Deezer with 1-click requests.
+              </p>
+            </div>
+
+            <!-- Automated Acquisition Card -->
+            <div class="p-3.5 rounded-[4px] bg-[#161616] border border-[#222222] flex flex-col justify-between space-y-1">
+              <div class="flex items-center space-x-2 text-[#e5a00d]">
+                <svg class="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"></path>
+                </svg>
+                <span class="text-xs font-bold text-white uppercase tracking-wider">Automated Grabbing</span>
+              </div>
+              <p class="text-[11px] text-slate-400 leading-normal">
+                Lidarr, Torznab indexers, qBittorrent, SABnzbd &amp; Slskd pipeline with automatic lossless FLAC tagging.
+              </p>
+            </div>
+
+            <!-- Playlist Ecosystem Card -->
+            <div class="p-3.5 rounded-[4px] bg-[#161616] border border-[#222222] flex flex-col justify-between space-y-1">
+              <div class="flex items-center space-x-2 text-[#e5a00d]">
+                <svg class="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3"></path>
+                </svg>
+                <span class="text-xs font-bold text-white uppercase tracking-wider">Plexamp Sync</span>
+              </div>
+              <p class="text-[11px] text-slate-400 leading-normal">
+                Lossless matching, multi-user targets, smart mix presets, and instant sync into your Plex library.
+              </p>
+            </div>
+          </div>
+
+          <!-- Primary Call-to-Action Area -->
+          <div class="relative max-w-md mx-auto space-y-4">
+            
+            <!-- Loading State View (Connecting / Verifying) -->
+            <div x-show="isAuthenticating" 
+                 class="p-6 rounded-[4px] bg-[#161616] border border-[#262626] text-center space-y-3"
+                 style="display: none;">
+              <div class="flex items-center justify-center space-x-3 text-[#e5a00d]">
+                <div class="w-5 h-5 border-2 border-[#e5a00d] border-t-transparent rounded-full animate-spin"></div>
+                <span class="text-sm font-semibold text-white" x-text="authLoadingText || 'Connecting to Plex...'"></span>
+              </div>
+              <p class="text-xs text-slate-400">
+                Please authorize with your Plex account on <span class="text-slate-300">plex.tv</span>. You will be redirected back automatically.
+              </p>
+              <button type="button" 
+                      @click="cancelAuthFlow()" 
+                      class="text-xs text-slate-500 hover:text-slate-300 underline pt-1">
+                Cancel
               </button>
             </div>
 
-            <!-- Polling Radar Indicator -->
-            <div class="flex items-center justify-center space-x-2 text-xs text-slate-400 pt-2">
-              <span class="status-dot syncing"></span>
-              <span>Waiting for approval on plex.tv...</span>
-            </div>
-          </div>
-        </template>
+            <!-- Standard CTA Button -->
+            <div x-show="!isAuthenticating" class="space-y-3">
+              <button type="button"
+                      @click="startPlexAuth()" 
+                      class="w-full min-h-[48px] py-3.5 px-6 rounded-[4px] bg-[#e5a00d] hover:bg-[#cc8f0c] text-slate-950 font-bold text-sm sm:text-base transition duration-75 flex items-center justify-center space-x-2.5 shadow-lg shadow-[#e5a00d]/20 active:translate-y-[2px]">
+                <svg class="w-5 h-5 flex-shrink-0" fill="currentColor" viewBox="0 0 24 24">
+                  <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 14.5v-9l6 4.5-6 4.5z"/>
+                </svg>
+                <span>Authorize with Plex</span>
+                <svg class="w-4 h-4 ml-1 opacity-70" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M9 5l7 7-7 7"></path>
+                </svg>
+              </button>
 
-        <template x-if="pinError">
-          <div class="p-4 rounded-xl bg-rose-500/10 border border-rose-500/30 text-rose-400 text-xs max-w-md mx-auto flex items-start space-x-3">
-            <svg class="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"></path>
-            </svg>
-            <div class="text-left" x-text="pinError"></div>
+              <p class="text-[11px] text-slate-500 text-center">
+                Secured via official <span class="text-slate-400">plex.tv</span> OAuth. Your Plex credentials are never shared or stored.
+              </p>
+            </div>
+
+            <!-- Error Notice Card -->
+            <template x-if="pinError">
+              <div class="p-4 rounded-[4px] bg-rose-500/10 border border-rose-500/30 text-rose-400 text-xs text-left flex items-start space-x-3">
+                <svg class="w-5 h-5 flex-shrink-0 mt-0.5 text-rose-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"></path>
+                </svg>
+                <div class="flex-1 space-y-1">
+                  <div class="font-semibold text-rose-300">Sign-in Notice</div>
+                  <div x-text="pinError"></div>
+                </div>
+              </div>
+            </template>
+
           </div>
-        </template>
+        </div>
       </div>
     </template>
 

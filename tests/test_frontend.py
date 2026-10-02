@@ -81,9 +81,12 @@ class TestFrontendDashboard:
         assert "Unmatched Tracks" in html or "Missing Tracks" in html
         assert "Sync Engine Live Console" in html or "terminal-console" in html
 
-        # PIN auth flow elements
+        # PIN auth flow elements & Native mobile landing hero
         assert "Sign In with Plex" in html
+        assert "Authorize with Plex" in html
         assert "plex.tv" in html
+        assert "landing-hero" in html
+        assert "pin-code-digit" not in html
 
         # Target toggling and CSV export
         assert "target-pill" in html or "toggleUserTarget" in html
@@ -172,6 +175,10 @@ class TestStaticAssets:
         assert "getBookmarkletHref" in resp.text
         assert "checkHashImport" in resp.text
         assert "openPlexAuth" in resp.text
+        assert "startPlexAuth" in resp.text
+        assert "checkAuthCallback" in resp.text
+        assert "verifyPinAndLogin" in resp.text
+        assert "cancelAuthFlow" in resp.text
         assert "fetchLidarrStatus" in resp.text
         assert "pushAllToLidarr" in resp.text
         assert "pushTrackToLidarr" in resp.text

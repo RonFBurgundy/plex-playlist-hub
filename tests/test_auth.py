@@ -64,6 +64,19 @@ class TestPlexPinCreation:
         assert call_headers["X-Plex-Client-Identifier"] == "custom-app"
 
     @patch("plex_playlist_sync.auth.requests.post")
+    def test_create_plex_pin_with_forward_url(self, mock_post):
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = {"id": 12345, "code": "ABCD"}
+        mock_post.return_value = mock_resp
+
+        result = create_plex_pin(forward_url="https://trackseerr.local/callback?pin_id=12345")
+
+        assert result["id"] == 12345
+        assert result["code"] == "ABCD"
+        assert "forwardUrl=https%3A%2F%2Ftrackseerr.local%2Fcallback%3Fpin_id%3D12345" in result["auth_url"]
+
+    @patch("plex_playlist_sync.auth.requests.post")
     def test_create_plex_pin_missing_fields_raises(self, mock_post):
         mock_resp = MagicMock()
         mock_resp.status_code = 200

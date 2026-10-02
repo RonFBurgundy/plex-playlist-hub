@@ -16,6 +16,8 @@ document.addEventListener('alpine:init', () => {
     pinPollingTimer: null,
     pinError: '',
     isGeneratingPin: false,
+    isAuthenticating: false,
+    authLoadingText: '',
 
     // Overseerr / Arr Primary Tab Navigation
     activeTab: 'discover', // 'discover' | 'requests' | 'playlists' | 'activity' | 'settings'
@@ -366,8 +368,39 @@ document.addEventListener('alpine:init', () => {
 
     // Lifecycle
     init() {
-      this.checkAuth();
+      // Check for OAuth redirect callback from Plex (e.g. ?pin_id=12345 or popup callback)
+      this.checkAuthCallback().then((handled) => {
+        if (!handled) {
+          this.checkAuth();
+        }
+      });
       this.audioPlayer.init(this);
+
+      // Cross-window communication listeners for desktop popup auth completion
+      window.addEventListener('message', async (event) => {
+        if (event.data && event.data.type === 'TRACKSEERR_PLEX_AUTH_SUCCESS' && event.data.pinId) {
+          if (this.plexPopup && !this.plexPopup.closed) {
+            try { this.plexPopup.close(); } catch (e) {}
+            this.plexPopup = null;
+          }
+          await this.verifyPinAndLogin(event.data.pinId);
+        }
+      });
+
+      window.addEventListener('storage', async (event) => {
+        if (event.key === 'trackseerr_auth_event' && event.newValue) {
+          try {
+            const data = JSON.parse(event.newValue);
+            if (data?.pinId) {
+              if (this.plexPopup && !this.plexPopup.closed) {
+                try { this.plexPopup.close(); } catch (e) {}
+                this.plexPopup = null;
+              }
+              await this.verifyPinAndLogin(data.pinId);
+            }
+          } catch (e) {}
+        }
+      });
 
       // Body modal scroll-lock synchronization
       const syncBodyModalLock = () => {
@@ -505,8 +538,13 @@ document.addEventListener('alpine:init', () => {
       this.isAuthenticated = false;
       this.currentUser = null;
       this.authToken = '';
+      this.isAuthenticating = false;
+      this.authLoadingText = '';
       this.closeSSE();
-      this.startPinFlow();
+      if (this.pinPollingTimer) {
+        clearInterval(this.pinPollingTimer);
+        this.pinPollingTimer = null;
+      }
     },
 
     // -----------------------------------------------------------------------
@@ -677,22 +715,224 @@ document.addEventListener('alpine:init', () => {
       }
     },
 
-    async startPinFlow() {
-      this.isGeneratingPin = true;
+    async checkAuthCallback() {
+      try {
+        const urlParams = new URLSearchParams(window.location.search);
+        let pinId = urlParams.get('pin_id');
+        const isPopup = urlParams.get('popup') === '1';
+
+        if (!pinId) {
+          try {
+            pinId = sessionStorage.getItem('trackseerr_pending_pin');
+          } catch (e) {}
+        }
+
+        if (pinId) {
+          // If running inside a desktop popup window:
+          if (isPopup || (window.opener && window.opener !== window)) {
+            try {
+              if (window.opener) {
+                window.opener.postMessage({ type: 'TRACKSEERR_PLEX_AUTH_SUCCESS', pinId }, window.location.origin);
+              }
+              localStorage.setItem('trackseerr_auth_event', JSON.stringify({ pinId, time: Date.now() }));
+            } catch (e) {}
+            window.close();
+            return true;
+          }
+
+          // In main window or mobile: clean up URL parameters immediately without reload
+          if (window.history && window.history.replaceState) {
+            const cleanUrl = window.location.pathname + (window.location.hash || '');
+            window.history.replaceState({}, document.title, cleanUrl);
+          }
+          try {
+            sessionStorage.removeItem('trackseerr_pending_pin');
+          } catch (e) {}
+
+          const success = await this.verifyPinAndLogin(pinId);
+          return success;
+        }
+      } catch (e) {}
+      return false;
+    },
+
+    async verifyPinAndLogin(pinId, maxRetries = 6) {
+      this.isAuthenticating = true;
+      this.authLoadingText = 'Verifying Plex authorization...';
       this.pinError = '';
+
+      for (let attempt = 0; attempt < maxRetries; attempt++) {
+        try {
+          const res = await fetch('/api/auth/plex/verify', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+            credentials: 'same-origin',
+            body: JSON.stringify({ pin_id: parseInt(pinId, 10) })
+          });
+
+          if (res.status === 200) {
+            if (this.plexPopup && !this.plexPopup.closed) {
+              try { this.plexPopup.close(); } catch (e) {}
+              this.plexPopup = null;
+            }
+            if (this.pinPollingTimer) {
+              clearInterval(this.pinPollingTimer);
+              this.pinPollingTimer = null;
+            }
+            const data = await res.json();
+            this.currentUser = data.user;
+            this.isAuthenticated = true;
+            this.isAuthenticating = false;
+            this.authLoadingText = '';
+            this.pin = null;
+            try {
+              sessionStorage.removeItem('trackseerr_pending_pin');
+            } catch (e) {}
+            this.showToast(`Signed in as ${this.currentUser.username}`, 'success');
+            await this.loadDashboardData();
+            this.loadTrending();
+            this.loadRequests();
+            this.initSSE();
+            this.checkHashImport();
+            this.loadSettings();
+            this.loadQueue(true);
+            return true;
+          } else if (res.status === 403) {
+            if (this.plexPopup && !this.plexPopup.closed) {
+              try { this.plexPopup.close(); } catch (e) {}
+              this.plexPopup = null;
+            }
+            if (this.pinPollingTimer) {
+              clearInterval(this.pinPollingTimer);
+              this.pinPollingTimer = null;
+            }
+            const data = await res.json().catch(() => null);
+            this.pinError = data?.detail || 'Forbidden: Access denied to this Plex Media Server';
+            this.isAuthenticating = false;
+            this.authLoadingText = '';
+            this.showToast(this.pinError, 'error');
+            return false;
+          } else if (res.status === 400 && attempt < maxRetries - 1) {
+            // Still waiting for Plex TV token exchange to propagate, wait and retry
+            await new Promise(r => setTimeout(r, 1200));
+            continue;
+          } else {
+            const data = await res.json().catch(() => null);
+            this.pinError = data?.detail || 'Plex authorization failed or expired';
+            this.isAuthenticating = false;
+            this.authLoadingText = '';
+            return false;
+          }
+        } catch (err) {
+          if (attempt < maxRetries - 1) {
+            await new Promise(r => setTimeout(r, 1200));
+            continue;
+          }
+          this.pinError = 'Network error while verifying Plex authorization';
+          this.isAuthenticating = false;
+          this.authLoadingText = '';
+          return false;
+        }
+      }
+      return false;
+    },
+
+    async startPlexAuth() {
+      this.isAuthenticating = true;
+      this.authLoadingText = 'Connecting to Plex...';
+      this.pinError = '';
+
       if (this.pinPollingTimer) {
         clearInterval(this.pinPollingTimer);
         this.pinPollingTimer = null;
       }
 
       try {
-        const data = await this.apiRequest('/api/auth/plex/pin', { method: 'POST' });
-        this.pin = data;
+        const isMobile = window.matchMedia('(max-width: 768px)').matches ||
+                         /Android|iPhone|iPad|iPod/i.test(navigator.userAgent) ||
+                         window.navigator.standalone === true;
+
+        const baseUrl = `${window.location.origin}${window.location.pathname}`;
+
+        const pinData = await this.apiRequest('/api/auth/plex/pin', {
+          method: 'POST',
+          body: JSON.stringify({ forward_url: baseUrl })
+        });
+
+        this.pin = pinData;
+
+        // Build redirect callback destination URL
+        const forwardUrl = new URL(baseUrl);
+        forwardUrl.searchParams.set('pin_id', String(pinData.id));
+        if (!isMobile) {
+          forwardUrl.searchParams.set('popup', '1');
+        }
+
+        try {
+          sessionStorage.setItem('trackseerr_pending_pin', String(pinData.id));
+        } catch (e) {}
+
+        // Ensure forwardUrl is present in auth_url hash
+        let authUrl = pinData.auth_url;
+        if (!authUrl.includes('forwardUrl=')) {
+          const delim = authUrl.includes('?') ? '&' : '?';
+          authUrl += `${delim}forwardUrl=${encodeURIComponent(forwardUrl.toString())}`;
+        }
+
+        if (isMobile) {
+          // Native mobile experience: full window navigation to Plex account
+          this.authLoadingText = 'Taking you to Plex...';
+          window.location.href = authUrl;
+          return;
+        }
+
+        // Desktop experience: center popup window
+        this.authLoadingText = 'Waiting for Plex sign-in...';
+        const width = 600;
+        const height = 700;
+        const left = Math.max(0, Math.floor((window.innerWidth - width) / 2 + window.screenX));
+        const top = Math.max(0, Math.floor((window.innerHeight - height) / 2 + window.screenY));
+
+        this.plexPopup = window.open(
+          authUrl,
+          'plex_oauth_popup',
+          `width=${width},height=${height},top=${top},left=${left},scrollbars=yes,status=no,toolbar=no,menubar=no`
+        );
+
+        if (!this.plexPopup || this.plexPopup.closed || typeof this.plexPopup.closed === 'undefined') {
+          // Fall back to same-window navigation if popup is blocked
+          this.authLoadingText = 'Taking you to Plex...';
+          window.location.href = authUrl;
+          return;
+        }
+
         this.pollPin();
       } catch (err) {
-        this.pinError = err.message || 'Failed to generate Plex PIN';
-      } finally {
-        this.isGeneratingPin = false;
+        this.pinError = err.message || 'Failed to start Plex authorization';
+        this.isAuthenticating = false;
+        this.authLoadingText = '';
+        this.showToast(this.pinError, 'error');
+      }
+    },
+
+    openPlexAuth() {
+      return this.startPlexAuth();
+    },
+
+    startPinFlow() {
+      return this.startPlexAuth();
+    },
+
+    cancelAuthFlow() {
+      this.isAuthenticating = false;
+      this.authLoadingText = '';
+      if (this.pinPollingTimer) {
+        clearInterval(this.pinPollingTimer);
+        this.pinPollingTimer = null;
+      }
+      if (this.plexPopup && !this.plexPopup.closed) {
+        try { this.plexPopup.close(); } catch (e) {}
+        this.plexPopup = null;
       }
     },
 
@@ -725,11 +965,20 @@ document.addEventListener('alpine:init', () => {
             const data = await res.json();
             this.currentUser = data.user;
             this.isAuthenticated = true;
+            this.isAuthenticating = false;
+            this.authLoadingText = '';
             this.pin = null;
+            try {
+              sessionStorage.removeItem('trackseerr_pending_pin');
+            } catch (e) {}
             this.showToast(`Signed in as ${this.currentUser.username}`, 'success');
-            this.loadDashboardData();
+            await this.loadDashboardData();
+            this.loadTrending();
+            this.loadRequests();
             this.initSSE();
             this.checkHashImport();
+            this.loadSettings();
+            this.loadQueue(true);
           } else if (res.status === 403) {
             if (this.plexPopup && !this.plexPopup.closed) {
               try {
@@ -741,30 +990,21 @@ document.addEventListener('alpine:init', () => {
             this.pinPollingTimer = null;
             const data = await res.json().catch(() => null);
             this.pinError = data?.detail || 'Forbidden: Access denied to this Plex Media Server';
+            this.isAuthenticating = false;
+            this.authLoadingText = '';
             this.showToast(this.pinError, 'error');
           } else if (res.status === 400) {
             // Still waiting for user authorization on plex.tv
           } else {
             // Unexpected status, stop polling to avoid flooding
             clearInterval(this.pinPollingTimer);
+            this.isAuthenticating = false;
+            this.authLoadingText = '';
           }
         } catch (e) {
           // Network hiccup during poll, continue waiting
         }
-      }, 2000);
-    },
-
-    openPlexAuth() {
-      if (!this.pin?.auth_url) return;
-      const width = 600;
-      const height = 700;
-      const left = Math.max(0, Math.floor((window.innerWidth - width) / 2 + window.screenX));
-      const top = Math.max(0, Math.floor((window.innerHeight - height) / 2 + window.screenY));
-      this.plexPopup = window.open(
-        this.pin.auth_url,
-        'plex_oauth_popup',
-        `width=${width},height=${height},top=${top},left=${left},scrollbars=yes,status=no,toolbar=no,menubar=no`
-      );
+      }, 1500);
     },
 
     async logout() {
