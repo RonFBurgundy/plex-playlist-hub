@@ -4,8 +4,17 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>TrackSeerr</title>
+  <!-- Favicons and PWA Manifest -->
   <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
   <link rel="alternate icon" type="image/png" href="/static/favicon.png">
+  <link rel="manifest" href="/static/manifest.json">
+  <link rel="apple-touch-icon" href="/static/apple-touch-icon.png">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="TrackSeerr">
+  <meta name="application-name" content="TrackSeerr">
+  <meta name="theme-color" content="#0a0a0a">
 
   <!-- Typography: Inter & JetBrains Mono -->
   <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -26,11 +35,36 @@
               hover: '#cc8f0c',
               dark: '#b37d0a',
               glow: 'rgba(229, 160, 13, 0.25)'
+            },
+            chassis: {
+              950: '#0a0a0a',
+              900: '#121212',
+              850: '#141414',
+              800: '#181818',
+              700: '#222222',
+              600: '#2a2a2a'
+            },
+            slate: {
+              950: '#0a0a0a',
+              900: '#121212',
+              850: '#141414',
+              800: '#181818',
+              700: '#262626',
+              600: '#333333'
             }
           },
           fontFamily: {
             sans: ['Inter', 'sans-serif'],
             mono: ['"JetBrains Mono"', 'monospace']
+          },
+          borderRadius: {
+            DEFAULT: '4px',
+            'sm': '3px',
+            'md': '4px',
+            'lg': '4px',
+            'xl': '6px',
+            '2xl': '6px',
+            '3xl': '6px'
           }
         }
       }
@@ -53,22 +87,22 @@
       
       <!-- Brand & Status -->
       <div class="flex items-center space-x-3 sm:space-x-4">
-        <div class="flex items-center space-x-3 cursor-pointer" @click="activeTab = 'discover'; searchQuery = ''; serviceFilter = 'all'">
-          <!-- Hub Logo Icon -->
-          <div class="w-10 h-10 rounded-xl flex items-center justify-center transition-transform hover:scale-105">
-            <img src="/static/trackseerr-logo.svg" alt="TrackSeerr" class="w-10 h-10 object-contain drop-shadow-md">
+        <div class="flex items-center space-x-3 cursor-pointer select-none transition-transform active:translate-y-[2px]" @click="activeTab = 'discover'; searchQuery = ''; serviceFilter = 'all'">
+          <!-- Hub Logo Icon with Walkman tactile depression -->
+          <div class="w-10 h-10 rounded-[4px] bg-[#141414] border border-[#262626] flex items-center justify-center transition-all duration-75 active:scale-95 shadow-sm">
+            <img src="/static/trackseerr-logo.svg" alt="TrackSeerr" class="w-8 h-8 object-contain drop-shadow-md">
           </div>
           <div>
             <div class="flex items-center space-x-2">
               <h1 class="text-lg font-bold tracking-tight text-white">TrackSeerr</h1>
-              <span class="text-[10px] uppercase tracking-wider font-bold bg-[#e5a00d]/20 text-[#e5a00d] px-2 py-0.5 rounded-full border border-[#e5a00d]/40">v1.0</span>
+              <span class="text-[10px] uppercase tracking-wider font-bold bg-[#e5a00d]/20 text-[#e5a00d] px-2 py-0.5 rounded-[3px] border border-[#e5a00d]/40">v1.0</span>
             </div>
             <p class="text-xs text-slate-400 hidden sm:block">Music Request, Discovery & Playlist Suite</p>
           </div>
         </div>
 
         <!-- Live Sync Status Badge (Desktop) -->
-        <div class="hidden lg:flex items-center space-x-2 px-3 py-1 rounded-full bg-slate-900 border border-slate-800 text-xs text-slate-300">
+        <div class="hidden lg:flex items-center space-x-2 px-3 py-1 rounded-[4px] bg-slate-900 border border-slate-800 text-xs text-slate-300">
           <span :class="syncStatus.is_syncing ? 'status-dot syncing' : 'status-dot idle'"></span>
           <span x-text="syncStatus.is_syncing ? 'Syncing...' : 'Idle'"></span>
           <span class="text-slate-600">|</span>
@@ -76,19 +110,20 @@
         </div>
 
         <!-- Live Sync Status Badge (Mobile / Tablet Compact) -->
-        <div class="flex lg:hidden items-center space-x-1.5 px-2.5 py-1 rounded-full bg-slate-900 border border-slate-800 text-xs text-slate-300"
+        <div class="flex lg:hidden items-center space-x-1.5 px-2.5 py-1 rounded-[4px] bg-slate-900 border border-slate-800 text-xs text-slate-300"
              :title="syncStatus.is_syncing ? 'Syncing...' : 'Idle'">
           <span :class="syncStatus.is_syncing ? 'status-dot syncing' : 'status-dot idle'"></span>
           <span class="hidden sm:inline text-[11px]" x-text="syncStatus.is_syncing ? 'Syncing...' : 'Idle'"></span>
         </div>
       </div>
 
-      <!-- Overseerr / Arr Primary Navigation Tabs -->
-      <nav class="hidden md:flex items-center space-x-1" x-show="isAuthenticated">
+      <!-- Overseerr / Arr Primary Navigation Tabs (Tactile Tape Deck Transport Bay) -->
+      <nav class="hidden md:flex items-center tape-transport-bay" x-show="isAuthenticated">
         <!-- Discover Tab -->
         <button @click="activeTab = 'discover'"
-                :class="activeTab === 'discover' ? 'bg-amber-500/15 text-[#e5a00d] border-amber-500/40' : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60 border-transparent'"
-                class="flex items-center space-x-2 px-3.5 py-1.5 rounded-lg text-xs font-semibold border transition">
+                :class="activeTab === 'discover' ? 'active' : ''"
+                class="tape-deck-btn flex items-center space-x-2">
+          <span class="tape-deck-indicator"></span>
           <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"></path>
           </svg>
@@ -97,8 +132,9 @@
 
         <!-- Requests Tab -->
         <button @click="activeTab = 'requests'; loadRequests()"
-                :class="activeTab === 'requests' ? 'bg-amber-500/15 text-[#e5a00d] border-amber-500/40' : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60 border-transparent'"
-                class="flex items-center space-x-2 px-3.5 py-1.5 rounded-lg text-xs font-semibold border transition relative">
+                :class="activeTab === 'requests' ? 'active' : ''"
+                class="tape-deck-btn flex items-center space-x-2 relative">
+          <span class="tape-deck-indicator"></span>
           <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4"></path>
           </svg>
@@ -110,8 +146,9 @@
 
         <!-- Playlists Tab -->
         <button @click="activeTab = 'playlists'"
-                :class="activeTab === 'playlists' ? 'bg-amber-500/15 text-[#e5a00d] border-amber-500/40' : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60 border-transparent'"
-                class="flex items-center space-x-2 px-3.5 py-1.5 rounded-lg text-xs font-semibold border transition">
+                :class="activeTab === 'playlists' ? 'active' : ''"
+                class="tape-deck-btn flex items-center space-x-2">
+          <span class="tape-deck-indicator"></span>
           <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3"></path>
           </svg>
@@ -120,8 +157,9 @@
 
         <!-- Activity Tab -->
         <button @click="activeTab = 'activity'; loadQueue()"
-                :class="activeTab === 'activity' ? 'bg-amber-500/15 text-[#e5a00d] border-amber-500/40' : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60 border-transparent'"
-                class="flex items-center space-x-2 px-3.5 py-1.5 rounded-lg text-xs font-semibold border transition relative">
+                :class="activeTab === 'activity' ? 'active' : ''"
+                class="tape-deck-btn flex items-center space-x-2 relative">
+          <span class="tape-deck-indicator"></span>
           <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"></path>
           </svg>
@@ -133,8 +171,9 @@
 
         <!-- Settings Tab -->
         <button @click="activeTab = 'settings'; loadSettings();"
-                :class="activeTab === 'settings' ? 'bg-amber-500/15 text-[#e5a00d] border-amber-500/40' : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60 border-transparent'"
-                class="flex items-center space-x-2 px-3.5 py-1.5 rounded-lg text-xs font-semibold border transition">
+                :class="activeTab === 'settings' ? 'active' : ''"
+                class="tape-deck-btn flex items-center space-x-2">
+          <span class="tape-deck-indicator"></span>
           <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"></path>
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"></path>
@@ -207,16 +246,17 @@
                       :disabled="syncStatus.is_syncing" 
                       aria-label="Trigger Sync"
                       title="Trigger Sync"
-                      class="p-2 rounded-xl text-slate-300 hover:text-white bg-slate-900 border border-slate-800 transition disabled:opacity-50">
+                      class="tactile-switch p-2 text-slate-300 hover:text-white transition disabled:opacity-50">
                 <svg class="w-5 h-5" :class="syncStatus.is_syncing ? 'animate-spin text-[#e5a00d]' : ''" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path>
                 </svg>
               </button>
 
-              <!-- Hamburger Toggle Button -->
+              <!-- Hamburger Toggle Button (Tactile Switch) -->
               <button @click="toggleMobileMenu()" 
+                      :class="isMobileMenuOpen ? 'active' : ''"
                       aria-label="Toggle mobile menu"
-                      class="p-2 rounded-xl text-slate-300 hover:text-white bg-slate-900 border border-slate-800 transition">
+                      class="tactile-switch p-2 text-slate-300 hover:text-white transition">
                 <svg x-show="!isMobileMenuOpen" class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16"></path>
                 </svg>
@@ -229,7 +269,7 @@
 
           <template x-if="!isAuthenticated && !isLoading">
             <button @click="startPinFlow()" 
-                    class="flex items-center space-x-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg bg-[#e5a00d] hover:bg-[#cc8f0c] text-slate-950 transition shadow-lg shadow-[#e5a00d]/20">
+                    class="flex items-center space-x-1.5 px-3 py-1.5 text-xs font-semibold rounded-[3px] bg-[#e5a00d] hover:bg-[#cc8f0c] text-slate-950 transition shadow-lg shadow-[#e5a00d]/20 active:translate-y-[1px]">
               <svg class="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
                 <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 14.5v-9l6 4.5-6 4.5z"/>
               </svg>
@@ -241,7 +281,7 @@
         <!-- Desktop Unauthenticated Sign In (>= md) -->
         <div class="hidden md:flex" x-show="!isAuthenticated && !isLoading">
           <button @click="startPinFlow()" 
-                  class="flex items-center space-x-2 px-4 py-2 text-xs font-semibold rounded-lg bg-[#e5a00d] hover:bg-[#cc8f0c] text-slate-950 transition shadow-lg shadow-[#e5a00d]/20">
+                  class="flex items-center space-x-2 px-4 py-2 text-xs font-semibold rounded-[3px] bg-[#e5a00d] hover:bg-[#cc8f0c] text-slate-950 transition shadow-lg shadow-[#e5a00d]/20 active:translate-y-[1px]">
             <svg class="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
               <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 14.5v-9l6 4.5-6 4.5z"/>
             </svg>
@@ -262,14 +302,15 @@
        x-transition:leave="transition ease-in duration-150"
        x-transition:leave-start="opacity-100 translate-y-0"
        x-transition:leave-end="opacity-0 -translate-y-2"
-       class="fixed inset-x-0 top-16 z-30 bg-slate-950/95 backdrop-blur-xl border-b border-slate-800 shadow-2xl md:hidden overflow-y-auto max-h-[calc(100dvh-4rem)] p-4 space-y-4"
+       class="fixed inset-x-0 top-16 z-30 bg-[#0a0a0a]/95 backdrop-blur-xl border-b border-[#262626] shadow-2xl md:hidden overflow-y-auto max-h-[calc(100dvh-4rem)] p-4 space-y-4"
        style="display: none;">
-    <!-- Navigation Links -->
-    <nav class="space-y-1">
+    <!-- Navigation Links (Full-Width Tactile Transport Keys) -->
+    <nav class="space-y-2 flex flex-col">
       <!-- Discover -->
       <button @click="activeTab = 'discover'; closeMobileMenu()"
-              :class="activeTab === 'discover' ? 'bg-[#e5a00d]/15 text-[#e5a00d] border-[#e5a00d]/30 font-bold' : 'text-slate-300 hover:text-white hover:bg-slate-900 border-transparent'"
-              class="w-full flex items-center justify-between px-3.5 py-2.5 rounded-xl text-xs border transition">
+              :class="activeTab === 'discover' ? 'active' : ''"
+              class="tape-deck-btn w-full !justify-between px-4 py-2.5 text-xs font-semibold">
+        <span class="tape-deck-indicator"></span>
         <div class="flex items-center space-x-2.5">
           <svg class="w-4 h-4 text-[#e5a00d]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"></path>
@@ -280,8 +321,9 @@
 
       <!-- Requests -->
       <button @click="activeTab = 'requests'; loadRequests(); closeMobileMenu()"
-              :class="activeTab === 'requests' ? 'bg-[#e5a00d]/15 text-[#e5a00d] border-[#e5a00d]/30 font-bold' : 'text-slate-300 hover:text-white hover:bg-slate-900 border-transparent'"
-              class="w-full flex items-center justify-between px-3.5 py-2.5 rounded-xl text-xs border transition">
+              :class="activeTab === 'requests' ? 'active' : ''"
+              class="tape-deck-btn w-full !justify-between px-4 py-2.5 text-xs font-semibold">
+        <span class="tape-deck-indicator"></span>
         <div class="flex items-center space-x-2.5">
           <svg class="w-4 h-4 text-[#e5a00d]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4"></path>
@@ -295,8 +337,9 @@
 
       <!-- Playlists -->
       <button @click="activeTab = 'playlists'; closeMobileMenu()"
-              :class="activeTab === 'playlists' ? 'bg-[#e5a00d]/15 text-[#e5a00d] border-[#e5a00d]/30 font-bold' : 'text-slate-300 hover:text-white hover:bg-slate-900 border-transparent'"
-              class="w-full flex items-center justify-between px-3.5 py-2.5 rounded-xl text-xs border transition">
+              :class="activeTab === 'playlists' ? 'active' : ''"
+              class="tape-deck-btn w-full !justify-between px-4 py-2.5 text-xs font-semibold">
+        <span class="tape-deck-indicator"></span>
         <div class="flex items-center space-x-2.5">
           <svg class="w-4 h-4 text-[#e5a00d]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3"></path>
@@ -307,8 +350,9 @@
 
       <!-- Activity -->
       <button @click="activeTab = 'activity'; loadQueue(); closeMobileMenu()"
-              :class="activeTab === 'activity' ? 'bg-[#e5a00d]/15 text-[#e5a00d] border-[#e5a00d]/30 font-bold' : 'text-slate-300 hover:text-white hover:bg-slate-900 border-transparent'"
-              class="w-full flex items-center justify-between px-3.5 py-2.5 rounded-xl text-xs border transition">
+              :class="activeTab === 'activity' ? 'active' : ''"
+              class="tape-deck-btn w-full !justify-between px-4 py-2.5 text-xs font-semibold">
+        <span class="tape-deck-indicator"></span>
         <div class="flex items-center space-x-2.5">
           <svg class="w-4 h-4 text-[#e5a00d]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"></path>
@@ -322,8 +366,9 @@
 
       <!-- Settings -->
       <button @click="activeTab = 'settings'; loadSettings(); closeMobileMenu()"
-              :class="activeTab === 'settings' ? 'bg-[#e5a00d]/15 text-[#e5a00d] border-[#e5a00d]/30 font-bold' : 'text-slate-300 hover:text-white hover:bg-slate-900 border-transparent'"
-              class="w-full flex items-center justify-between px-3.5 py-2.5 rounded-xl text-xs border transition">
+              :class="activeTab === 'settings' ? 'active' : ''"
+              class="tape-deck-btn w-full !justify-between px-4 py-2.5 text-xs font-semibold">
+        <span class="tape-deck-indicator"></span>
         <div class="flex items-center space-x-2.5">
           <svg class="w-4 h-4 text-[#e5a00d]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"></path>
@@ -335,10 +380,10 @@
     </nav>
 
     <!-- Quick Action Buttons -->
-    <div class="pt-3 border-t border-slate-800/80 space-y-2">
+    <div class="pt-3 border-t border-[#262626] space-y-2">
       <!-- Add Playlist -->
       <button @click="openAddModal(); closeMobileMenu()" 
-              class="w-full flex items-center justify-center space-x-2 px-4 py-2.5 text-xs font-bold rounded-xl bg-[#e5a00d] hover:bg-[#cc8f0c] text-slate-950 transition shadow-lg shadow-[#e5a00d]/15">
+              class="w-full flex items-center justify-center space-x-2 px-4 py-2.5 text-xs font-bold rounded-[3px] bg-[#e5a00d] hover:bg-[#cc8f0c] text-slate-950 transition shadow-lg shadow-[#e5a00d]/15 active:translate-y-[1px]">
         <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"></path>
         </svg>
@@ -349,7 +394,7 @@
         <!-- Sync Now -->
         <button @click="triggerSync(); closeMobileMenu()" 
                 :disabled="syncStatus.is_syncing" 
-                class="flex items-center justify-center space-x-1.5 px-3 py-2 text-xs font-semibold rounded-xl bg-slate-900 hover:bg-slate-800 text-slate-200 border border-slate-800 transition disabled:opacity-50">
+                class="tactile-switch flex items-center justify-center space-x-1.5 px-3 py-2 text-xs font-semibold text-slate-200 transition disabled:opacity-50">
           <svg class="w-3.5 h-3.5" :class="syncStatus.is_syncing ? 'animate-spin text-[#e5a00d]' : ''" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path>
           </svg>
@@ -358,7 +403,7 @@
 
         <!-- Live Logs -->
         <button @click="toggleTerminal(); closeMobileMenu()" 
-                class="flex items-center justify-center space-x-1.5 px-3 py-2 text-xs font-semibold rounded-xl bg-slate-900 hover:bg-slate-800 text-slate-200 border border-slate-800 transition">
+                class="tactile-switch flex items-center justify-center space-x-1.5 px-3 py-2 text-xs font-semibold text-slate-200 transition">
           <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"></path>
           </svg>
@@ -2458,10 +2503,10 @@
   <!-- ================= ADD PLAYLIST MODAL ================= -->
   <div x-show="isAddModalOpen" 
        x-transition.opacity.duration.200ms
-       class="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 md:p-6 bg-slate-950/80 backdrop-blur-sm overflow-hidden"
+       class="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 md:p-6 bg-slate-950/80 backdrop-blur-sm overflow-hidden"
        style="display: none;">
     <div @click.away="closeAddModal()" 
-         class="glass-modal rounded-2xl w-full max-w-2xl max-h-[90dvh] sm:max-h-[85vh] flex flex-col shadow-2xl border border-slate-700/80 overflow-hidden">
+         class="glass-modal w-full max-w-none sm:max-w-2xl h-full sm:h-auto sm:max-h-[90dvh] rounded-none sm:rounded-[4px] border-0 sm:border border-[#262626] flex flex-col shadow-2xl overflow-hidden">
       
       <!-- Fixed Header: flex-shrink-0 (Never scrolls off) -->
       <div class="border-b border-slate-800 p-4 sm:p-5 flex-shrink-0 space-y-3">
@@ -2973,10 +3018,10 @@
   <!-- ================= MISSING TRACKS MODAL / DRAWER ================= -->
   <div x-show="isMissingModalOpen" 
        x-transition.opacity.duration.200ms
-       class="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 md:p-6 bg-slate-950/80 backdrop-blur-sm overflow-hidden"
+       class="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 md:p-6 bg-slate-950/80 backdrop-blur-sm overflow-hidden"
        style="display: none;">
     <div @click.away="closeMissingModal()" 
-         class="glass-modal rounded-2xl w-full max-w-4xl max-h-[90dvh] sm:max-h-[85vh] flex flex-col shadow-2xl border border-slate-700/80 overflow-hidden">
+         class="glass-modal w-full max-w-none sm:max-w-4xl h-full sm:h-auto sm:max-h-[90dvh] rounded-none sm:rounded-[4px] border-0 sm:border border-[#262626] flex flex-col shadow-2xl overflow-hidden">
       
       <!-- Modal Header: flex-shrink-0 -->
       <div class="flex flex-col sm:flex-row sm:items-center justify-between border-b border-slate-800 p-4 sm:p-5 gap-3 flex-shrink-0">
@@ -3361,10 +3406,10 @@
   <!-- ================= MANUAL MATCH MODAL ================= -->
   <div x-show="isMatchModalOpen" 
        x-transition.opacity.duration.200ms
-       class="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 md:p-6 bg-slate-950/80 backdrop-blur-sm overflow-hidden"
+       class="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 md:p-6 bg-slate-950/80 backdrop-blur-sm overflow-hidden"
        style="display: none;">
     <div @click.away="closeManualMatchModal()" 
-         class="glass-modal rounded-2xl w-full max-w-xl max-h-[90dvh] sm:max-h-[85vh] flex flex-col shadow-2xl border border-slate-700/80 overflow-hidden">
+         class="glass-modal w-full max-w-none sm:max-w-2xl h-full sm:h-auto sm:max-h-[90dvh] rounded-none sm:rounded-[4px] border-0 sm:border border-[#262626] flex flex-col shadow-2xl overflow-hidden">
       
       <!-- Fixed Header: flex-shrink-0 -->
       <div class="flex items-center justify-between border-b border-slate-800 p-4 sm:p-5 flex-shrink-0">
@@ -3469,10 +3514,10 @@
   <!-- ================= DOWNLOAD CLIENT CONFIG MODAL ================= -->
   <div x-show="isClientModalOpen" 
        x-transition.opacity.duration.200ms
-       class="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 md:p-6 bg-slate-950/80 backdrop-blur-sm overflow-hidden"
+       class="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 md:p-6 bg-slate-950/80 backdrop-blur-sm overflow-hidden"
        style="display: none;">
     <div @click.away="closeClientModal()" 
-         class="glass-modal rounded-2xl w-full max-w-lg max-h-[90dvh] sm:max-h-[85vh] flex flex-col shadow-2xl border border-slate-700/80 overflow-hidden">
+         class="glass-modal w-full max-w-none sm:max-w-2xl h-full sm:h-auto sm:max-h-[90dvh] rounded-none sm:rounded-[4px] border-0 sm:border border-[#262626] flex flex-col shadow-2xl overflow-hidden">
       
       <!-- Fixed Header: flex-shrink-0 -->
       <div class="flex items-center justify-between border-b border-slate-800 p-4 sm:p-5 flex-shrink-0">
@@ -3665,10 +3710,10 @@
   <!-- ================= INDEXER CONFIG MODAL ================= -->
   <div x-show="isIndexerModalOpen" 
        x-transition.opacity.duration.200ms
-       class="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 md:p-6 bg-slate-950/80 backdrop-blur-sm overflow-hidden"
+       class="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 md:p-6 bg-slate-950/80 backdrop-blur-sm overflow-hidden"
        style="display: none;">
     <div @click.away="closeIndexerModal()" 
-         class="glass-modal rounded-2xl w-full max-w-lg max-h-[90dvh] sm:max-h-[85vh] flex flex-col shadow-2xl border border-slate-700/80 overflow-hidden">
+         class="glass-modal w-full max-w-none sm:max-w-2xl h-full sm:h-auto sm:max-h-[90dvh] rounded-none sm:rounded-[4px] border-0 sm:border border-[#262626] flex flex-col shadow-2xl overflow-hidden">
       
       <!-- Fixed Header: flex-shrink-0 -->
       <div class="flex items-center justify-between border-b border-slate-800 p-4 sm:p-5 flex-shrink-0">
@@ -3816,10 +3861,10 @@
   <!-- ================= ADD / EDIT QUALITY PROFILE MODAL ================= -->
   <div x-show="isProfileModalOpen"
        x-transition.opacity.duration.200ms
-       class="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 md:p-6 bg-slate-950/80 backdrop-blur-sm overflow-hidden"
+       class="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 md:p-6 bg-slate-950/80 backdrop-blur-sm overflow-hidden"
        style="display: none;">
     <div @click.away="closeProfileModal()"
-         class="glass-modal rounded-2xl w-full max-w-xl max-h-[90dvh] sm:max-h-[85vh] flex flex-col shadow-2xl border border-slate-700/80 overflow-hidden">
+         class="glass-modal w-full max-w-none sm:max-w-2xl h-full sm:h-auto sm:max-h-[90dvh] rounded-none sm:rounded-[4px] border-0 sm:border border-[#262626] flex flex-col shadow-2xl overflow-hidden">
 
       <!-- Fixed Header: flex-shrink-0 -->
       <div class="flex items-center justify-between border-b border-slate-800 p-4 sm:p-5 flex-shrink-0">
@@ -3967,10 +4012,10 @@
   <!-- ================= INTERACTIVE RELEASE BROWSER MODAL (PHASE 4) ================= -->
   <div x-show="isSearchModalOpen"
        x-transition.opacity.duration.200ms
-       class="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 md:p-6 bg-slate-950/80 backdrop-blur-sm overflow-hidden"
+       class="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 md:p-6 bg-slate-950/80 backdrop-blur-sm overflow-hidden"
        style="display: none;">
     <div @click.away="closeInteractiveSearchModal()"
-         class="glass-modal rounded-2xl w-full max-w-4xl max-h-[90dvh] sm:max-h-[85vh] flex flex-col shadow-2xl border border-slate-700/80 overflow-hidden">
+         class="glass-modal w-full max-w-none sm:max-w-4xl h-full sm:h-auto sm:max-h-[90dvh] rounded-none sm:rounded-[4px] border-0 sm:border border-[#262626] flex flex-col shadow-2xl overflow-hidden">
 
       <!-- Fixed Header: flex-shrink-0 -->
       <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between border-b border-slate-800 p-4 sm:p-5 gap-3 flex-shrink-0 bg-slate-900/50">

@@ -70,6 +70,12 @@ class TestFrontendDashboard:
         assert "TrackSeerr" in html
         assert "Live Sync Status" in html or "syncStatus" in html
 
+        # Tape deck transport navigation & Walkman tactile brand button
+        assert "tape-transport-bay" in html
+        assert "tape-deck-btn" in html
+        assert "tape-deck-indicator" in html
+        assert "active:translate-y-[2px]" in html
+
         # Modals & drawers
         assert "Add Playlist" in html
         assert "Unmatched Tracks" in html or "Missing Tracks" in html
@@ -98,31 +104,54 @@ class TestFrontendDashboard:
         assert "pushTrackToLidarr" in html
 
     def test_mobile_navigation_elements(self, client):
-        """Validates mobile navigation header, drawer, and hamburger button."""
+        """Validates mobile navigation header, drawer, and tactile switches."""
         resp = client.get("/")
         assert resp.status_code == 200
         html = resp.text
 
-        # Mobile drawer and hamburger button bindings
+        # Mobile drawer, hamburger button, and tactile switches
         assert "isMobileMenuOpen" in html
         assert "toggleMobileMenu" in html
         assert "closeMobileMenu" in html
-        assert "toggle navigation menu" in html.lower() or "mobile" in html.lower()
+        assert "tactile-switch" in html
+        assert "tape-deck-btn w-full" in html
 
     def test_modal_internal_scroll_architecture(self, client):
-        """Validates that modals enforce internal scroll architecture and constraints."""
+        """Validates that modals enforce internal scroll architecture and full-width mobile constraints."""
         resp = client.get("/")
         assert resp.status_code == 200
         html = resp.text
 
         assert "modal-body-scroll" in html
-        assert "overscroll-contain" in html
         assert "max-h-[90dvh]" in html
         assert "isAddModalOpen" in html
         assert "isMissingModalOpen" in html
         assert "isMatchModalOpen" in html
         assert "isClientModalOpen" in html
         assert "isIndexerModalOpen" in html
+        assert "isProfileModalOpen" in html
+        assert "isSearchModalOpen" in html
+
+        # Full-width mobile and sharp 4px fillet architecture
+        assert "w-full max-w-none" in html
+        assert "rounded-none sm:rounded-[4px]" in html
+        assert "border-0 sm:border border-[#262626]" in html
+        assert "items-end sm:items-center" in html
+
+    def test_pwa_head_metadata_and_manifest(self, client):
+        """Validates PWA manifest, Apple touch icon, and mobile web app meta tags."""
+        resp = client.get("/")
+        assert resp.status_code == 200
+        html = resp.text
+
+        assert '<link rel="manifest" href="/static/manifest.json">' in html
+        assert '<link rel="apple-touch-icon" href="/static/apple-touch-icon.png">' in html
+        assert '<meta name="mobile-web-app-capable" content="yes">' in html
+        assert '<meta name="apple-mobile-web-app-capable" content="yes">' in html
+        assert '<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">' in html
+        assert '<meta name="apple-mobile-web-app-title" content="TrackSeerr">' in html
+        assert '<meta name="application-name" content="TrackSeerr">' in html
+        assert '<meta name="theme-color" content="#0a0a0a">' in html
 
 
 class TestStaticAssets:
@@ -161,15 +190,65 @@ class TestStaticAssets:
         assert "terminal-console" in resp.text
 
     def test_design_tokens_and_theme(self, client):
-        """Validates responsive design tokens and modal scroll-lock rules."""
+        """Validates responsive design tokens, tape transport rules, and sharp fillets."""
         resp = client.get("/static/style.css")
         assert resp.status_code == 200
         css = resp.text
 
-        assert "--bg-canvas" in css
+        # Obsidian chassis color variables
+        assert "--bg-canvas: #0a0a0a;" in css
+        assert "--bg-surface: #121212;" in css
+        assert "--border-subtle: #222222;" in css
+        assert "--border-default: #2a2a2a;" in css
         assert "--color-plex-amber" in css
+
+        # Scroll lock and momentum scrolling
         assert "body.modal-open" in css
         assert "modal-body-scroll" in css
+
+        # Tape deck transport and tactile switch classes
+        assert ".tape-transport-bay" in css
+        assert ".tape-deck-btn" in css
+        assert ".tape-deck-indicator" in css
+        assert ".tactile-switch" in css
+
+        # Sharp 4px industrial fillets
+        assert "border-radius: 4px;" in css
+        assert ".playlist-card" in css
+        assert ".overseerr-card" in css
+        assert ".glass-modal" in css
+
+        # Full-width mobile responsive overrides
+        assert "@media (max-width: 639px)" in css
+        assert "border-radius: 0 !important;" in css
+        assert "width: 100% !important;" in css
+
+    def test_pwa_manifest_served_and_valid(self, client):
+        """Validates that manifest.json is served with valid JSON structure."""
+        resp = client.get("/static/manifest.json")
+        assert resp.status_code == 200
+        manifest = resp.json()
+        assert manifest["name"] == "TrackSeerr"
+        assert manifest["short_name"] == "TrackSeerr"
+        assert manifest["start_url"] == "/"
+        assert manifest["display"] == "standalone"
+        assert manifest["background_color"] == "#0a0a0a"
+        assert manifest["theme_color"] == "#0a0a0a"
+
+        icons = manifest.get("icons", [])
+        icon_srcs = [icon["src"] for icon in icons]
+        assert "/static/icon-192.png" in icon_srcs
+        assert "/static/icon-512.png" in icon_srcs
+
+    def test_pwa_mobile_app_icons_served(self, client):
+        """Validates that PWA and Apple Touch icon assets exist and are valid PNG images."""
+        png_sig = b"\x89PNG\r\n\x1a\n"
+        for icon_path in ("/static/icon-192.png", "/static/icon-512.png", "/static/apple-touch-icon.png"):
+            resp = client.get(icon_path)
+            assert resp.status_code == 200, f"Failed to fetch {icon_path}"
+            assert "image/png" in resp.headers.get("content-type", "")
+            assert resp.content.startswith(png_sig), f"{icon_path} is not a valid PNG"
+            assert len(resp.content) >= 1_000, f"{icon_path} unexpectedly small"
 
     def test_static_placeholder_svg_served(self, client):
         resp = client.get("/static/placeholder.svg")
