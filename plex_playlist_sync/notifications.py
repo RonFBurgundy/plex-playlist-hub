@@ -57,6 +57,11 @@ def format_notification(event: str, data: dict[str, Any]) -> tuple[str, str]:
         err = data.get("error_message") or data.get("error") or "Unknown error"
         subj = f"Download Failed: {artist} - {title}"
         body = f"Failed to download/import '{artist} - {title}': {err}."
+    elif event == NotificationEvent.ISSUE_REPORTED.value:
+        issue_type = data.get("issue_type") or "Issue"
+        details = data.get("problem_details") or ""
+        subj = f"Issue Reported: {artist} - {title} ({issue_type})"
+        body = f"{username or 'A user'} reported an issue ({issue_type}) for '{artist} - {title}': {details}"
     else:
         subj = f"TrackSeerr Notification: {event}"
         body = f"Notification event '{event}' for '{artist} - {title}'."
@@ -83,7 +88,7 @@ class NotificationDispatcher:
         if not is_safe_service_url(webhook_url, allow_lan=True):
             raise ValueError(f"Prohibited Discord webhook URL (SSRF protection): '{webhook_url}'")
 
-        # Color: green for available, blue for requested/approved/download_started, red for failed/rejected
+        # Color: green for available, blue for requested/approved/download_started, red for failed/rejected/issue
         if event in (NotificationEvent.ITEM_AVAILABLE.value, "available"):
             color = 0x2ECC71  # Green
         elif event in (
@@ -92,6 +97,8 @@ class NotificationDispatcher:
             "failed",
         ):
             color = 0xE74C3C  # Red
+        elif event in (NotificationEvent.ISSUE_REPORTED.value, "issue_reported"):
+            color = 0xE67E22  # Orange
         else:
             color = 0x3498DB  # Blue
 
@@ -109,8 +116,12 @@ class NotificationDispatcher:
             embed["fields"].append({"name": "Title", "value": str(data["title"]), "inline": True})
         if data.get("album"):
             embed["fields"].append({"name": "Album", "value": str(data["album"]), "inline": True})
+        if data.get("issue_type"):
+            embed["fields"].append({"name": "Issue Type", "value": str(data["issue_type"]), "inline": True})
         if data.get("username"):
-            embed["fields"].append({"name": "Requested By", "value": str(data["username"]), "inline": True})
+            embed["fields"].append({"name": "Reported By" if event == NotificationEvent.ISSUE_REPORTED.value else "Requested By", "value": str(data["username"]), "inline": True})
+        if data.get("problem_details"):
+            embed["fields"].append({"name": "Details", "value": str(data["problem_details"])[:1024], "inline": False})
         if data.get("client"):
             embed["fields"].append({"name": "Client", "value": str(data["client"]), "inline": True})
         if data.get("cover_url"):

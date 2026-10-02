@@ -1,8 +1,64 @@
 from dataclasses import dataclass, field
-from enum import Enum
-from typing import Any, List, Optional
+from enum import Enum, IntFlag, StrEnum
+from typing import Any, List, Optional, Union
 
 from plex_playlist_sync.security import mask_channel_config
+
+
+class UserPermission(IntFlag):
+    ADMIN = 1
+    REQUEST = 2
+    AUTO_APPROVE = 4
+    AUTO_APPROVE_ALBUM = 8
+    MANAGE_REQUESTS = 16
+    REPORT_ISSUE = 32
+    DEFAULT = 34  # REQUEST | REPORT_ISSUE
+
+
+class IssueType(StrEnum):
+    AUDIO_QUALITY = "audio_quality"
+    CORRUPTED_FILE = "corrupted_file"
+    WRONG_RELEASE = "wrong_release"
+    MISSING_TRACKS = "missing_tracks"
+    INCORRECT_TAGS = "incorrect_tags"
+    OTHER = "other"
+
+
+class IssueStatus(StrEnum):
+    OPEN = "open"
+    IN_PROGRESS = "in_progress"
+    RESOLVED = "resolved"
+    CLOSED = "closed"
+
+
+@dataclass
+class MediaIssue:
+    id: str
+    user_id: str
+    media_title: str
+    artist: str
+    issue_type: str
+    problem_details: str
+    request_id: Optional[str] = None
+    status: Union[IssueStatus, str] = IssueStatus.OPEN
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
+    username: Optional[str] = None
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "id": self.id,
+            "user_id": self.user_id,
+            "media_title": self.media_title,
+            "artist": self.artist,
+            "issue_type": self.issue_type.value if hasattr(self.issue_type, "value") else str(self.issue_type),
+            "problem_details": self.problem_details,
+            "request_id": self.request_id,
+            "status": self.status.value if hasattr(self.status, "value") else str(self.status),
+            "created_at": self.created_at,
+            "updated_at": self.updated_at,
+            "username": self.username,
+        }
 
 
 class RequestStatus(str, Enum):
@@ -11,6 +67,7 @@ class RequestStatus(str, Enum):
     PROCESSING = "processing"
     AVAILABLE = "available"
     REJECTED = "rejected"
+
 
 
 @dataclass
@@ -397,6 +454,7 @@ class NotificationEvent(str, Enum):
     DOWNLOAD_STARTED = "download_started"
     ITEM_AVAILABLE = "item_available"
     DOWNLOAD_FAILED = "download_failed"
+    ISSUE_REPORTED = "issue_reported"
 
 
 @dataclass
@@ -414,6 +472,7 @@ class NotificationChannel:
             "download_started",
             "item_available",
             "download_failed",
+            "issue_reported",
         ]
     )
     created_at: Optional[str] = None

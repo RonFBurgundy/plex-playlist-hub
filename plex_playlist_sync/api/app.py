@@ -16,6 +16,7 @@ from plex_playlist_sync.api.routes import (
     discovery,
     download_clients,
     indexers,
+    issues,
     missing,
     notifications,
     playlists,
@@ -103,6 +104,7 @@ def create_app(
     api_router.include_router(missing.router, prefix="/missing", tags=["missing"])
     api_router.include_router(discovery.router, prefix="/discovery", tags=["discovery"])
     api_router.include_router(requests.router, prefix="/requests", tags=["requests"])
+    api_router.include_router(issues.router, prefix="/issues", tags=["issues"])
     api_router.include_router(settings.router, prefix="/settings", tags=["settings"])
     api_router.include_router(
         download_clients.router, prefix="/settings/download-clients", tags=["download_clients"]

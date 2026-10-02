@@ -14,6 +14,7 @@ from plex_playlist_sync.models import (
     DownloadDriverType,
     DownloadStatus,
     IndexerConfig,
+    MediaIssue,
     MusicRequest,
     NotificationChannel,
     NotificationChannelType,
@@ -147,6 +148,7 @@ class Database:
                 (10, self._migration_v10),
                 (11, self._migration_v11),
                 (12, self._migration_v12),
+                (13, self._migration_v13),
             ]
 
             for version, migration_fn in migrations:
@@ -576,6 +578,42 @@ class Database:
             """
         )
 
+    def _migration_v13(self, cur: sqlite3.Cursor) -> None:
+        cur.execute(
+            "ALTER TABLE users ADD COLUMN permissions INTEGER NOT NULL DEFAULT 34"
+        )
+        cur.execute(
+            "ALTER TABLE users ADD COLUMN request_limit_quota INTEGER"
+        )
+        cur.execute(
+            "ALTER TABLE users ADD COLUMN request_limit_days INTEGER DEFAULT 7"
+        )
+        cur.execute(
+            "UPDATE users SET permissions = permissions | 1 WHERE is_admin = 1"
+        )
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS media_issues (
+                id TEXT PRIMARY KEY,
+                request_id TEXT REFERENCES music_requests(id) ON DELETE SET NULL,
+                media_title TEXT NOT NULL,
+                artist TEXT NOT NULL,
+                issue_type TEXT NOT NULL,
+                problem_details TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'open',
+                user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+            """
+        )
+        cur.execute(
+            "CREATE INDEX IF NOT EXISTS idx_media_issues_status ON media_issues(status);"
+        )
+        cur.execute(
+            "CREATE INDEX IF NOT EXISTS idx_media_issues_user ON media_issues(user_id);"
+        )
+
     # -------------------------------------------------------------------------
     # Users CRUD
     # -------------------------------------------------------------------------
@@ -590,18 +628,20 @@ class Database:
         uid = str(user_id)
         uname = str(username)
         admin_val = 1 if is_admin else 0
+        default_perms = 35 if is_admin else 34
         with self._lock:
             self.conn.execute(
                 """
-                INSERT INTO users (id, username, email, is_admin, updated_at)
-                VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+                INSERT INTO users (id, username, email, is_admin, permissions, updated_at)
+                VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
                 ON CONFLICT(id) DO UPDATE SET
                     username = excluded.username,
                     email = excluded.email,
                     is_admin = excluded.is_admin,
+                    permissions = CASE WHEN excluded.is_admin = 1 THEN users.permissions | 1 ELSE users.permissions END,
                     updated_at = CURRENT_TIMESTAMP
                 """,
-                (uid, uname, email, admin_val),
+                (uid, uname, email, admin_val, default_perms),
             )
             self.conn.commit()
         user = self.get_user(uid)
@@ -612,7 +652,11 @@ class Database:
     def get_user(self, user_id: str) -> Optional[dict[str, Any]]:
         with self._lock:
             cur = self.conn.execute(
-                "SELECT id, username, email, is_admin, created_at, updated_at FROM users WHERE id = ?",
+                """
+                SELECT id, username, email, is_admin, permissions,
+                       request_limit_quota, request_limit_days, created_at, updated_at
+                FROM users WHERE id = ?
+                """,
                 (str(user_id),),
             )
             row = cur.fetchone()
@@ -620,17 +664,27 @@ class Database:
                 return None
             d = dict(row)
             d["is_admin"] = bool(d["is_admin"])
+            d["permissions"] = int(d["permissions"]) if d.get("permissions") is not None else 34
+            d["request_limit_quota"] = int(d["request_limit_quota"]) if d.get("request_limit_quota") is not None else None
+            d["request_limit_days"] = int(d["request_limit_days"]) if d.get("request_limit_days") is not None else 7
             return d
 
     def list_users(self) -> list[dict[str, Any]]:
         with self._lock:
             cur = self.conn.execute(
-                "SELECT id, username, email, is_admin, created_at, updated_at FROM users ORDER BY username ASC"
+                """
+                SELECT id, username, email, is_admin, permissions,
+                       request_limit_quota, request_limit_days, created_at, updated_at
+                FROM users ORDER BY username ASC
+                """
             )
             results = []
             for row in cur.fetchall():
                 d = dict(row)
                 d["is_admin"] = bool(d["is_admin"])
+                d["permissions"] = int(d["permissions"]) if d.get("permissions") is not None else 34
+                d["request_limit_quota"] = int(d["request_limit_quota"]) if d.get("request_limit_quota") is not None else None
+                d["request_limit_days"] = int(d["request_limit_days"]) if d.get("request_limit_days") is not None else 7
                 results.append(d)
             return results
 
@@ -642,6 +696,82 @@ class Database:
             )
             self.conn.commit()
             return cur.rowcount > 0
+
+    def update_user_governance(
+        self,
+        user_id: str,
+        permissions: Optional[int] = None,
+        request_limit_quota: Optional[int] = None,
+        request_limit_days: Optional[int] = None,
+        is_admin: Optional[bool] = None,
+        *,
+        clear_quota: bool = False,
+    ) -> dict[str, Any]:
+        """Updates governance permissions, quota limits, and role flags for a user."""
+        user = self.get_user(user_id)
+        if not user:
+            raise KeyError(f"User {user_id} not found")
+
+        updates: list[str] = []
+        params: list[Any] = []
+
+        if permissions is not None:
+            updates.append("permissions = ?")
+            params.append(int(permissions))
+
+        if request_limit_quota is not None:
+            updates.append("request_limit_quota = ?")
+            params.append(int(request_limit_quota))
+        elif clear_quota:
+            updates.append("request_limit_quota = NULL")
+
+        if request_limit_days is not None:
+            updates.append("request_limit_days = ?")
+            params.append(int(request_limit_days))
+
+        if is_admin is not None:
+            updates.append("is_admin = ?")
+            params.append(1 if is_admin else 0)
+
+        if updates:
+            updates.append("updated_at = CURRENT_TIMESTAMP")
+            sql = f"UPDATE users SET {', '.join(updates)} WHERE id = ?"
+            params.append(str(user_id))
+            with self._lock:
+                self.conn.execute(sql, params)
+                self.conn.commit()
+
+        updated_user = self.get_user(user_id)
+        if updated_user is None:
+            raise RuntimeError(f"User {user_id} not found after update")
+        return updated_user
+
+    def get_user_active_request_count(
+        self, user_id: str, days: Optional[int] = None
+    ) -> int:
+        """Counts active/recent requests for a user within a rolling day window or all time."""
+        with self._lock:
+            if days is not None and int(days) > 0:
+                cur = self.conn.execute(
+                    """
+                    SELECT COUNT(*) FROM music_requests
+                    WHERE user_id = ?
+                      AND status IN ('pending', 'processing', 'approved')
+                      AND datetime(created_at) >= datetime('now', '-' || ? || ' days')
+                    """,
+                    (str(user_id), int(days)),
+                )
+            else:
+                cur = self.conn.execute(
+                    """
+                    SELECT COUNT(*) FROM music_requests
+                    WHERE user_id = ?
+                      AND status IN ('pending', 'processing', 'approved')
+                    """,
+                    (str(user_id),),
+                )
+            row = cur.fetchone()
+            return int(row[0]) if (row and row[0] is not None) else 0
 
     # -------------------------------------------------------------------------
     # Playlists CRUD
@@ -2127,6 +2257,142 @@ class Database:
         except (json.JSONDecodeError, TypeError):
             d["events"] = []
         return d
+
+    # -------------------------------------------------------------------------
+    # Media Issues CRUD
+    # -------------------------------------------------------------------------
+
+    def create_issue(self, issue: Union[MediaIssue, dict[str, Any]]) -> dict[str, Any]:
+        """Creates a new media issue report."""
+        d = issue.to_dict() if isinstance(issue, MediaIssue) else dict(issue)
+        issue_id = str(d.get("id"))
+        req_id = d.get("request_id")
+        media_title = str(d.get("media_title") or "")
+        artist = str(d.get("artist") or "")
+        issue_type = d.get("issue_type")
+        if hasattr(issue_type, "value"):
+            issue_type = issue_type.value
+        issue_type = str(issue_type or "other")
+        problem_details = str(d.get("problem_details") or "")
+        status_val = d.get("status")
+        if hasattr(status_val, "value"):
+            status_val = status_val.value
+        status_val = str(status_val or "open")
+        user_id = str(d.get("user_id"))
+
+        with self._lock:
+            self.conn.execute(
+                """
+                INSERT INTO media_issues (
+                    id, request_id, media_title, artist, issue_type,
+                    problem_details, status, user_id, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                """,
+                (
+                    issue_id,
+                    req_id,
+                    media_title,
+                    artist,
+                    issue_type,
+                    problem_details,
+                    status_val,
+                    user_id,
+                ),
+            )
+            self.conn.commit()
+
+        created = self.get_issue(issue_id)
+        if created is None:
+            raise RuntimeError(f"Failed to retrieve created issue {issue_id}")
+        return created
+
+    def get_issue(self, issue_id: str) -> Optional[dict[str, Any]]:
+        """Retrieves a single media issue by ID with reporter username joined."""
+        with self._lock:
+            cur = self.conn.execute(
+                """
+                SELECT i.id, i.request_id, i.media_title, i.artist, i.issue_type,
+                       i.problem_details, i.status, i.user_id, i.created_at, i.updated_at,
+                       u.username
+                FROM media_issues i
+                LEFT JOIN users u ON i.user_id = u.id
+                WHERE i.id = ?
+                """,
+                (str(issue_id),),
+            )
+            row = cur.fetchone()
+            return dict(row) if row else None
+
+    def list_issues(
+        self, status: Optional[str] = None, user_id: Optional[str] = None
+    ) -> list[dict[str, Any]]:
+        """Lists media issues filtered by status and/or user_id with username joined."""
+        query = """
+            SELECT i.id, i.request_id, i.media_title, i.artist, i.issue_type,
+                   i.problem_details, i.status, i.user_id, i.created_at, i.updated_at,
+                   u.username
+            FROM media_issues i
+            LEFT JOIN users u ON i.user_id = u.id
+            WHERE 1=1
+        """
+        params: list[Any] = []
+        if status:
+            query += " AND i.status = ?"
+            params.append(str(status))
+        if user_id:
+            query += " AND i.user_id = ?"
+            params.append(str(user_id))
+        query += " ORDER BY i.created_at DESC"
+
+        with self._lock:
+            cur = self.conn.execute(query, params)
+            return [dict(r) for r in cur.fetchall()]
+
+    def update_issue(
+        self, issue_id: str, updates: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Updates media issue status and problem details."""
+        existing = self.get_issue(issue_id)
+        if not existing:
+            raise KeyError(f"Media issue {issue_id} not found")
+
+        allowed = {"status", "problem_details", "media_title", "artist", "issue_type", "request_id"}
+        filtered: dict[str, Any] = {}
+        for k, v in updates.items():
+            if k in allowed and v is not None:
+                if hasattr(v, "value"):
+                    filtered[k] = v.value
+                else:
+                    filtered[k] = str(v)
+
+        if filtered:
+            set_clauses = [f"{k} = ?" for k in filtered.keys()]
+            set_clauses.append("updated_at = CURRENT_TIMESTAMP")
+            params = list(filtered.values())
+            params.append(str(issue_id))
+
+            with self._lock:
+                self.conn.execute(
+                    f"UPDATE media_issues SET {', '.join(set_clauses)} WHERE id = ?",
+                    params,
+                )
+                self.conn.commit()
+
+        updated = self.get_issue(issue_id)
+        if updated is None:
+            raise RuntimeError(f"Media issue {issue_id} disappeared after update")
+        return updated
+
+    def delete_issue(self, issue_id: str) -> bool:
+        """Deletes a media issue by ID."""
+        with self._lock:
+            cur = self.conn.execute(
+                "DELETE FROM media_issues WHERE id = ?",
+                (str(issue_id),),
+            )
+            self.conn.commit()
+            return cur.rowcount > 0
+
 
 
 

@@ -13,13 +13,19 @@ from plex_playlist_sync.api.dependencies import (
     get_current_user,
     get_db,
     get_lidarr_client,
+    has_permission,
     require_admin,
     require_user,
 )
 from plex_playlist_sync.clients.lidarr import LidarrClient
 from plex_playlist_sync.config import Config
 from plex_playlist_sync.lidarr_queue import lidarr_worker
-from plex_playlist_sync.models import MusicRequest, NotificationEvent, RequestStatus
+from plex_playlist_sync.models import (
+    MusicRequest,
+    NotificationEvent,
+    RequestStatus,
+    UserPermission,
+)
 from plex_playlist_sync.notifications import notification_dispatcher
 from plex_playlist_sync.storage import Database
 
@@ -69,23 +75,29 @@ def create_request(
     to processing and dispatches to lidarr_worker (if Lidarr is configured).
     Otherwise, sets status to pending.
     """
+    if not has_permission(current_user, UserPermission.REQUEST):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Permission denied: requires REQUEST",
+        )
+
     clean_title = body.title.strip()
     clean_artist = body.artist.strip()
     clean_album = body.album.strip() if body.album else None
 
     # Quota check for non-admin users
     if not current_user.get("is_admin"):
-        existing_user_reqs = db.list_requests(user_id=current_user["id"])
-        active_count = sum(
-            1 for r in existing_user_reqs if r.get("status") in ("pending", "processing", "approved")
-        )
-        if active_count >= config.user_request_quota:
+        rolling_days = current_user.get("request_limit_days") if current_user.get("request_limit_days") is not None else 7
+        quota_limit = current_user.get("request_limit_quota") or config.user_request_quota
+        active_count = db.get_user_active_request_count(current_user["id"], days=rolling_days)
+        if active_count >= quota_limit:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Active request quota exceeded (maximum {config.user_request_quota} requests allowed)",
+                detail=f"Active request quota exceeded (maximum {quota_limit} requests allowed)",
             )
 
         # Duplicate check for the same item
+        existing_user_reqs = db.list_requests(user_id=current_user["id"])
         for r in existing_user_reqs:
             if r.get("status") in ("pending", "processing", "approved"):
                 if (
@@ -98,7 +110,12 @@ def create_request(
                     )
 
     # Determine status & auto-approval
-    is_auto_approved = bool(current_user.get("is_admin") or config.auto_approve_requests)
+    is_auto_approved = bool(
+        current_user.get("is_admin")
+        or has_permission(current_user, UserPermission.AUTO_APPROVE)
+        or (body.item_type == "album" and has_permission(current_user, UserPermission.AUTO_APPROVE_ALBUM))
+        or config.auto_approve_requests
+    )
     initial_status = RequestStatus.PROCESSING if is_auto_approved else RequestStatus.PENDING
 
     req_id = f"req-{uuid.uuid4().hex[:12]}"
@@ -192,17 +209,23 @@ def create_batch_requests(
     Duplicates against active requests or within the batch are handled idempotently.
     Approved requests attempt native grab, falling back to Lidarr trickle worker.
     """
-    if not current_user.get("is_admin"):
-        existing_user_reqs = db.list_requests(user_id=current_user["id"])
-        active_count = sum(
-            1 for r in existing_user_reqs if r.get("status") in ("pending", "processing", "approved")
+    if not has_permission(current_user, UserPermission.REQUEST):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Permission denied: requires REQUEST",
         )
-        remaining_quota = max(0, config.user_request_quota - active_count)
+
+    if not current_user.get("is_admin"):
+        rolling_days = current_user.get("request_limit_days") if current_user.get("request_limit_days") is not None else 7
+        quota_limit = current_user.get("request_limit_quota") or config.user_request_quota
+        active_count = db.get_user_active_request_count(current_user["id"], days=rolling_days)
+        remaining_quota = max(0, quota_limit - active_count)
         if len(body.requests) > remaining_quota:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Active request quota exceeded: batch size ({len(body.requests)}) exceeds remaining allowance ({remaining_quota} remaining of {config.user_request_quota} allowed)",
+                detail=f"Active request quota exceeded: batch size ({len(body.requests)}) exceeds remaining allowance ({remaining_quota} remaining of {quota_limit} allowed)",
             )
+        existing_user_reqs = db.list_requests(user_id=current_user["id"])
         existing_active_keys = {
             ((r.get("artist") or "").lower().strip(), (r.get("title") or "").lower().strip())
             for r in existing_user_reqs
@@ -220,8 +243,11 @@ def create_batch_requests(
     seen_keys: set[tuple[str, str]] = set()
     seen_fids: set[str] = set()
 
-    is_auto_approved = bool(current_user.get("is_admin") or config.auto_approve_requests)
-    initial_status = RequestStatus.PROCESSING if is_auto_approved else RequestStatus.PENDING
+    is_auto_approved = bool(
+        current_user.get("is_admin")
+        or has_permission(current_user, UserPermission.AUTO_APPROVE)
+        or config.auto_approve_requests
+    )
 
     created_items: list[dict[str, Any]] = []
 
@@ -245,6 +271,12 @@ def create_batch_requests(
         if fid:
             seen_fids.add(fid)
 
+        item_auto_approved = is_auto_approved or (
+            req_item.item_type == "album"
+            and has_permission(current_user, UserPermission.AUTO_APPROVE_ALBUM)
+        )
+        item_status = RequestStatus.PROCESSING if item_auto_approved else RequestStatus.PENDING
+
         req_id = f"req-{uuid.uuid4().hex[:12]}"
         new_request = MusicRequest(
             id=req_id,
@@ -254,7 +286,7 @@ def create_batch_requests(
             artist=clean_artist,
             album=clean_album,
             cover_url=req_item.cover_url,
-            status=initial_status,
+            status=item_status,
             release_date=req_item.release_date,
             foreign_id=fid,
             preview_url=req_item.preview_url,
@@ -268,11 +300,14 @@ def create_batch_requests(
         if not notification_data.get("username"):
             notification_data["username"] = current_user.get("username")
         notification_dispatcher.dispatch(NotificationEvent.REQUEST_CREATED, data=notification_data, db=db)
-        if initial_status == RequestStatus.PROCESSING:
+        if item_status == RequestStatus.PROCESSING:
             notification_dispatcher.dispatch(NotificationEvent.REQUEST_APPROVED, data=notification_data, db=db)
 
     # Dispatch to native acquisition coordinator if processing, otherwise fall back to Lidarr
-    if initial_status == RequestStatus.PROCESSING and created_items:
+    processing_items = [
+        c for c in created_items if c.get("status") in (RequestStatus.PROCESSING.value, "processing")
+    ]
+    if processing_items:
         has_native_clients = any(
             c.get("enabled") for c in db.list_download_clients() if c.get("driver_type") != "lidarr"
         )
@@ -282,7 +317,7 @@ def create_batch_requests(
 
         lidarr_items: list[dict[str, Any]] = []
 
-        for created in created_items:
+        for created in processing_items:
             req_id = created["id"]
             clean_artist = created["artist"]
             clean_title = created["title"]

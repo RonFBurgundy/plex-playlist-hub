@@ -17,6 +17,7 @@ from plex_playlist_sync.clients.plex import PlexClient
 from plex_playlist_sync.clients.spotify import SpotifyClient
 from plex_playlist_sync.clients.spotify_scraper import SpotifyWebScraper
 from plex_playlist_sync.config import Config
+from plex_playlist_sync.models import UserPermission
 from plex_playlist_sync.security import safe_data_path
 from plex_playlist_sync.storage import Database
 
@@ -163,6 +164,12 @@ def get_current_user(
             detail="User not found",
         )
 
+    # Ensure permissions and is_admin are synchronized
+    if user.get("permissions") is None:
+        user["permissions"] = int(UserPermission.ADMIN if user.get("is_admin") else UserPermission.DEFAULT)
+    elif int(user["permissions"]) & int(UserPermission.ADMIN):
+        user["is_admin"] = True
+
     return user
 
 
@@ -171,9 +178,39 @@ def require_user(current_user: dict[str, Any] = Depends(get_current_user)) -> di
     return current_user
 
 
+def has_permission(user: dict[str, Any], permission: UserPermission) -> bool:
+    """Checks whether a user holds the given permission bitflag.
+
+    Admins (is_admin=True or UserPermission.ADMIN) hold all permissions.
+    """
+    if user.get("is_admin"):
+        return True
+    user_perms = user.get("permissions")
+    if user_perms is None:
+        user_perms = int(UserPermission.DEFAULT)
+    else:
+        user_perms = int(user_perms)
+    if user_perms & int(UserPermission.ADMIN):
+        return True
+    return bool(user_perms & int(permission))
+
+
+def require_permission(permission: UserPermission):
+    """FastAPI dependency factory enforcing that current user holds the specified permission."""
+    def _dependency(current_user: dict[str, Any] = Depends(get_current_user)) -> dict[str, Any]:
+        if not has_permission(current_user, permission):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"Permission denied: requires {permission.name}",
+            )
+        return current_user
+    return _dependency
+
+
 def require_admin(current_user: dict[str, Any] = Depends(get_current_user)) -> dict[str, Any]:
-    """Enforces is_admin=True, raises 403 otherwise."""
-    if not current_user.get("is_admin"):
+    """Enforces is_admin=True or UserPermission.ADMIN, raises 403 otherwise."""
+    user_perms = int(current_user.get("permissions") if current_user.get("permissions") is not None else 0)
+    if not (current_user.get("is_admin") or (user_perms & int(UserPermission.ADMIN))):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Administrator access required",
