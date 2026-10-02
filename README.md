@@ -58,22 +58,27 @@ TrackSeerr allows Plex Home users to discover new music, listen to previews, sub
 +-----------------------------------------------------------------------+
 ```
 
-### Frontend: Discovery and Requests
+### Frontend: Discovery, Requests & Family Governance
 - **Zero-Key Discovery**: Search albums and tracks, browse trending releases, and inspect Deezer and Apple Music charts without API keys or developer accounts.
-- **Audio Previews**: Integrated 30-second audio preview player directly in the search and discovery interface.
-- **Request Engine**: Plex Home users can request individual tracks or complete albums. Admins can configure weekly or monthly request quotas, enable auto-approval, or review submissions in a dedicated approval queue.
+- **Deep Album & Artist Browsing**: Click any album to view full tracklists with 30-second audio previews, or browse an artist's entire discography organized by Studio Albums, EPs/Singles, and Compilations.
+- **Flexible Requests**: Request complete albums or cherry-pick specific individual tracks in a single batch submission.
+- **Family Governance & Quotas**: Overseerr-style rolling request quotas (e.g. 5 requests per 7 days) and granular permission controls for family members.
+- **Issue Reporting**: Family members can report audio glitches, corrupted files, or wrong versions directly into an admin triage queue.
+- **Outbound Notifications**: Instant notifications via Discord (with rich embeds and cover art), Telegram, Pushover, generic Webhooks, and Email when music is requested, grabbed, or ready in Plex.
 - **Personal & Household Playlists**: Sync public playlists, user playlists, or import Liked Songs using the 1-click browser bookmarklet. Target playlists to individual users, groups, or the whole household.
 
-### Backend: Dual Acquisition Choices
+### Backend: Autonomous Acquisition & Media Management
 TrackSeerr gives administrators the choice between two acquisition workflows:
 
-1. **Lidarr Integration**: Connect to an existing Lidarr server. TrackSeerr groups missing tracks by artist and feeds Lidarr through a rate-limited background trickle worker, avoiding full discography downloads and protecting MusicBrainz from API rate limits.
-2. **Native Acquisition Drivers**: Operate TrackSeerr as a standalone Arr-style downloader coordinator without running Lidarr:
-   - **slskd (Soulseek P2P)**: Surgical single-track and album matching for rare releases and b-sides.
-   - **SABnzbd (Usenet)**: Direct NZB enqueueing via Newznab indexers.
-   - **qBittorrent (BitTorrent)**: Direct torrent enqueueing via Torznab indexers.
-   - **Activity Queue**: Monitor active transfers, speeds, and progress with retry and cancel controls.
+1. **Native Autonomous Acquisition**: Operate TrackSeerr as a standalone Arr-style downloader coordinator without running Lidarr:
+   - **Download Drivers**: Native connections to slskd (Soulseek P2P for surgical single/EP matching), SABnzbd (Usenet via Newznab), and qBittorrent (BitTorrent via Torznab).
+   - **15-Minute RSS Sync**: Automatically polls indexer RSS feeds to snatch new releases the moment they are uploaded.
+   - **Wanted Backlog Sweeps**: Unfulfilled requests and missing tracks are re-checked automatically until a matching release appears.
+   - **Archive Extraction**: Automatically unpacks `.zip`, `.tar.gz`, and multi-part archives in download staging.
+   - **Quality Upgrades**: If music was grabbed in lower quality (e.g. MP3 320), TrackSeerr keeps looking for FLAC releases and upgrades your library files automatically when found.
+   - **Queue Cleanup**: Automatically removes finished downloads from client queues after import without touching your media files.
    - **Media Management**: Inspect tags with Mutagen, format destination folders using customizable token templates (e.g. `{Artist Name}/{Album Title} ({Release Year})/{track:00} - {Track Title}`), handle collisions safely, and notify Plex when imports finish.
+2. **Lidarr Integration**: Connect to an existing Lidarr server. TrackSeerr groups missing tracks by artist and feeds Lidarr through a rate-limited background trickle worker, avoiding full discography downloads and protecting MusicBrainz from API rate limits.
 
 ---
 
@@ -253,6 +258,10 @@ networks:
 | `LIDARR_ROOT_FOLDER` | *Auto* | Custom Lidarr root folder path override |
 | `LIDARR_QUALITY_PROFILE_ID` | *Auto* | Custom Lidarr quality profile ID override |
 | `LIDARR_METADATA_PROFILE_ID` | *Auto* | Custom Lidarr metadata profile ID override |
+| `ENABLE_BACKLOG_SEARCH` | `1` | Periodically sweep unfulfilled requests and missing tracks |
+| `BACKLOG_SEARCH_INTERVAL_MINUTES` | `60` | Interval in minutes between automated backlog search sweeps |
+| `ENABLE_RSS_SYNC` | `1` | Periodically poll Torznab/Newznab indexers for new releases |
+| `RSS_SYNC_INTERVAL_MINUTES` | `15` | Interval in minutes between indexer RSS sync loops |
 | `FEED_TOKEN` | *Optional* | Secret token protecting RSS feeds, plain text lists, and webhooks |
 | `LOG_LEVEL` | `INFO` | Logging verbosity (`DEBUG`, `INFO`, `WARNING`, `ERROR`) |
 

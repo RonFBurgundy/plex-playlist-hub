@@ -74,12 +74,43 @@ When a track or album is queued for download:
 
 1. **Queueing**: The download appears in the **Activity** tab with real-time transfer progress, estimated file size, and client name.
 2. **Monitoring**: The `AcquisitionWorker` polls the download client every 5 seconds.
-3. **Completion**: Once the downloader marks the file complete, TrackSeerr moves it to the `Importing` state.
+3. **Completion & Archive Extraction**: Once the downloader marks the file complete, TrackSeerr moves it to the `Importing` state. If the release contains compressed archives (`.zip` or `.tar.gz`), TrackSeerr unpacks them safely in staging before looking for audio files.
 4. **Tag Inspection**: Mutagen inspects audio tags (artist, album, track number, disc number, audio codec, bit depth, sample rate).
 5. **Path Formatting**: The destination path is generated according to your configured naming template (e.g., `{Artist Name}/{Album Title} ({Release Year})/{track:00} - {Track Title}`).
 6. **Collision Check & Atomic Move**: If the file already exists, TrackSeerr appends a safe counter (`Title (1).flac`). The file is moved into `/music` using cross-filesystem safe atomic moves.
 7. **Plex Scan**: TrackSeerr pings Plex Media Server to scan the updated artist folder.
-8. **Request Fulfillment**: The request is marked `Available` in the web dashboard, and user playlists are updated.
+8. **Client Queue Cleanup**: If `delete_completed_transfers` is enabled, the completed item is safely removed from qBittorrent, SABnzbd, or slskd without deleting your media files.
+9. **Quality Cutoff & Upgrade Monitoring**: TrackSeerr compares the imported audio format against your Quality Profile cutoff (e.g., FLAC 16-bit). If grabbed in a lower quality (like MP3 320), the item is marked available for playback, but stays monitored in the background so TrackSeerr can automatically upgrade it when a lossless release appears.
+10. **Notifications**: An alert is dispatched to your configured Discord, Telegram, Pushover, Webhook, or Email channels.
+
+---
+
+## Autonomous Search: RSS Sync and Backlog Sweeps
+
+TrackSeerr does not just search once and give up. It operates two background search engines to keep your music library complete:
+
+1. **15-Minute Indexer RSS Sync (`RSSSyncWorker`)**:
+   - Polls your Torznab and Newznab indexers every 15 minutes for recently posted releases.
+   - Snatches newly uploaded releases that match pending requests or missing playlist tracks without hammering the indexer search API.
+   - Snaps up higher-quality releases for existing music that hasn't met your Quality Profile cutoff yet.
+2. **Periodic Wanted Backlog Sweeps (`WantedBacklogWorker`)**:
+   - Sweeps your unfulfilled requests and missing tracks on a scheduled interval (default: every 60 minutes).
+   - Spaces queries safely with a 2.5-second pacing delay to respect indexer rate limits.
+   - Automatically enqueues the top-ranked match when a release becomes available.
+
+---
+
+## Outbound Notifications
+
+TrackSeerr keeps both homelab admins and family members in the loop using instant notifications across popular platforms:
+
+- **Discord**: Rich embed messages with cover art, status colors, and release details.
+- **Telegram**: Instant bot messages to personal chats or group channels.
+- **Pushover**: High-priority push notifications directly to mobile devices.
+- **Generic Webhook**: Clean JSON payloads for Home Assistant, Node-RED, or custom homelab scripts.
+- **Email (SMTP)**: Direct email notifications via TLS/SSL.
+
+You can configure channels and test connectivity under **Settings** -> **Notifications**. Events include music requested, approved, rejected, download started, item available in Plex, download failed, and user issues reported.
 
 ---
 

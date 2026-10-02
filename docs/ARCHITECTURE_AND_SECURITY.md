@@ -19,34 +19,39 @@ TrackSeerr is built with a decoupled architecture that supports both monolithic 
                                     v
 +-----------------------------------------------------------------------+
 |                           Discovery & Auth                            |
-|  - Plex OAuth Authentication & Home User Quotas                       |
+|  - Plex OAuth Authentication & Plex Home Multi-User Routing           |
 |  - Zero-Key Music Discovery (Deezer & Apple Music / iTunes APIs)       |
-|  - 30-Second Audio Previews                                           |
+|  - Deep Tracklists, 30-Second Audio Previews, Artist Discographies   |
 |  - Spotify Web Scraper (Public Playlists & Keyless Sync)               |
 +-----------------------------------------------------------------------+
                                     |
                                     v
 +-----------------------------------------------------------------------+
-|                            Request Engine                             |
-|  - Multi-User Request Submission & Approval Queue                     |
-|  - Status Lifecycle: Pending -> Approved -> Downloading -> Available  |
-|  - Match Memory & Manual Link Overrides                               |
+|                       Requests, Governance & Issues                   |
+|  - Multi-User Requests & Rolling Quotas (e.g. 5 requests per 7 days)   |
+|  - Granular Permissions (Admin, Request, Auto-Approve, Manage, Issues) |
+|  - Media Issue Reporting & Triage Queue (Corrupted files, Bad tags)    |
+|  - Outbound Notifications (Discord, Telegram, Pushover, Webhook, Mail)|
 +-----------------------------------------------------------------------+
                                     |
                                     v
 +-----------------------------------------------------------------------+
 |                          Acquisition Layer                            |
 |  Option A: Lidarr Adapter (Direct REST API Push & Paced Trickle)       |
-|  Option B: Native Drivers (slskd / Soulseek, SABnzbd, qBittorrent)    |
-|  - Torznab & Newznab Indexer Query Engine                             |
-|  - Real-Time Activity Queue & Progress Tracker                        |
+|  Option B: Native Autonomous Drivers                                  |
+|  - 15-Minute Torznab / Newznab Indexer RSS Sync (`RSSSyncWorker`)      |
+|  - Paced Wanted Backlog Search Sweeps (`WantedBacklogWorker`)         |
+|  - slskd (Soulseek P2P), SABnzbd (Usenet), qBittorrent (BitTorrent)   |
+|  - Real-Time Activity Queue & Completed Transfer Queue Cleanup        |
 +-----------------------------------------------------------------------+
                                     |
                                     v
 +-----------------------------------------------------------------------+
 |                    Media Management Pipeline                          |
+|  - Sandboxed Archive Extraction (.zip, .tar.gz, .tgz, .tar.bz2)       |
 |  - Mutagen Audio Inspection (FLAC, MP3 ID3, M4A/AAC, Ogg/Opus)        |
 |  - Arr-Grade Token Template Naming Engine                             |
+|  - Quality Profile Cutoff Evaluation & Automated Quality Upgrades      |
 |  - Collision Resolution & Safe Cross-Mount Atomic Moves               |
 |  - Automated Plex Media Server Library Refresh Ping                   |
 +-----------------------------------------------------------------------+
@@ -342,22 +347,27 @@ TrackSeerr strictly validates all outbound network targets:
   - While private RFC 1918 addresses are permitted for local services (e.g. connecting to slskd or SABnzbd on your LAN), cloud metadata endpoints are strictly blocked (`169.254.169.254`, `metadata.google.internal`, `instance-data`).
   - Dangerous URL schemes (`file://`, `ftp://`, `gopher://`) and credentials embedded in authority blocks are rejected.
 
-### 2. Path Traversal Containment
+### 2. Path Traversal Containment & Archive Sandbox
 
 All file export, playlist save, and library file operations pass through `safe_data_path`:
 - Resolves relative path segments (`../`) and normalizes paths.
 - Asserts that the final destination path resides strictly within the designated target directory (`/data`, `/music`, or `/downloads`).
 - Any attempt to escape the designated base directory raises a `ValueError` and terminates the request immediately.
+- **Archive Extraction Sandbox**: When releases are unpacked from `.zip` or `.tar` archives, all member paths are checked against directory escape before extraction. Tarfiles use Python 3.12's `filter='data'` to safely reject links or absolute paths that could escape download staging.
 
-### 3. Zero Subprocess Execution
+### 3. Outbound Notification Dispatch Isolation
 
-TrackSeerr executes zero shell scripts, subprocesses, or CLI binaries from web routes. All operations are handled natively in Python using HTTP clients (Requests, HTTPX), SQLite drivers, and Mutagen. There are no command injection surfaces.
+All outbound notification calls (Discord, Telegram, Pushover, generic webhooks, Email) run asynchronously in detached daemon threads with strict error isolation. Webhook targets are vetted against SSRF boundaries, and credentials (tokens, API keys, passwords) are masked in all web responses and logs.
 
-### 4. Least-Privilege Execution
+### 4. Zero Subprocess Execution
+
+TrackSeerr executes zero shell scripts, subprocesses, or CLI binaries from web routes. All operations are handled natively in Python using HTTP clients (Requests, HTTPX), SQLite drivers, standard library archive handlers, and Mutagen. There are no command injection surfaces.
+
+### 5. Least-Privilege Execution
 
 The Docker container runs as a non-root user (`uid 1000`, `gid 1000` by default, or `PUID=99`, `PGID=100` on Unraid) and is based on `python:3.12-slim`. The container drops root privileges during entrypoint execution.
 
-### 5. Feed and Webhook Protection
+### 6. Feed and Webhook Protection
 
 When TrackSeerr is exposed to broader networks, the `FEED_TOKEN` environment variable secures missing track feeds and webhook endpoints. Requests must supply this token via query parameter or authorization header.
 
