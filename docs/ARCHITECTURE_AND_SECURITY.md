@@ -275,6 +275,18 @@ Tier 2 (`trackseerr-core`) holds exclusive operational ownership of:
 2. **Mutagen Pipeline**: Audio container parsing, bit depth/sample rate calculations, and ID3v2/Vorbis tag manipulation.
 3. **Catalog Authority**: Direct write access to SQLite tables (`library_artists`, `library_albums`, `library_tracks`, `library_files`).
 4. **File Mutation Operations**: Directory scanning, manual import moves/copies/hardlinks, and batch file renaming.
+5. **Acquisition & Seeding Governance**: Torrent seeding ratio/time limits, hardlink preservation, and Newznab/Torznab snatches.
+
+#### Gateway Route Gating & Core Proxying
+When running in `ROLE=gateway`, TrackSeerr enforces strict segregation:
+- **Administrative Route Gating**: All filesystem-altering endpoints (`/api/library/scan`, `/api/library/migrate-lidarr`, `/api/library/manual-import/*`, `/api/library/rename/*`, and library entity deletion routes) return `HTTP 403 Forbidden` (`require_core_tier`). The public internet cannot trigger disk scans or file operations.
+- **Transparent Request & Availability Proxying**: The Gateway forwards user request submissions (`POST /api/requests`, batch creations, cancellations) and library availability checks (`GET /api/library/availability`) to the Core engine via `CoreClient`, authenticated over `internal-net` using `INTERNAL_CORE_SECRET` (`X-Internal-Token` or `Authorization: Bearer`). If Core is offline or unreachable, Gateway safely returns `HTTP 502 Bad Gateway`.
+
+#### Universal Machine API Key (`X-Api-Key`)
+For external machine-to-machine integrations (such as Prowlarr or automated webhook scripts):
+- TrackSeerr generates a persistent, 32-character hexadecimal API key upon first initialization (migration v18).
+- Machine clients can authenticate across protected REST routes using the `X-Api-Key` header or `?apikey=` query parameter.
+- Administrators can view or rotate their API key anytime in the WebUI under **Settings -> General** or via `POST /api/settings/api-key/regenerate`.
 
 ---
 

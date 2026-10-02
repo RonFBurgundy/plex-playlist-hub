@@ -79,7 +79,9 @@ TrackSeerr gives administrators the choice between two acquisition and library m
 #### 1. Native Library Management & Catalog Engine
 When running in `native` mode, TrackSeerr acts as a complete music library system:
 - **Three-Tier Catalog Schema**: Backed by persistent SQLite tables (`library_artists`, `library_albums`, `library_tracks`, `library_files`) with granular monitoring toggles at artist, album, or individual track levels, supporting cascading monitoring inheritance.
-- **Recursive Filesystem Scanner**: Non-destructive scanner for `/music` that extracts Mutagen audio stream metrics (codecs, bit depth, sample rates, bitrates) and tags, reconciles files against catalog entries, evaluates Quality Profile cutoffs, prunes missing files on demand, and triggers Plex library refreshes.
+- **Native Artist & Discography Ingestion**: Add artists directly from discovery into your native catalog prior to acquiring files, choose monitoring presets (`all`, `albums`, `singles_eps`, `none`), and trigger background discography refreshes when artists release new music.
+- **Multi-Threaded Scanner & Smart Caching**: High-throughput `/music` scanner powered by a parallel Mutagen worker pool (up to 8 threads), file size/mtime change detection to skip unchanged files, and batched database writes for large collections.
+- **Automated Catalog Synchronization**: Incoming downloads are atomically cataloged into `library_artists`, `library_albums`, `library_tracks`, and `library_files` upon placement, with multi-track album reconciliation (matching disc/track numbers, title similarity >= 0.85, and duration tolerances).
 - **Interactive Manual Import Queue**: Staging directory scanner with fuzzy candidate matching, confidence ratings (0–100%), standardized audio tag writing, and configurable import modes (`move`, `hardlink`, `copy`).
 - **Token Template Batch Renamer**: Scans existing library paths against your active Arr naming template, previews side-by-side path diffs, and executes atomic cross-mount renames.
 - **1-Click Lidarr API Migration**: Background migration job pulling an existing Lidarr instance's artists, albums, tracks, track files, and MusicBrainz IDs (`MBIDs`) via REST API, automatically transitioning the instance into `native` mode upon completion.
@@ -88,10 +90,13 @@ When running in `native` mode, TrackSeerr acts as a complete music library syste
 Operate TrackSeerr as an independent downloader coordinator without running Lidarr:
 - **Download Drivers**: Native connections to slskd (Soulseek P2P for surgical single/EP matching), SABnzbd (Usenet via Newznab), and qBittorrent (BitTorrent via Torznab).
 - **15-Minute RSS Sync**: Automatically polls indexer RSS feeds to snatch new releases the moment they are uploaded.
-- **Wanted Backlog Sweeps**: Unfulfilled requests and missing tracks are re-checked automatically until a matching release appears.
+- **Catalog-Driven Wanted Sweeps**: Background sweeps periodically check both user requests and monitored missing or below-cutoff tracks in your library until matching releases appear.
+- **Persistent Download Blocklist**: Corrupt, password-protected, or stalled releases are automatically blacklisted (by hash, title, and release GUID) to prevent infinite re-snatch loops.
+- **Custom Formats (CF) Regex Scoring**: Score releases with regex bonus and penalty weights (e.g. `Remaster`, `Vinyl`, `Web-DL`, `Censored`) and enforce minimum score thresholds (`min_score`).
+- **Seeding Governance**: Configurable `seed_ratio_limit` and `seed_time_limit_minutes`. In `hardlink` mode, torrents remain seeding in qBittorrent until your ratio or time targets are met before cleanup.
+- **Universal Machine API Key (`X-Api-Key`)**: Standardized API key authentication across all REST routes for external automation (Prowlarr, scripts).
 - **Archive Extraction**: Automatically unpacks `.zip`, `.tar.gz`, and multi-part archives in download staging.
 - **Quality Upgrades**: If music was grabbed in lower quality (e.g. MP3 320), TrackSeerr keeps looking for FLAC releases and upgrades your library files automatically when found.
-- **Queue Cleanup**: Automatically removes finished downloads from client queues after import without touching your media files.
 - **Media Management**: Inspect tags with Mutagen, format destination folders using customizable token templates (e.g. `{Artist Name}/{Album Title} ({Release Year})/{track:00} - {Track Title}`), handle collisions safely, and notify Plex when imports finish.
 
 #### 3. Lidarr Integration Mode
@@ -259,6 +264,7 @@ TrackSeerr includes a first-class **Application URL** setting (configurable in t
 | `ROLE` | `all-in-one` | Container execution mode: `all-in-one`, `gateway`, or `core` |
 | `APPLICATION_URL` | *Optional* | Canonical external URL (e.g. `https://trackseerr.yourdomain.com`) for notifications, Plex OAuth redirects, and reverse proxies |
 | `TRACKSEERR_CORE_URL` | *None* | Core endpoint URL required when running in `gateway` mode |
+| `INTERNAL_CORE_SECRET` | *Optional* | Shared internal token protecting Core endpoints from unauthorized traffic on internal Docker networks |
 | `LIBRARY_MODE` | `native` | Operational mode: `native` for full TrackSeerr catalog & library management, or `lidarr` for external Lidarr delegation |
 | `PORT` | `5250` | Port for the web service |
 | `HOST` | `0.0.0.0` | Host binding interface |

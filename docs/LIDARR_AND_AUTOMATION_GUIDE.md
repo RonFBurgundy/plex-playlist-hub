@@ -15,12 +15,16 @@ Both approaches support automated self-healing, where newly acquired tracks are 
 |---|---|---|
 | Library cataloging & browsing | Yes (Built-in Library tab & REST API) | Via Lidarr WebUI |
 | Granular monitoring | Full hierarchy (Artist, Album, & Track level) | Artist & Album level only |
-| Filesystem scanner & drift detection | Yes (Recursive `/music` Mutagen scanner) | Delegated to Lidarr disk scan |
+| Native artist & discography ingestion | Yes (Add artist & fetch discography pre-acquisition) | Yes |
+| Filesystem scanner & drift detection | Yes (Recursive `/music` Mutagen scanner with caching) | Delegated to Lidarr disk scan |
 | Interactive manual import | Yes (Glass modal with confidence ratings) | Via Lidarr Manual Import |
 | 1-click Lidarr migration importer | Yes (Extracts catalog, MBIDs & files via API) | N/A |
 | Single-track surgical matching | Yes (via slskd) | No (Lidarr operates at album level) |
 | Usenet acquisition | Yes (via SABnzbd + Newznab) | Yes (via Lidarr download clients) |
 | Torrent acquisition | Yes (via qBittorrent + Torznab) | Yes (via Lidarr download clients) |
+| Custom Formats (CF) regex scoring | Yes (Score bonuses, penalties & min score) | Yes |
+| Seeding ratio & time governance | Yes (`seed_ratio_limit` & `seed_time_limit_minutes`) | Yes |
+| Persistent download blocklist | Yes (Blocks corrupt/stalled releases from re-snatch) | Yes |
 | Tag inspection | Mutagen (FLAC, MP3, M4A, Opus) | Lidarr internal tagger |
 | File renaming and moving | Built-in token template engine | Lidarr media management |
 | External dependencies | Downloader daemons only | Full Lidarr container and database |
@@ -77,17 +81,29 @@ TrackSeerr maintains a 3-tier catalog hierarchy:
 - **Albums Sub-Tab**: Card grid featuring lazy-loaded cover art (with `/static/placeholder.svg` fallbacks), release year, track counts, drill-down buttons, and album-level monitoring toggles.
 - **Tracks Sub-Tab**: Tabular view displaying track numbers, track titles, artist and album links, audio format badges (FLAC, MP3, AAC, Missing), quality cutoff indicators (**Meets Cutoff**, **Below Cutoff**, **Missing File**), inline monitoring toggles, and manual upgrade triggers opening the interactive release browser.
 
-### 3. Recursive Filesystem Scanner (`/music`)
-TrackSeerr includes a non-destructive recursive filesystem scanner designed to index and synchronize media:
+### 3. Native Artist Ingestion & Discography Ingestion
+In addition to scanning existing files on disk, TrackSeerr allows administrators to ingest artists directly from discovery into the native catalog before downloading media:
+- **Adding an Artist**: Query discovery by name or provider ID, choose the desired root folder, and select a monitoring preset:
+  - `all`: Monitors full discography (studio albums, singles, EPs, compilations).
+  - `albums`: Monitors studio albums only, leaving singles and compilations unmonitored.
+  - `singles_eps`: Monitors only singles and EP releases.
+  - `none`: Ingests the artist and discography for browsing without initiating automated downloads.
+- **Tracklist Population**: Monitored releases fetch full tracklists into `library_tracks`. Unacquired tracks immediately enter the "Missing" catalog queue.
+- **Discography Refresh**: When an artist drops new music, dispatching `POST /api/library/artists/{artist_id}/refresh` scans upstream discovery, detects new releases, and appends them to your catalog according to the artist's monitoring rules without overwriting existing files.
+
+### 4. High-Throughput Filesystem Scanner (`/music`)
+TrackSeerr includes a non-destructive recursive filesystem scanner designed to index and synchronize large media libraries:
 - **Triggering**: Click **Scan Disk** in the Library toolbar or dispatch `POST /api/library/scan`.
-- **Mutagen Tag & Stream Extraction**: Iterates over all audio files (`.flac`, `.mp3`, `.m4a`, `.aac`, `.opus`, `.ogg`, `.wav`) in `/music`, extracting codec, bitrate, sample rate, bit depth, channel layout, track number, disc number, release year, album artist, artist, and titles.
+- **Multi-Threaded Mutagen Pool**: Audio tag and stream metric extraction runs across a parallel worker pool (up to 8 threads), dramatically accelerating scans on multi-core processors.
+- **Size & mtime Caching**: Files already registered in the catalog whose file size and modification timestamps match are skipped, cutting subsequent scan times down to seconds.
+- **Batched Transactions**: Catalog writes are buffered in batches of 100 within atomic SQLite transactions, preventing lock contention and disk churn.
 - **Catalog Synchronization**: Automatically creates or links records across `library_artists`, `library_albums`, `library_tracks`, and `library_files`.
 - **Quality Cutoff Evaluation**: Compares technical stream metrics against the configured Quality Profile (e.g. FLAC 16-bit / 24-bit, MP3 320), marking `cutoff_met` accordingly.
 - **Pruning Missing Files**: When triggered with `prune_missing=True`, the scanner removes orphaned `library_files` and cleans up empty albums or artists if disk files were deleted externally.
 - **Plex Library Refresh**: Once the scan cycle completes, TrackSeerr automatically signals Plex Media Server to refresh the music library section.
 - **Async Execution & Cancellation**: Runs in a managed background thread with live status polling via `GET /api/library/scan/status` and instant cancellation support via `POST /api/library/scan/cancel`.
 
-### 4. Interactive Manual Import Queue
+### 5. Interactive Manual Import Queue
 For media from external downloads, CD rips, or unorganized staging directories:
 1. Click **Manual Import** in the Library toolbar to open the glass modal.
 2. Enter the folder path within `/downloads` or approved media mounts and click **Scan Folder** (`POST /api/library/manual-import/scan`).
@@ -100,7 +116,7 @@ For media from external downloads, CD rips, or unorganized staging directories:
 6. Optional **Write Standardized Tags**: Check the box to rewrite normalized ID3v2.4 or Vorbis tags using Mutagen before moving.
 7. Click **Import Selected Files** (`POST /api/library/manual-import/commit`) to execute atomic cross-mount moves and register the files in the catalog.
 
-### 5. Token Template Batch Renamer
+### 6. Token Template Batch Renamer
 To fix non-standard filenames or migrate to a new naming convention:
 1. Click **Rename Files** in the Library toolbar to open the renamer modal (`POST /api/library/rename/preview`).
 2. TrackSeerr compares disk paths for all cataloged files against your configured Arr naming template (e.g. `{Artist Name}/{Album Title} ({Release Year})/{track:00} - {Track Title}{[ (Quality Full)]}`).
@@ -108,12 +124,12 @@ To fix non-standard filenames or migrate to a new naming convention:
 4. Filter by specific artist or album, or select all files requiring rename.
 5. Click **Apply Renames** (`POST /api/library/rename/apply`). TrackSeerr validates target paths against directory traversal, applies collision protection, executes cross-device safe atomic moves, updates database records, and notifies Plex.
 
-### 6. Quality Cutoffs and Automated Upgrade Paths
-TrackSeerr prevents stagnant low-quality audio:
-- When a track is acquired in lower quality (e.g. MP3 128kbps or 320kbps), it is tagged `cutoff_unmet=True`.
-- The track remains in the monitored state even though it is playable in Plex.
-- During scheduled 15-minute RSS indexer syncs and hourly backlog sweeps, TrackSeerr prioritizes snatched releases that satisfy the configured Quality Profile cutoff (such as lossless FLAC).
-- When a higher-quality release is imported, TrackSeerr replaces the lower-quality file, updates `library_files`, and recalculates cutoff status.
+### 7. Quality Cutoffs, Custom Formats & Automated Upgrades
+TrackSeerr prevents stagnant low-quality audio using Arr-grade release evaluation:
+- **Quality Cutoff Tracking**: When a track is acquired in lower quality (e.g. MP3 128kbps or 320kbps), it is tagged `cutoff_unmet=True`. It remains monitored in the background while remaining fully playable in Plex.
+- **Custom Formats (CF) Regex Scoring**: Score releases with regex bonuses and penalties. Prefer `Remaster`, `Vinyl`, or `Web-DL`, penalize `Live` or `Censored`, and enforce strict minimum score thresholds (`min_score`).
+- **Catalog-Driven Upgrades**: During scheduled 15-minute RSS indexer syncs and hourly backlog sweeps, TrackSeerr prioritizes releases that satisfy the configured Quality Profile cutoff (such as lossless FLAC) or yield higher Custom Format scores.
+- **Atomic Upgrade Replacement**: When a higher-quality release is imported, TrackSeerr replaces the lower-quality file, updates `library_files`, and recalculates cutoff status.
 
 ---
 
@@ -172,25 +188,29 @@ When a track or album is queued for download:
 4. **Tag Inspection**: Mutagen inspects audio tags (artist, album, track number, disc number, audio codec, bit depth, sample rate).
 5. **Path Formatting**: The destination path is generated according to your configured naming template (e.g., `{Artist Name}/{Album Title} ({Release Year})/{track:00} - {Track Title}`).
 6. **Collision Check & Atomic Move**: If the file already exists, TrackSeerr appends a safe counter (`Title (1).flac`). The file is moved into `/music` using cross-filesystem safe atomic moves.
-7. **Plex Scan**: TrackSeerr pings Plex Media Server to scan the updated artist folder.
-8. **Client Queue Cleanup**: If `delete_completed_transfers` is enabled, the completed item is safely removed from qBittorrent, SABnzbd, or slskd without deleting your media files.
-9. **Quality Cutoff & Upgrade Monitoring**: TrackSeerr compares the imported audio format against your Quality Profile cutoff (e.g., FLAC 16-bit). If grabbed in a lower quality (like MP3 320), the item is marked available for playback, but stays monitored in the background so TrackSeerr can automatically upgrade it when a lossless release appears.
-10. **Notifications**: An alert is dispatched to your configured Discord, Telegram, Pushover, Webhook, or Email channels.
+7. **Automated Catalog Synchronization**: In native mode, the worker immediately updates `library_artists`, `library_albums`, `library_tracks`, and `library_files`. For multi-track albums, files are reconciled against canonical tracklists by disc/track numbers, title similarity (>=0.85), and duration tolerances.
+8. **Plex Scan**: TrackSeerr pings Plex Media Server to scan the updated artist folder.
+9. **Seeding Governance & Client Cleanup**: If `import_mode == "hardlink"` and seeding ratio or time limits are configured (`seed_ratio_limit`, `seed_time_limit_minutes`), TrackSeerr keeps the torrent seeding in qBittorrent. Once ratio or seeding time targets are reached, the transfer is removed from the client without touching your media files.
+10. **Quality Cutoff & Upgrade Monitoring**: TrackSeerr compares the imported audio format against your Quality Profile cutoff (e.g., FLAC 16-bit). If grabbed in a lower quality (like MP3 320), the item is marked available for playback, but stays monitored in the background so TrackSeerr can automatically upgrade it when a lossless release appears.
+11. **Notifications**: An alert is dispatched to your configured Discord, Telegram, Pushover, Webhook, or Email channels.
 
 ---
 
-## Autonomous Search: RSS Sync and Backlog Sweeps
+## Autonomous Search: RSS Sync, Catalog Sweeps & Anti-Stall
 
-TrackSeerr does not just search once and give up. It operates two background search engines to keep your music library complete:
+TrackSeerr does not just search once and give up. It operates autonomous background search loops to keep your music library complete:
 
 1. **15-Minute Indexer RSS Sync (`RSSSyncWorker`)**:
    - Polls your Torznab and Newznab indexers every 15 minutes for recently posted releases.
    - Snatches newly uploaded releases that match pending requests or missing playlist tracks without hammering the indexer search API.
    - Snaps up higher-quality releases for existing music that hasn't met your Quality Profile cutoff yet.
 2. **Periodic Wanted Backlog Sweeps (`WantedBacklogWorker`)**:
-   - Sweeps your unfulfilled requests and missing tracks on a scheduled interval (default: every 60 minutes).
+   - Sweeps your unfulfilled user requests, playlist misses, and **monitored missing catalog tracks/albums** on a scheduled interval (default: every 60 minutes).
    - Spaces queries safely with a 2.5-second pacing delay to respect indexer rate limits.
    - Automatically enqueues the top-ranked match when a release becomes available.
+3. **Persistent Download Blocklist & Anti-Stall**:
+   - Corrupt archives, password-protected releases, or stalled transfers with zero audio files are automatically added to the persistent `download_blocklist` table (indexed by info hash, release GUID, and title).
+   - Blocklisted releases are excluded from subsequent RSS snatches and backlog searches, preventing infinite re-snatch loops. Operators can view and remove blocklist items anytime under **Activity -> Blocklist** or via the REST API (`/api/acquisition/blocklist`).
 
 ---
 
