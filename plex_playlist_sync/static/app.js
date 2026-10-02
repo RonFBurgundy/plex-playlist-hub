@@ -474,6 +474,8 @@ document.addEventListener('alpine:init', () => {
       if (options.body && typeof options.body === 'object' && !(options.body instanceof FormData)) {
         headers['Content-Type'] = 'application/json';
         options.body = JSON.stringify(options.body);
+      } else if (typeof options.body === 'string' && !headers['Content-Type'] && (options.body.startsWith('{') || options.body.startsWith('['))) {
+        headers['Content-Type'] = 'application/json';
       }
 
       const config = {
@@ -723,7 +725,7 @@ document.addEventListener('alpine:init', () => {
 
         if (!pinId) {
           try {
-            pinId = sessionStorage.getItem('trackseerr_pending_pin');
+            pinId = sessionStorage.getItem('trackseerr_pending_pin') || localStorage.getItem('trackseerr_pending_pin');
           } catch (e) {}
         }
 
@@ -747,6 +749,7 @@ document.addEventListener('alpine:init', () => {
           }
           try {
             sessionStorage.removeItem('trackseerr_pending_pin');
+            localStorage.removeItem('trackseerr_pending_pin');
           } catch (e) {}
 
           const success = await this.verifyPinAndLogin(pinId);
@@ -787,6 +790,7 @@ document.addEventListener('alpine:init', () => {
             this.pin = null;
             try {
               sessionStorage.removeItem('trackseerr_pending_pin');
+              localStorage.removeItem('trackseerr_pending_pin');
             } catch (e) {}
             this.showToast(`Signed in as ${this.currentUser.username}`, 'success');
             await this.loadDashboardData();
@@ -848,15 +852,12 @@ document.addEventListener('alpine:init', () => {
       }
 
       try {
-        const isMobile = window.matchMedia('(max-width: 768px)').matches ||
-                         /Android|iPhone|iPad|iPod/i.test(navigator.userAgent) ||
-                         window.navigator.standalone === true;
-
         const baseUrl = `${window.location.origin}${window.location.pathname}`;
 
         const pinData = await this.apiRequest('/api/auth/plex/pin', {
           method: 'POST',
-          body: JSON.stringify({ forward_url: baseUrl })
+          headers: { 'Content-Type': 'application/json' },
+          body: { forward_url: baseUrl }
         });
 
         this.pin = pinData;
@@ -864,12 +865,10 @@ document.addEventListener('alpine:init', () => {
         // Build redirect callback destination URL
         const forwardUrl = new URL(baseUrl);
         forwardUrl.searchParams.set('pin_id', String(pinData.id));
-        if (!isMobile) {
-          forwardUrl.searchParams.set('popup', '1');
-        }
 
         try {
           sessionStorage.setItem('trackseerr_pending_pin', String(pinData.id));
+          localStorage.setItem('trackseerr_pending_pin', String(pinData.id));
         } catch (e) {}
 
         // Ensure forwardUrl is present in auth_url hash
@@ -879,34 +878,8 @@ document.addEventListener('alpine:init', () => {
           authUrl += `${delim}forwardUrl=${encodeURIComponent(forwardUrl.toString())}`;
         }
 
-        if (isMobile) {
-          // Native mobile experience: full window navigation to Plex account
-          this.authLoadingText = 'Taking you to Plex...';
-          window.location.href = authUrl;
-          return;
-        }
-
-        // Desktop experience: center popup window
-        this.authLoadingText = 'Waiting for Plex sign-in...';
-        const width = 600;
-        const height = 700;
-        const left = Math.max(0, Math.floor((window.innerWidth - width) / 2 + window.screenX));
-        const top = Math.max(0, Math.floor((window.innerHeight - height) / 2 + window.screenY));
-
-        this.plexPopup = window.open(
-          authUrl,
-          'plex_oauth_popup',
-          `width=${width},height=${height},top=${top},left=${left},scrollbars=yes,status=no,toolbar=no,menubar=no`
-        );
-
-        if (!this.plexPopup || this.plexPopup.closed || typeof this.plexPopup.closed === 'undefined') {
-          // Fall back to same-window navigation if popup is blocked
-          this.authLoadingText = 'Taking you to Plex...';
-          window.location.href = authUrl;
-          return;
-        }
-
-        this.pollPin();
+        this.authLoadingText = 'Taking you to Plex...';
+        window.location.href = authUrl;
       } catch (err) {
         this.pinError = err.message || 'Failed to start Plex authorization';
         this.isAuthenticating = false;

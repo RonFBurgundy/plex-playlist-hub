@@ -78,7 +78,21 @@ def create_plex_pin(
         "context[device][product]": DEFAULT_PRODUCT_NAME,
     }
     if forward_url:
-        params["forwardUrl"] = str(forward_url).strip()
+        f_url = str(forward_url).strip()
+        parsed_f = urllib.parse.urlparse(f_url)
+        q_params = urllib.parse.parse_qs(parsed_f.query)
+        if "pin_id" not in q_params:
+            q_params["pin_id"] = [str(pin_id)]
+            new_query = urllib.parse.urlencode(q_params, doseq=True)
+            f_url = urllib.parse.urlunparse((
+                parsed_f.scheme,
+                parsed_f.netloc,
+                parsed_f.path,
+                parsed_f.params,
+                new_query,
+                parsed_f.fragment,
+            ))
+        params["forwardUrl"] = f_url
     auth_params = urllib.parse.urlencode(params)
     auth_url = f"{PLEX_AUTH_APP_URL}?{auth_params}"
 

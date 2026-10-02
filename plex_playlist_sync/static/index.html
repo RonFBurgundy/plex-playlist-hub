@@ -270,19 +270,21 @@
           </template>
 
           <template x-if="!isAuthenticated && !isLoading">
-            <button @click="startPinFlow()" 
+            <button @click="startPlexAuth()" 
+                    title="Authorize with Plex"
                     class="flex items-center space-x-1.5 px-3 py-1.5 text-xs font-semibold rounded-[3px] bg-[#e5a00d] hover:bg-[#cc8f0c] text-slate-950 transition shadow-lg shadow-[#e5a00d]/20 active:translate-y-[1px]">
               <svg class="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
                 <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 14.5v-9l6 4.5-6 4.5z"/>
               </svg>
-              <span>Sign In</span>
+              <span>Sign In with Plex</span>
             </button>
           </template>
         </div>
 
         <!-- Desktop Unauthenticated Sign In (>= md) -->
         <div class="hidden md:flex" x-show="!isAuthenticated && !isLoading">
-          <button @click="startPinFlow()" 
+          <button @click="startPlexAuth()" 
+                  title="Authorize with Plex"
                   class="flex items-center space-x-2 px-4 py-2 text-xs font-semibold rounded-[3px] bg-[#e5a00d] hover:bg-[#cc8f0c] text-slate-950 transition shadow-lg shadow-[#e5a00d]/20 active:translate-y-[1px]">
             <svg class="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
               <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 14.5v-9l6 4.5-6 4.5z"/>
@@ -440,76 +442,31 @@
     
     <!-- UNAUTHENTICATED HERO PROMPT -->
     <template x-if="!isAuthenticated && !isLoading">
-      <div class="w-full max-w-3xl mx-auto py-2 sm:py-6 landing-hero">
+      <div class="w-full max-w-md mx-auto py-12 sm:py-20 landing-hero">
         <!-- Native Hero Chassis Card -->
-        <div class="relative overflow-hidden rounded-[4px] border border-[#262626] bg-[#121212] p-6 sm:p-10 shadow-2xl space-y-8">
+        <div class="relative overflow-hidden rounded-[4px] border border-[#262626] bg-[#121212] p-8 sm:p-10 shadow-2xl text-center space-y-8">
           
           <!-- Ambient Warm Amber Glow -->
-          <div class="absolute -top-24 left-1/2 -translate-x-1/2 w-96 h-96 bg-[#e5a00d]/10 rounded-full blur-3xl pointer-events-none"></div>
+          <div class="absolute -top-24 left-1/2 -translate-x-1/2 w-80 h-80 bg-[#e5a00d]/10 rounded-full blur-3xl pointer-events-none"></div>
 
-          <!-- Walkman Logo & App Title -->
-          <div class="relative text-center space-y-4">
-            <div class="w-16 h-16 sm:w-20 sm:h-20 rounded-[4px] bg-[#141414] border border-[#262626] flex items-center justify-center mx-auto shadow-xl shadow-[#e5a00d]/10 active:translate-y-[2px] transition duration-75">
-              <img src="/static/trackseerr-logo.svg" alt="TrackSeerr" class="w-12 h-12 sm:w-16 sm:h-16 object-contain drop-shadow-md">
+          <!-- Walkman Logo & App Brand -->
+          <div class="relative space-y-4">
+            <div class="w-20 h-20 rounded-[4px] bg-[#141414] border border-[#262626] flex items-center justify-center mx-auto shadow-xl shadow-[#e5a00d]/10 active:translate-y-[2px] transition duration-75">
+              <img src="/static/trackseerr-logo.svg" alt="TrackSeerr" class="w-16 h-16 object-contain drop-shadow-md">
             </div>
             
-            <div class="space-y-2">
-              <div class="inline-flex items-center space-x-2 px-2.5 py-0.5 rounded-[3px] bg-[#e5a00d]/15 border border-[#e5a00d]/30 text-[#e5a00d] text-[10px] font-mono font-bold uppercase tracking-wider">
-                <span>Plex Music Automation Suite</span>
-              </div>
-              <h2 class="text-2xl sm:text-3xl font-extrabold tracking-tight text-white">
-                Sign In to TrackSeerr
+            <div class="space-y-1.5">
+              <h2 class="text-3xl font-extrabold tracking-tight text-white">
+                TrackSeerr
               </h2>
-              <p class="text-slate-400 text-xs sm:text-sm max-w-lg mx-auto leading-relaxed">
-                Discover trending music, manage multi-user requests with Lidarr, and synchronize Spotify, Apple Music &amp; Deezer playlists directly with Plex Media Server and Plexamp.
-              </p>
-            </div>
-          </div>
-
-          <!-- Native Mobile Feature Pillars (3 Touch Cards) -->
-          <div class="relative grid grid-cols-1 sm:grid-cols-3 gap-3 text-left">
-            <!-- Discovery Card -->
-            <div class="p-3.5 rounded-[4px] bg-[#161616] border border-[#222222] flex flex-col justify-between space-y-1">
-              <div class="flex items-center space-x-2 text-[#e5a00d]">
-                <svg class="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"></path>
-                </svg>
-                <span class="text-xs font-bold text-white uppercase tracking-wider">Music Discovery</span>
-              </div>
-              <p class="text-[11px] text-slate-400 leading-normal">
-                Explore top charts, new releases, and deep album tracklists across Apple Music &amp; Deezer with 1-click requests.
-              </p>
-            </div>
-
-            <!-- Automated Acquisition Card -->
-            <div class="p-3.5 rounded-[4px] bg-[#161616] border border-[#222222] flex flex-col justify-between space-y-1">
-              <div class="flex items-center space-x-2 text-[#e5a00d]">
-                <svg class="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"></path>
-                </svg>
-                <span class="text-xs font-bold text-white uppercase tracking-wider">Automated Grabbing</span>
-              </div>
-              <p class="text-[11px] text-slate-400 leading-normal">
-                Lidarr, Torznab indexers, qBittorrent, SABnzbd &amp; Slskd pipeline with automatic lossless FLAC tagging.
-              </p>
-            </div>
-
-            <!-- Playlist Ecosystem Card -->
-            <div class="p-3.5 rounded-[4px] bg-[#161616] border border-[#222222] flex flex-col justify-between space-y-1">
-              <div class="flex items-center space-x-2 text-[#e5a00d]">
-                <svg class="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3"></path>
-                </svg>
-                <span class="text-xs font-bold text-white uppercase tracking-wider">Plexamp Sync</span>
-              </div>
-              <p class="text-[11px] text-slate-400 leading-normal">
-                Lossless matching, multi-user targets, smart mix presets, and instant sync into your Plex library.
+              <p class="text-slate-400 text-xs sm:text-sm">
+                Music Request &amp; Discovery Suite
               </p>
             </div>
           </div>
 
           <!-- Primary Call-to-Action Area -->
-          <div class="relative max-w-md mx-auto space-y-4">
+          <div class="relative max-w-sm mx-auto space-y-4">
             
             <!-- Loading State View (Connecting / Verifying) -->
             <div x-show="isAuthenticating" 
@@ -533,18 +490,19 @@
             <div x-show="!isAuthenticating" class="space-y-3">
               <button type="button"
                       @click="startPlexAuth()" 
-                      class="w-full min-h-[48px] py-3.5 px-6 rounded-[4px] bg-[#e5a00d] hover:bg-[#cc8f0c] text-slate-950 font-bold text-sm sm:text-base transition duration-75 flex items-center justify-center space-x-2.5 shadow-lg shadow-[#e5a00d]/20 active:translate-y-[2px]">
+                      title="Authorize with Plex"
+                      class="w-full min-h-[48px] py-3.5 px-6 rounded-[4px] bg-[#e5a00d] hover:bg-[#cc8f0c] text-slate-950 font-bold text-base transition duration-75 flex items-center justify-center space-x-2.5 shadow-lg shadow-[#e5a00d]/20 active:translate-y-[2px]">
                 <svg class="w-5 h-5 flex-shrink-0" fill="currentColor" viewBox="0 0 24 24">
                   <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 14.5v-9l6 4.5-6 4.5z"/>
                 </svg>
-                <span>Authorize with Plex</span>
+                <span>Sign In with Plex</span>
                 <svg class="w-4 h-4 ml-1 opacity-70" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M9 5l7 7-7 7"></path>
                 </svg>
               </button>
 
               <p class="text-[11px] text-slate-500 text-center">
-                Secured via official <span class="text-slate-400">plex.tv</span> OAuth. Your Plex credentials are never shared or stored.
+                Secured via official <span class="text-slate-400">plex.tv</span> OAuth.
               </p>
             </div>
 
