@@ -18,7 +18,16 @@ document.addEventListener('alpine:init', () => {
     isGeneratingPin: false,
 
     // Overseerr / Arr Primary Tab Navigation
-    activeTab: 'discover', // 'discover' | 'requests' | 'playlists' | 'settings'
+    activeTab: 'discover', // 'discover' | 'requests' | 'playlists' | 'activity' | 'settings'
+    isMobileMenuOpen: false,
+
+    toggleMobileMenu() {
+      this.isMobileMenuOpen = !this.isMobileMenuOpen;
+    },
+
+    closeMobileMenu() {
+      this.isMobileMenuOpen = false;
+    },
 
     // Discovery State
     discoveryState: {
@@ -141,6 +150,16 @@ document.addEventListener('alpine:init', () => {
     isMissingModalOpen: false,
     selectedMissingPlaylistId: '',
     missingSearch: '',
+
+    get isAnyModalOpen() {
+      return Boolean(
+        this.isAddModalOpen ||
+        this.isMissingModalOpen ||
+        this.isMatchModalOpen ||
+        this.isClientModalOpen ||
+        this.isIndexerModalOpen
+      );
+    },
 
     // Lidarr & Automated Feeds State
     lidarrConfig: { configured: false, url: null, auto_search: false, status: null },
@@ -304,6 +323,48 @@ document.addEventListener('alpine:init', () => {
     init() {
       this.checkAuth();
       this.audioPlayer.init(this);
+
+      // Body modal scroll-lock synchronization
+      const syncBodyModalLock = () => {
+        if (this.isAnyModalOpen) {
+          document.body.classList.add('modal-open');
+        } else {
+          document.body.classList.remove('modal-open');
+        }
+      };
+
+      if (typeof this.$watch === 'function') {
+        this.$watch('isAnyModalOpen', (val) => {
+          if (val) {
+            document.body.classList.add('modal-open');
+          } else {
+            document.body.classList.remove('modal-open');
+          }
+        });
+        this.$watch('isAddModalOpen', syncBodyModalLock);
+        this.$watch('isMissingModalOpen', syncBodyModalLock);
+        this.$watch('isMatchModalOpen', syncBodyModalLock);
+        this.$watch('isClientModalOpen', syncBodyModalLock);
+        this.$watch('isIndexerModalOpen', syncBodyModalLock);
+        this.$watch('activeTab', () => {
+          this.isMobileMenuOpen = false;
+        });
+      }
+
+      // Escape key listener to dismiss open modals and mobile menu
+      window.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape') {
+          if (this.isMobileMenuOpen) {
+            this.closeMobileMenu();
+          }
+          if (this.isAddModalOpen) this.closeAddModal();
+          if (this.isMissingModalOpen) this.closeMissingModal();
+          if (this.isMatchModalOpen) this.closeManualMatchModal();
+          if (this.isClientModalOpen) this.closeClientModal();
+          if (this.isIndexerModalOpen) this.closeIndexerModal();
+        }
+      });
+
       // Periodically poll sync status and activity queue every 5 seconds
       this.statusPollTimer = setInterval(() => {
         if (this.isAuthenticated) {
@@ -1368,6 +1429,10 @@ document.addEventListener('alpine:init', () => {
       this.activeMissingTrack = null;
       this.plexSearchResults = [];
       this.matchSearchQuery = '';
+    },
+
+    closeMatchModal() {
+      this.closeManualMatchModal();
     },
 
     async searchPlexTracks(query) {

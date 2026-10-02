@@ -93,6 +93,33 @@ class TestFrontendDashboard:
         assert "pushAllToLidarr" in html
         assert "pushTrackToLidarr" in html
 
+    def test_mobile_navigation_elements(self, client):
+        """Validates mobile navigation header, drawer, and hamburger button."""
+        resp = client.get("/")
+        assert resp.status_code == 200
+        html = resp.text
+
+        # Mobile drawer and hamburger button bindings
+        assert "isMobileMenuOpen" in html
+        assert "toggleMobileMenu" in html
+        assert "closeMobileMenu" in html
+        assert "toggle navigation menu" in html.lower() or "mobile" in html.lower()
+
+    def test_modal_internal_scroll_architecture(self, client):
+        """Validates that modals enforce internal scroll architecture and constraints."""
+        resp = client.get("/")
+        assert resp.status_code == 200
+        html = resp.text
+
+        assert "modal-body-scroll" in html
+        assert "overscroll-contain" in html
+        assert "max-h-[90dvh]" in html
+        assert "isAddModalOpen" in html
+        assert "isMissingModalOpen" in html
+        assert "isMatchModalOpen" in html
+        assert "isClientModalOpen" in html
+        assert "isIndexerModalOpen" in html
+
 
 class TestStaticAssets:
     """Validates that JavaScript, CSS, and asset files are served correctly."""
@@ -118,6 +145,8 @@ class TestStaticAssets:
         assert "getRssFeedUrl" in resp.text
         assert "getTextFeedUrl" in resp.text
         assert "getWebhookUrl" in resp.text
+        assert "toggleMobileMenu" in resp.text
+        assert "isAnyModalOpen" in resp.text
 
     def test_static_style_css_served(self, client):
         resp = client.get("/static/style.css")
@@ -126,6 +155,17 @@ class TestStaticAssets:
         assert "#e5a00d" in resp.text
         assert "glass-panel" in resp.text
         assert "terminal-console" in resp.text
+
+    def test_design_tokens_and_theme(self, client):
+        """Validates responsive design tokens and modal scroll-lock rules."""
+        resp = client.get("/static/style.css")
+        assert resp.status_code == 200
+        css = resp.text
+
+        assert "--bg-canvas" in css
+        assert "--color-plex-amber" in css
+        assert "body.modal-open" in css
+        assert "modal-body-scroll" in css
 
     def test_static_placeholder_svg_served(self, client):
         resp = client.get("/static/placeholder.svg")

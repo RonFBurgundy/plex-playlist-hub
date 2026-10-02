@@ -1,9 +1,26 @@
 /* TrackSeerr - Dark Mode Aesthetics (Plex / Seerr Theme) */
 
-:root {
+:root,
+.dark {
+  --bg-canvas: #020617;
+  --bg-surface: #0b0f19;
+  --bg-surface-elevated: #0f172a;
+  --bg-card: #0f172a;
+  --bg-card-hover: #1e293b;
+  --border-subtle: rgba(51, 65, 85, 0.4);
+  --border-default: #334155;
+  --border-hover: rgba(229, 160, 13, 0.4);
   --plex-amber: #e5a00d;
+  --color-plex-amber: #e5a00d;
   --plex-amber-hover: #cc8f0c;
   --plex-amber-glow: rgba(229, 160, 13, 0.25);
+  --plex-amber-muted: rgba(229, 160, 13, 0.15);
+  --status-success: #10b981;
+  --status-error: #f43f5e;
+  --status-warning: #f59e0b;
+  --status-info: #38bdf8;
+  --sat: env(safe-area-inset-top, 0px);
+  --sab: env(safe-area-inset-bottom, 0px);
   --surface-bg: #020617;
   --surface-card: #0f172a;
   --surface-card-hover: #1e293b;
@@ -16,6 +33,37 @@ body {
   background-color: var(--surface-bg);
   color: #f8fafc;
   overflow-x: hidden;
+}
+
+/* Body Modal Scroll Lock */
+body.modal-open {
+  overflow: hidden !important;
+  touch-action: none;
+  -webkit-overflow-scrolling: auto;
+}
+
+/* Momentum touch scrolling & overscroll containment */
+.modal-body-scroll {
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+}
+
+/* Horizontal & vertical no-scrollbar utility */
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+/* Safe area insets */
+.pt-safe {
+  padding-top: var(--sat);
+}
+.pb-safe {
+  padding-bottom: var(--sab);
 }
 
 /* Custom Dark Scrollbars */
