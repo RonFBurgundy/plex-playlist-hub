@@ -14,6 +14,7 @@ from plex_playlist_sync.models import (
     DownloadDriverType,
     DownloadStatus,
     IndexerConfig,
+    MusicRequest,
 )
 from plex_playlist_sync.storage import Database
 
@@ -68,12 +69,17 @@ def _auth_headers(user: dict, test_db: Database, config: Config) -> dict[str, st
 def test_download_clients_permissions(app_and_client, test_db, test_config, seeded_users):
     _, client = app_and_client
     alice_headers = _auth_headers(seeded_users["alice"], test_db, test_config)
+    admin_headers = _auth_headers(seeded_users["admin"], test_db, test_config)
 
-    # Alice (non-admin) can list clients
+    # Alice (non-admin) cannot list clients (403 Forbidden)
     resp = client.get("/api/settings/download-clients", headers=alice_headers)
-    assert resp.status_code == 200
+    assert resp.status_code == 403
 
-    # But Alice cannot create or delete
+    # Admin can list clients
+    resp_admin = client.get("/api/settings/download-clients", headers=admin_headers)
+    assert resp_admin.status_code == 200
+
+    # Alice cannot create or delete
     resp = client.post("/api/settings/download-clients", json={"name": "test"}, headers=alice_headers)
     assert resp.status_code == 403
 
@@ -192,9 +198,13 @@ def test_indexers_crud_and_permissions(app_and_client, test_db, test_config, see
     alice_headers = _auth_headers(seeded_users["alice"], test_db, test_config)
     admin_headers = _auth_headers(seeded_users["admin"], test_db, test_config)
 
-    # 1. Non-admin can list indexers
+    # 1. Non-admin cannot list indexers (403 Forbidden)
     resp = client.get("/api/settings/indexers", headers=alice_headers)
-    assert resp.status_code == 200
+    assert resp.status_code == 403
+
+    # Admin can list indexers
+    resp_admin = client.get("/api/settings/indexers", headers=admin_headers)
+    assert resp_admin.status_code == 200
 
     # Non-admin cannot create or delete
     resp = client.post("/api/settings/indexers", json={"name": "test"}, headers=alice_headers)
@@ -271,7 +281,7 @@ def test_queue_api(app_and_client, test_db, test_config, seeded_users):
     alice_headers = _auth_headers(seeded_users["alice"], test_db, test_config)
     admin_headers = _auth_headers(seeded_users["admin"], test_db, test_config)
 
-    # 1. Seed download client and active download
+    # 1. Seed download client and active system download (no request_id)
     dl_client = test_db.create_download_client(
         DownloadClientConfig(
             id="client-slskd-1",
@@ -290,31 +300,114 @@ def test_queue_api(app_and_client, test_db, test_config, seeded_users):
             download_hash="slskd-dl-1",
             status=DownloadStatus.DOWNLOADING.value,
             progress=65.5,
+            source_path="/downloads/staging/01.mp3",
+            target_path="/music/Daft Punk/01.mp3",
         )
     )
 
-    # 2. Both regular user and admin can view queue
-    resp = client.get("/api/queue", headers=alice_headers)
-    assert resp.status_code == 200
-    items = resp.json()
-    assert len(items) == 1
-    assert items[0]["title"] == "Daft Punk - One More Time"
+    # 2. Regular user does NOT see unowned system download
+    resp_alice = client.get("/api/queue", headers=alice_headers)
+    assert resp_alice.status_code == 200
+    assert resp_alice.json() == []
 
-    # 3. Regular user cannot delete unowned system download
-    resp = client.delete(f"/api/queue/{download['id']}", headers=alice_headers)
-    assert resp.status_code == 403
+    # Admin sees system download with sensitive filesystem paths intact
+    resp_admin = client.get("/api/queue", headers=admin_headers)
+    assert resp_admin.status_code == 200
+    admin_items = resp_admin.json()
+    assert len(admin_items) == 1
+    assert admin_items[0]["title"] == "Daft Punk - One More Time"
+    assert admin_items[0]["source_path"] == "/downloads/staging/01.mp3"
+    assert admin_items[0]["target_path"] == "/music/Daft Punk/01.mp3"
 
-    # 4. Admin deletes/cancels download
+    # 3. Create request and download owned by Alice
+    alice_req = test_db.create_request(
+        MusicRequest(
+            id="req-alice-1",
+            user_id="user-alice",
+            item_type="track",
+            title="Alice Song",
+            artist="Alice Artist",
+        )
+    )
+    alice_dl = test_db.create_active_download(
+        ActiveDownload(
+            id="dl-alice-1",
+            title="Alice Song",
+            artist="Alice Artist",
+            client_id="client-slskd-1",
+            request_id="req-alice-1",
+            download_hash="slskd-alice-1",
+            status=DownloadStatus.DOWNLOADING.value,
+            source_path="/downloads/staging/alice.flac",
+            target_path="/music/Alice Artist/alice.flac",
+        )
+    )
+
+    # Alice now sees her download with source_path/target_path stripped (None)
+    resp_alice_updated = client.get("/api/queue", headers=alice_headers)
+    assert resp_alice_updated.status_code == 200
+    alice_items = resp_alice_updated.json()
+    assert len(alice_items) == 1
+    assert alice_items[0]["id"] == "dl-alice-1"
+    assert alice_items[0]["source_path"] is None
+    assert alice_items[0]["target_path"] is None
+
+    # Admin sees both downloads
+    resp_admin_all = client.get("/api/queue", headers=admin_headers)
+    assert len(resp_admin_all.json()) == 2
+
+    # 4. Cancellation permissions:
+    # Alice cannot cancel system download without request_id -> 403
+    resp_cancel_sys = client.delete(f"/api/queue/{download['id']}", headers=alice_headers)
+    assert resp_cancel_sys.status_code == 403
+    assert "Not authorized to cancel system download" in resp_cancel_sys.json()["detail"]
+
+    # Alice cannot cancel another user's download -> 403
+    bob = test_db.upsert_user("user-bob", "bob", "bob@example.com")
+    bob_req = test_db.create_request(
+        MusicRequest(
+            id="req-bob-1",
+            user_id="user-bob",
+            item_type="track",
+            title="Bob Track",
+            artist="Bob",
+        )
+    )
+    bob_dl = test_db.create_active_download(
+        ActiveDownload(
+            id="dl-bob-1",
+            title="Bob Track",
+            artist="Bob",
+            client_id="client-slskd-1",
+            request_id="req-bob-1",
+        )
+    )
+    resp_cancel_bob = client.delete(f"/api/queue/{bob_dl['id']}", headers=alice_headers)
+    assert resp_cancel_bob.status_code == 403
+    assert "Not authorized to cancel this download" in resp_cancel_bob.json()["detail"]
+
+    # Alice cannot cancel orphaned download where req is None -> 403
+    with patch.object(test_db, "get_request", return_value=None):
+        resp_cancel_orphan = client.delete(f"/api/queue/{bob_dl['id']}", headers=alice_headers)
+        assert resp_cancel_orphan.status_code == 403
+        assert "Not authorized to cancel this download" in resp_cancel_orphan.json()["detail"]
+
+    # Alice CAN cancel her own download
     with patch("plex_playlist_sync.api.routes.queue.get_acquisition_driver") as mock_factory:
         mock_driver = MagicMock()
         mock_driver.cancel.return_value = True
         mock_factory.return_value = mock_driver
 
-        resp = client.delete(f"/api/queue/{download['id']}", headers=admin_headers)
-        assert resp.status_code == 200
-        assert resp.json()["status"] == "cancelled"
-        mock_driver.cancel.assert_called_once_with("slskd-dl-1")
+        resp_alice_cancel = client.delete(f"/api/queue/{alice_dl['id']}", headers=alice_headers)
+        assert resp_alice_cancel.status_code == 200
+        assert resp_alice_cancel.json()["status"] == "cancelled"
 
-    # 5. Queue is now empty
-    resp = client.get("/api/queue", headers=admin_headers)
-    assert len(resp.json()) == 0
+    # Admin can cancel system download
+    with patch("plex_playlist_sync.api.routes.queue.get_acquisition_driver") as mock_factory:
+        mock_driver = MagicMock()
+        mock_driver.cancel.return_value = True
+        mock_factory.return_value = mock_driver
+
+        resp_admin_cancel = client.delete(f"/api/queue/{download['id']}", headers=admin_headers)
+        assert resp_admin_cancel.status_code == 200
+        assert resp_admin_cancel.json()["status"] == "cancelled"

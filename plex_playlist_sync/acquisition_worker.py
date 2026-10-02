@@ -125,27 +125,31 @@ class AcquisitionWorker:
     def _find_audio_files(self, candidate_path: Optional[str | Path], search_term: str) -> list[Path]:
         """Locates downloaded audio files from source path or staging directory."""
         found: list[Path] = []
+        staging_path = Path(self.staging_dir).resolve()
+
         if candidate_path:
-            p = Path(candidate_path)
-            if p.is_file() and p.suffix.lower() in AUDIO_EXTENSIONS:
-                return [p]
-            elif p.is_dir():
-                for root, _, files in os.walk(str(p)):
-                    for f in files:
-                        f_path = Path(root) / f
-                        if f_path.suffix.lower() in AUDIO_EXTENSIONS:
-                            found.append(f_path)
-                if found:
-                    return sorted(found)
+            src_path = Path(candidate_path).resolve()
+            if not src_path.is_relative_to(staging_path):
+                logger.warning("Rejecting source path outside staging directory: %s", candidate_path)
+            else:
+                if src_path.is_file() and src_path.suffix.lower() in AUDIO_EXTENSIONS:
+                    return [src_path]
+                elif src_path.is_dir():
+                    for root, _, files in os.walk(str(src_path)):
+                        for f in files:
+                            f_path = (Path(root) / f).resolve()
+                            if f_path.is_relative_to(staging_path) and f_path.suffix.lower() in AUDIO_EXTENSIONS:
+                                found.append(f_path)
+                    if found:
+                        return sorted(found)
 
         # Fallback: scan staging directory for files matching search term
-        staging = Path(self.staging_dir)
-        if staging.exists():
+        if staging_path.exists():
             clean_term = search_term.lower()
-            for root, _, files in os.walk(str(staging)):
+            for root, _, files in os.walk(str(staging_path)):
                 for f in files:
-                    f_path = Path(root) / f
-                    if f_path.suffix.lower() in AUDIO_EXTENSIONS:
+                    f_path = (Path(root) / f).resolve()
+                    if f_path.is_relative_to(staging_path) and f_path.suffix.lower() in AUDIO_EXTENSIONS:
                         if clean_term in f.lower() or clean_term in root.lower():
                             found.append(f_path)
 
@@ -246,6 +250,13 @@ class AcquisitionWorker:
 
                 # Locate downloaded audio files
                 candidate_src = status_dict.get("source_path") or item.get("source_path")
+                if candidate_src:
+                    src_path = Path(candidate_src).resolve()
+                    staging_path = Path(self.staging_dir).resolve()
+                    if not src_path.is_relative_to(staging_path):
+                        logger.warning("Rejecting source path outside staging directory: %s", candidate_src)
+                        candidate_src = None
+
                 search_term = item.get("title") or item.get("artist") or ""
                 audio_files = self._find_audio_files(candidate_src, search_term)
 
@@ -266,6 +277,9 @@ class AcquisitionWorker:
 
                 # Organize and move each audio file
                 imported_paths: list[str] = []
+                root_folder = media_settings.get("root_folder_path") or "/music"
+                root_path = Path(root_folder).resolve()
+
                 for af in audio_files:
                     try:
                         metadata = inspect_audio_file(af)
@@ -290,9 +304,24 @@ class AcquisitionWorker:
 
                     target_str = build_track_path(metadata, media_settings)
                     final_target = resolve_collision(target_str)
-                    placed_path = safe_atomic_move(af, final_target)
+                    target_path = Path(final_target).resolve()
+                    if not target_path.is_relative_to(root_path):
+                        logger.error("Destination %s escapes music root %s", target_path, root_path)
+                        continue
+
+                    placed_path = safe_atomic_move(af, target_path)
                     imported_paths.append(str(placed_path))
                     logger.info("Successfully imported '%s' -> '%s'", af.name, placed_path)
+
+                if not imported_paths:
+                    logger.error("No audio files were successfully imported for download %s", download_id)
+                    db.update_download_status(
+                        download_id,
+                        status=DownloadStatus.FAILED.value,
+                        error_message="Destination escaped music root or placement failed",
+                    )
+                    stats["failed"] += 1
+                    continue
 
                 # Update database records
                 target_summary = imported_paths[0] if imported_paths else None

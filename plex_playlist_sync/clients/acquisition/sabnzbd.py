@@ -77,6 +77,8 @@ class SabnzbdDriver(AcquisitionDriver):
         target_url = result.download_url
         if not target_url:
             raise ValueError("Missing download_url in search result for SABnzbd")
+        if not is_safe_service_url(target_url):
+            raise ValueError(f"Unsafe download URL: {target_url}")
 
         url = self._api_url(
             "addurl",

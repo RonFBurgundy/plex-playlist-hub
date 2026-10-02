@@ -259,3 +259,112 @@ def test_worker_lifecycle(test_db, workspace_dirs):
 
     worker.stop(timeout=1.0)
     assert worker.is_running() is False
+
+
+def test_worker_rejects_candidate_src_outside_staging(test_db, workspace_dirs, tmp_path):
+    downloads_dir, music_dir = workspace_dirs
+
+    # Create dummy audio file outside the staging directory
+    outside_dir = tmp_path / "outside"
+    outside_dir.mkdir()
+    evil_file = outside_dir / "secret.mp3"
+    evil_file.write_text("evil secret content")
+
+    client = test_db.create_download_client(
+        DownloadClientConfig(
+            id="client-test-1",
+            name="Test Client",
+            driver_type=DownloadDriverType.SLSKD,
+            host_url="http://slskd:5030",
+        )
+    )
+
+    download = test_db.create_active_download(
+        ActiveDownload(
+            id="dl-traversal-src",
+            title="Sneaky Track",
+            artist="Attacker",
+            client_id="client-test-1",
+            download_hash="hash-traversal",
+            status=DownloadStatus.COMPLETED.value,
+            source_path=str(evil_file),
+        )
+    )
+
+    mock_driver = MagicMock()
+    mock_driver.get_status.return_value = {
+        "status": DownloadStatus.COMPLETED.value,
+        "progress": 100.0,
+        "source_path": str(evil_file),
+        "error_message": None,
+    }
+
+    worker = AcquisitionWorker()
+
+    with patch("plex_playlist_sync.acquisition_worker.get_acquisition_driver", return_value=mock_driver):
+        stats = worker.poll_once(db=test_db, staging_dir=str(downloads_dir))
+        assert stats["failed"] == 1
+        assert stats["imported"] == 0
+
+    updated = test_db.get_active_download("dl-traversal-src")
+    assert updated["status"] == DownloadStatus.FAILED.value
+    assert "No audio files found" in updated["error_message"]
+    # Ensure source was not moved
+    assert evil_file.exists()
+
+
+def test_worker_rejects_target_escaping_root_folder(test_db, workspace_dirs):
+    downloads_dir, music_dir = workspace_dirs
+
+    # Valid audio file in staging
+    audio_file = downloads_dir / "valid_track.mp3"
+    audio_file.write_text("audio binary data")
+
+    client = test_db.create_download_client(
+        DownloadClientConfig(
+            id="client-test-2",
+            name="Test Client",
+            driver_type=DownloadDriverType.SLSKD,
+            host_url="http://slskd:5030",
+        )
+    )
+
+    download = test_db.create_active_download(
+        ActiveDownload(
+            id="dl-traversal-dst",
+            title="Escape Root",
+            artist="Attacker",
+            client_id="client-test-2",
+            download_hash="hash-esc",
+            status=DownloadStatus.COMPLETED.value,
+            source_path=str(audio_file),
+        )
+    )
+
+    mock_driver = MagicMock()
+    mock_driver.get_status.return_value = {
+        "status": DownloadStatus.COMPLETED.value,
+        "progress": 100.0,
+        "source_path": str(audio_file),
+        "error_message": None,
+    }
+
+    settings = test_db.get_media_management_settings()
+    settings["root_folder_path"] = str(music_dir)
+    test_db.update_media_management_settings(settings)
+
+    worker = AcquisitionWorker()
+
+    # Mock build_track_path to return a path outside music_dir (e.g. /etc/cron.d/evil.mp3)
+    with patch("plex_playlist_sync.acquisition_worker.get_acquisition_driver", return_value=mock_driver):
+        with patch("plex_playlist_sync.acquisition_worker.build_track_path", return_value="/etc/cron.d/evil.mp3"):
+            stats = worker.poll_once(db=test_db, staging_dir=str(downloads_dir))
+            assert stats["failed"] == 1
+            assert stats["imported"] == 0
+
+    updated = test_db.get_active_download("dl-traversal-dst")
+    assert updated["status"] == DownloadStatus.FAILED.value
+    assert "Destination escaped music root" in updated["error_message"]
+    # Source file remains safe
+    assert audio_file.exists()
+

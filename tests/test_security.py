@@ -6,8 +6,10 @@ import pytest
 from plex_playlist_sync.security import (
     extract_deezer_id,
     extract_spotify_id,
+    is_safe_service_url,
     mask_secret,
     safe_data_path,
+    sanitize_csv_cell,
     sanitize_text,
 )
 
@@ -281,3 +283,74 @@ class TestMaskSecret:
     def test_mask_none_or_empty(self):
         assert mask_secret(None) == ""
         assert mask_secret("") == ""
+
+
+class TestIsSafeServiceUrl:
+    def test_valid_lan_and_homelab_urls(self):
+        assert is_safe_service_url("http://192.168.1.100:8080") is True
+        assert is_safe_service_url("http://10.0.0.5:5030") is True
+        assert is_safe_service_url("http://172.16.0.2:9696") is True
+        assert is_safe_service_url("http://slskd:5030") is True
+        assert is_safe_service_url("http://prowlarr:9696/1/api") is True
+        assert is_safe_service_url("http://localhost:8080") is True
+        assert is_safe_service_url("http://127.0.0.1:8080") is True
+        assert is_safe_service_url("https://api.spotify.com") is True
+
+    def test_loopback_rejected_when_not_allow_lan(self):
+        assert is_safe_service_url("http://127.0.0.1:8080", allow_lan=False) is False
+        assert is_safe_service_url("http://localhost:8080", allow_lan=False) is False
+
+    def test_unspecified_ip_rejected(self):
+        assert is_safe_service_url("http://0.0.0.0:8080") is False
+        assert is_safe_service_url("http://[::]:8080") is False
+
+    def test_cloud_metadata_rejected(self):
+        # IPv4 link-local and AWS / GCP metadata
+        assert is_safe_service_url("http://169.254.169.254/latest/meta-data") is False
+        assert is_safe_service_url("http://169.254.1.1:8080") is False
+        # AWS IMDSv6
+        assert is_safe_service_url("http://[fd00:ec2::254]:80") is False
+        assert is_safe_service_url("http://metadata.google.internal/computeMetadata/v1/") is False
+        assert is_safe_service_url("http://instance-data") is False
+
+    def test_integer_hex_octal_numeric_ips_rejected(self):
+        assert is_safe_service_url("http://2130706433:8080") is False
+        assert is_safe_service_url("http://0x7f000001:8080") is False
+        assert is_safe_service_url("http://017700000001:8080") is False
+        assert is_safe_service_url("http://0") is False
+        assert is_safe_service_url("http://0x7f.0.0.1") is False
+        assert is_safe_service_url("http://0177.0.0.1") is False
+
+    def test_dangerous_schemes_and_userinfo_rejected(self):
+        assert is_safe_service_url("file:///etc/passwd") is False
+        assert is_safe_service_url("ftp://192.168.1.1") is False
+        assert is_safe_service_url("gopher://127.0.0.1") is False
+        assert is_safe_service_url("http://user:pass@192.168.1.1:8080") is False
+        assert is_safe_service_url("") is False
+        assert is_safe_service_url(None) is False
+
+
+class TestSanitizeCsvCell:
+    def test_formula_injection_triggers_neutralized(self):
+        assert sanitize_csv_cell("=1+1") == "'=1+1"
+        assert sanitize_csv_cell("+cmd|' /C calc'!A0") == "'+cmd|' /C calc'!A0"
+        assert sanitize_csv_cell("-5+5") == "'-5+5"
+        assert sanitize_csv_cell("@SUM(A1:A10)") == "'@SUM(A1:A10)"
+        assert sanitize_csv_cell("\t@SUM") == "'\t@SUM"
+        assert sanitize_csv_cell("\r=1+1") == "'\r=1+1"
+        assert sanitize_csv_cell("|calc.exe") == "'|calc.exe"
+
+    def test_leading_whitespace_formula_injection_neutralized(self):
+        assert sanitize_csv_cell(" =1+1") == "' =1+1"
+        assert sanitize_csv_cell("   -2+3") == "'   -2+3"
+        assert sanitize_csv_cell("  +cmd") == "'  +cmd"
+        assert sanitize_csv_cell("  |pipe_injection") == "'  |pipe_injection"
+        assert sanitize_csv_cell(" \t @SUM") == "' \t @SUM"
+
+    def test_benign_text_preserved(self):
+        assert sanitize_csv_cell("Normal Song Title") == "Normal Song Title"
+        assert sanitize_csv_cell("Artist (feat. Guest)") == "Artist (feat. Guest)"
+        assert sanitize_csv_cell("12345") == "12345"
+        assert sanitize_csv_cell("") == ""
+        assert sanitize_csv_cell(None) == ""
+

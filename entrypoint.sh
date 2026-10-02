@@ -6,6 +6,11 @@ PUID=${PUID:-1000}
 PGID=${PGID:-1000}
 UMASK=${UMASK:-022}
 
+if [ "$PUID" = "0" ] || [ "$PGID" = "0" ]; then
+    echo "ERROR: Running as root (PUID=0 or PGID=0) is strictly prohibited." >&2
+    exit 1
+fi
+
 umask "$UMASK"
 
 if [ "$(id -u)" = "0" ]; then
@@ -29,9 +34,9 @@ if [ "$(id -u)" = "0" ]; then
         useradd -o -u "$PUID" -g "$PGID" -d /home/appuser -m appuser 2>/dev/null || true
     fi
 
-    # Ensure /data exists and adjust ownership
-    mkdir -p /data
-    chown "$PUID:$PGID" /data 2>/dev/null || true
+    # Ensure /data, /music, and /downloads exist and adjust ownership
+    mkdir -p /data /music /downloads
+    chown "$PUID:$PGID" /data /music /downloads 2>/dev/null || true
     if [ -n "$(ls -A /data 2>/dev/null)" ]; then
         chown -R "$PUID:$PGID" /data 2>/dev/null || true
     fi

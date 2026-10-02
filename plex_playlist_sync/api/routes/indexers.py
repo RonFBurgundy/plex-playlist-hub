@@ -65,7 +65,7 @@ def _mask_indexer_dict(indexer: dict[str, Any]) -> dict[str, Any]:
 @router.get("/", response_model=list[IndexerItem], include_in_schema=False)
 def list_indexers(
     db: Database = Depends(get_db),
-    current_user: dict[str, Any] = Depends(require_user),
+    current_user: dict[str, Any] = Depends(require_admin),
 ) -> list[dict[str, Any]]:
     """Lists all configured indexers with masked API keys."""
     indexers = db.list_indexers()

@@ -12,7 +12,7 @@ from plexapi.exceptions import BadRequest, NotFound
 from plexapi.server import PlexServer
 
 from ..models import Playlist, SyncResult, Track
-from ..security import is_safe_image_url
+from ..security import is_safe_image_url, safe_data_path
 
 logger = logging.getLogger(__name__)
 
@@ -291,17 +291,19 @@ class PlexClient:
     def write_missing_csv(self, missing_tracks: List[Track], playlist_name: str, data_dir: str = "/data") -> None:
         """Write missing tracks to CSV file in data directory with formula injection defense."""
         try:
-            folder = Path(data_dir)
+            folder = Path(data_dir).resolve()
             folder.mkdir(parents=True, exist_ok=True)
             # Sanitize playlist name for filesystem
-            safe_name = re.sub(r'[\\/*?:"<>|]', "_", playlist_name)
-            target = folder / f"{safe_name}.csv"
+            clean_name = re.sub(r'[\\/*?:"<>|]', "_", playlist_name).strip()
+            if not clean_name:
+                clean_name = "missing_playlist"
+            target = safe_data_path(f"{clean_name}.csv", base_dir=str(folder))
 
             def _clean(val: Any) -> str:
-                s = str(val if val is not None else "")
-                if s.startswith(("=", "+", "-", "@", "\t", "\r")):
-                    return f"'{s}"
-                return s
+                text = str(val if val is not None else "")
+                if text.lstrip().startswith(("=", "+", "-", "@", "\t", "\r", "|")):
+                    return f"'{text}"
+                return text
 
             with open(target, "w", newline="", encoding="utf-8") as f:
                 writer = csv.writer(f)
@@ -315,8 +317,10 @@ class PlexClient:
     def delete_missing_csv(self, playlist_name: str, data_dir: str = "/data") -> None:
         """Delete previously written missing CSV if all tracks now match."""
         try:
-            safe_name = re.sub(r'[\\/*?:"<>|]', "_", playlist_name)
-            target = Path(data_dir) / f"{safe_name}.csv"
+            clean_name = re.sub(r'[\\/*?:"<>|]', "_", playlist_name).strip()
+            if not clean_name:
+                return
+            target = safe_data_path(f"{clean_name}.csv", base_dir=str(data_dir))
             if target.exists():
                 target.unlink()
                 logger.info("Cleaned up obsolete missing CSV: %s", target)

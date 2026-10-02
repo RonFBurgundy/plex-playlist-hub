@@ -49,10 +49,11 @@ class MatchOverrideRequest(BaseModel):
 def _sanitize_csv_cell(value: Any) -> str:
     """Sanitizes CSV cell to prevent formula injection attacks.
 
-    Prefixes leading dangerous characters (=, +, -, @, tab, CR) with a single quote.
+    Prefixes leading dangerous characters (=, +, -, @, tab, CR, |) with a single quote,
+    even when preceded by whitespace.
     """
     text = str(value if value is not None else "")
-    if text.startswith(("=", "+", "-", "@", "\t", "\r")):
+    if text.lstrip().startswith(("=", "+", "-", "@", "\t", "\r", "|")):
         return f"'{text}"
     return text
 

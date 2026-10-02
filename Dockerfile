@@ -22,10 +22,10 @@ COPY pyproject.toml README.md ./
 COPY entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 
-# Create data directory and non-root app user
-RUN mkdir -p /data && \
-    useradd --create-home --uid 1000 appuser && \
-    chown -R appuser:appuser /app /data
+# Create data, music, and downloads directories and non-root app user
+RUN useradd --create-home --uid 1000 appuser && \
+    mkdir -p /data /music /downloads && \
+    chown -R appuser:appuser /app /data /music /downloads
 
 EXPOSE 5250
 

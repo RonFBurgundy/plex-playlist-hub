@@ -249,6 +249,19 @@ def test_sabnzbd_download_and_status():
         assert status["progress"] == 45.0
 
 
+def test_sabnzbd_download_unsafe_url_rejected():
+    driver = SabnzbdDriver("http://sabnzbd:8080", api_key="secret")
+    item = AcquisitionSearchResult(
+        download_id="nzb-evil",
+        title="Evil Track",
+        artist="Evil Artist",
+        download_url="http://169.254.169.254/latest/meta-data",
+        source="sabnzbd",
+    )
+    with pytest.raises(ValueError, match="Unsafe download URL"):
+        driver.download(item)
+
+
 def test_sabnzbd_cancel():
     driver = SabnzbdDriver("http://sabnzbd:8080", api_key="secretapikey")
     mock_del_resp = MagicMock()

@@ -57,6 +57,20 @@ def get_queue(
                 DownloadStatus.IMPORTING.value,
             ]
         )
+    if not current_user.get("is_admin"):
+        user_id = str(current_user.get("id"))
+        user_requests = db.list_requests(user_id=user_id)
+        user_req_ids = {r["id"] for r in user_requests}
+        filtered: list[dict[str, Any]] = []
+        for it in items:
+            req_id = it.get("request_id")
+            if req_id and req_id in user_req_ids:
+                cleaned = dict(it)
+                cleaned["source_path"] = None
+                cleaned["target_path"] = None
+                filtered.append(cleaned)
+        return filtered
+
     return items
 
 
@@ -76,16 +90,17 @@ def cancel_download(
 
     # If non-admin, ensure user owns the associated request
     if not current_user.get("is_admin"):
-        if not item.get("request_id"):
+        req_id = item.get("request_id")
+        if not req_id:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail="Only administrators can cancel system downloads",
+                detail="Not authorized to cancel system download",
             )
-        req = db.get_request(item["request_id"])
-        if req and req.get("user_id") != current_user.get("id"):
+        req = db.get_request(req_id)
+        if req is None or str(req.get("user_id")) != str(current_user.get("id")):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail="You cannot cancel another user's download",
+                detail="Not authorized to cancel this download",
             )
 
     # Cancel in download client if possible

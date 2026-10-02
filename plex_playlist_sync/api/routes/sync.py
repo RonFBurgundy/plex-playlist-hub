@@ -4,6 +4,7 @@ import asyncio
 from datetime import datetime, timezone
 import json
 import logging
+import secrets
 import threading
 from typing import Any, Optional
 
@@ -324,7 +325,7 @@ async def handle_sync_webhook(
         or request.headers.get("Authorization", "").replace("Bearer ", "").strip()
     )
     if config.feed_token:
-        if provided != config.feed_token:
+        if not provided or not secrets.compare_digest(str(provided), str(config.feed_token)):
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Invalid webhook token",

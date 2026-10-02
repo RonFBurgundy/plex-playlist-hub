@@ -1,11 +1,12 @@
 """Security and input sanitization utilities for plex-playlist-sync."""
 
+import ipaddress
 import os
 import re
 import unicodedata
 import urllib.parse
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 # Strict regex matching for 22-char alphanumeric Spotify ID
 _SPOTIFY_ID_RE = re.compile(r"^[A-Za-z0-9]{22}$")
@@ -229,20 +230,29 @@ def is_safe_image_url(url: Optional[str]) -> bool:
     return False
 
 
-def is_safe_service_url(url: Optional[str]) -> bool:
+_HEX_HOST_RE = re.compile(r"^0x[0-9a-fA-F]+$")
+_OCTAL_HOST_RE = re.compile(r"^0[0-7]+$")
+_INTEGER_HOST_RE = re.compile(r"^\d+$")
+_AWS_IMDSV6_NET = ipaddress.ip_network("fd00:ec2::/64")
+_AWS_IMDSV6_IP = ipaddress.ip_address("fd00:ec2::254")
+_LINK_LOCAL_IPV4_NET = ipaddress.ip_network("169.254.0.0/16")
+
+
+def is_safe_service_url(url: Optional[str], allow_lan: bool = True) -> bool:
     """Validates that a service host URL (download client or indexer) is safe against SSRF.
 
-    Accepts HTTP and HTTPS schemes on homelab LAN IPs (private, loopback, docker container names)
+    Accepts HTTP and HTTPS schemes on homelab LAN IPs (private, loopback if allow_lan=True, docker container names)
     and valid public domains.
     Strictly blocks:
     - Dangerous schemes (file://, ftp://, gopher://, etc.)
     - Link-local and cloud metadata addresses (169.254.169.254, 169.254.0.0/16, fd00:ec2::254)
+    - Unspecified IP addresses (0.0.0.0, ::)
+    - Loopback IP addresses unless allow_lan=True
+    - Integer, hex, and octal numeric IP representations
     - Cloud metadata hostnames (metadata.google.internal, instance-data)
     - Userinfo URL components (embedded username/password)
     - Malformed or illegal hostname characters
     """
-    import ipaddress
-
     if not isinstance(url, str):
         return False
     val = url.strip()
@@ -262,14 +272,34 @@ def is_safe_service_url(url: Optional[str]) -> bool:
 
     hostname = parsed.hostname.lower()
 
+    # Reject empty hostname or integer, hex, and octal representations
+    if _HEX_HOST_RE.fullmatch(hostname) or _OCTAL_HOST_RE.fullmatch(hostname) or _INTEGER_HOST_RE.fullmatch(hostname):
+        return False
+
+    # Also reject dotted-decimal strings with hex/octal components
+    parts = hostname.split(".")
+    for part in parts:
+        if _HEX_HOST_RE.fullmatch(part) or (len(part) > 1 and _OCTAL_HOST_RE.fullmatch(part)):
+            return False
+
     # Reject cloud metadata hostnames
-    if hostname in ("metadata.google.internal", "instance-data", "metadata"):
+    if hostname in ("metadata.google.internal", "instance-data", "metadata") or hostname.endswith(
+        ("metadata.google.internal", "instance-data")
+    ):
         return False
 
     # Check IP addresses
     try:
         ip = ipaddress.ip_address(hostname)
+        if ip.is_unspecified:
+            return False
+        if ip.is_loopback and not allow_lan:
+            return False
         if ip.is_link_local or ip.is_multicast or ip.is_reserved:
+            return False
+        if ip in _LINK_LOCAL_IPV4_NET:
+            return False
+        if isinstance(ip, ipaddress.IPv6Address) and (ip in _AWS_IMDSV6_NET or ip == _AWS_IMDSV6_IP):
             return False
         return True
     except ValueError:
@@ -277,10 +307,23 @@ def is_safe_service_url(url: Optional[str]) -> bool:
 
     # Hostname syntax validation
     if hostname == "localhost":
-        return True
+        return allow_lan
 
     if not re.fullmatch(r"^[a-z0-9][a-z0-9_\.-]*[a-z0-9]$", hostname):
         return False
 
     return True
+
+
+def sanitize_csv_cell(val: Any) -> str:
+    """Sanitizes CSV cell to prevent formula injection attacks.
+
+    Prefixes leading dangerous characters (=, +, -, @, tab, CR, |) with a single quote,
+    even when preceded by whitespace.
+    """
+    text = str(val if val is not None else "")
+    if text.lstrip().startswith(("=", "+", "-", "@", "\t", "\r", "|")):
+        return f"'{text}"
+    return text
+
 

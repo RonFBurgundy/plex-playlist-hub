@@ -159,7 +159,7 @@ def _render_previews_for_settings(settings: dict[str, Any]) -> list[PreviewItemM
 )
 def get_media_management_settings(
     db: Database = Depends(get_db),
-    current_user: dict[str, Any] = Depends(require_user),
+    current_user: dict[str, Any] = Depends(require_admin),
 ) -> MediaManagementGetResponse:
     """Retrieves current media management settings and preset templates."""
     settings_dict = db.get_media_management_settings()

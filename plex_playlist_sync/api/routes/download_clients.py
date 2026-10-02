@@ -74,7 +74,7 @@ def _mask_client_dict(client: dict[str, Any]) -> dict[str, Any]:
 @router.get("/", response_model=list[DownloadClientItem], include_in_schema=False)
 def list_download_clients(
     db: Database = Depends(get_db),
-    current_user: dict[str, Any] = Depends(require_user),
+    current_user: dict[str, Any] = Depends(require_admin),
 ) -> list[dict[str, Any]]:
     """Lists all configured download clients with masked credentials."""
     clients = db.list_download_clients()

@@ -103,11 +103,17 @@ class TestMediaManagementAPI:
         resp_preview = client.post("/api/settings/media-management/preview", json={})
         assert resp_preview.status_code == 401
 
-    def test_regular_user_can_get_settings_and_presets(self, app_and_client, test_db, test_config, seeded_users):
+    def test_regular_user_cannot_get_settings_forbidden(self, app_and_client, test_db, test_config, seeded_users):
         _, client = app_and_client
         headers = _auth_headers(seeded_users["alice"], test_db, test_config)
-
         resp = client.get("/api/settings/media-management", headers=headers)
+        assert resp.status_code == 403
+
+    def test_admin_can_get_settings_and_presets(self, app_and_client, test_db, test_config, seeded_users):
+        _, client = app_and_client
+        admin_headers = _auth_headers(seeded_users["admin"], test_db, test_config)
+
+        resp = client.get("/api/settings/media-management", headers=admin_headers)
         assert resp.status_code == 200
         data = resp.json()
 
