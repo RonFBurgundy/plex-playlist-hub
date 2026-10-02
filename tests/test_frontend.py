@@ -1,5 +1,9 @@
 """Tests for Frontend Single-Page Dashboard & Static Assets (Phase 4)."""
 
+import re
+from html.parser import HTMLParser
+from pathlib import Path
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -216,3 +220,122 @@ class TestContentSecurityPolicy:
         csp = resp.headers.get("Content-Security-Policy", "")
         assert "default-src 'self'" in csp
         assert "frame-ancestors 'none'" in csp
+
+
+class HTMLDOMIntegrityParser(HTMLParser):
+    """HTML parser that validates tag balancing and tracks Alpine sub-tab nesting."""
+
+    VOID_ELEMENTS: frozenset[str] = frozenset({"img", "input", "br", "hr", "meta", "link"})
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.stack: list[tuple[str, dict[str, str | None], tuple[int, int]]] = []
+        self.unclosed_tags: list[tuple[str, tuple[int, int]]] = []
+        self.mismatched_tags: list[dict[str, object]] = []
+        self.subtabs: dict[str, dict[str, object]] = {}
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        attrs_dict = dict(attrs)
+        x_show = attrs_dict.get("x-show") or ""
+        match = re.search(r"settingsSubTab\s*===\s*'([^']+)'", x_show)
+        if match:
+            subtab_name = match.group(1)
+            parent_tag = self.stack[-1][0] if self.stack else None
+            parent_attrs = self.stack[-1][1] if self.stack else {}
+            self.subtabs[subtab_name] = {
+                "depth": len(self.stack),
+                "parent_tag": parent_tag,
+                "parent_attrs": parent_attrs,
+                "pos": self.getpos(),
+            }
+
+        if tag in self.VOID_ELEMENTS:
+            return
+
+        self.stack.append((tag, attrs_dict, self.getpos()))
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag in self.VOID_ELEMENTS:
+            return
+
+        if not self.stack:
+            self.mismatched_tags.append({
+                "error": "unexpected_closing_tag",
+                "tag": tag,
+                "pos": self.getpos(),
+            })
+            return
+
+        last_tag, _, start_pos = self.stack.pop()
+        if last_tag != tag:
+            self.mismatched_tags.append({
+                "error": "tag_mismatch",
+                "expected": last_tag,
+                "found": tag,
+                "start_pos": start_pos,
+                "end_pos": self.getpos(),
+            })
+
+    def close(self) -> None:
+        super().close()
+        self.unclosed_tags = [(tag, pos) for tag, _, pos in self.stack]
+
+
+class TestDOMIntegrity:
+    """Validates HTML tag balance and settings sub-tab hierarchy."""
+
+    EXPECTED_SETTINGS_SUBTABS: frozenset[str] = frozenset({
+        "media",
+        "clients",
+        "indexers",
+        "lidarr",
+        "profiles",
+        "status",
+    })
+
+    def test_static_index_html_tag_balance_and_dom_hierarchy(self) -> None:
+        """Validates that index.html has 0 unclosed tags and 0 tag mismatches."""
+        html_path = Path(__file__).resolve().parent.parent / "plex_playlist_sync" / "static" / "index.html"
+        assert html_path.is_file(), f"index.html not found at {html_path}"
+
+        content = html_path.read_text(encoding="utf-8")
+        parser = HTMLDOMIntegrityParser()
+        parser.feed(content)
+        parser.close()
+
+        assert len(parser.unclosed_tags) == 0, f"Unclosed tags found: {parser.unclosed_tags}"
+        assert len(parser.mismatched_tags) == 0, f"Mismatched tags found: {parser.mismatched_tags}"
+
+        # Assert all 6 settings subtabs exist
+        assert set(parser.subtabs.keys()) == self.EXPECTED_SETTINGS_SUBTABS
+
+        # Assert all 6 settings subtabs are at identical DOM depth
+        depths = {info["depth"] for info in parser.subtabs.values()}
+        assert len(depths) == 1, f"Settings sub-tabs have divergent nesting depths: {parser.subtabs}"
+
+        # Assert all 6 settings subtabs share the identical parent (Settings tab container)
+        for name, info in parser.subtabs.items():
+            assert info["parent_tag"] == "div", f"Subtab '{name}' parent tag is {info['parent_tag']}, expected 'div'"
+            parent_attrs = info["parent_attrs"]
+            assert isinstance(parent_attrs, dict)
+            parent_x_show = parent_attrs.get("x-show", "")
+            assert parent_x_show == "activeTab === 'settings'", (
+                f"Subtab '{name}' is nested under x-show='{parent_x_show}', expected 'activeTab === 'settings''"
+            )
+
+    def test_served_dashboard_dom_integrity(self, client: TestClient) -> None:
+        """Validates that GET / served HTML satisfies full DOM integrity."""
+        resp = client.get("/")
+        assert resp.status_code == 200
+
+        parser = HTMLDOMIntegrityParser()
+        parser.feed(resp.text)
+        parser.close()
+
+        assert len(parser.unclosed_tags) == 0, f"Unclosed tags in served HTML: {parser.unclosed_tags}"
+        assert len(parser.mismatched_tags) == 0, f"Mismatched tags in served HTML: {parser.mismatched_tags}"
+        assert set(parser.subtabs.keys()) == self.EXPECTED_SETTINGS_SUBTABS
+
+        depths = {info["depth"] for info in parser.subtabs.values()}
+        assert len(depths) == 1, f"Subtabs have mismatched depths in served HTML: {parser.subtabs}"
+
