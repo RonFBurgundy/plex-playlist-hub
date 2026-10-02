@@ -317,3 +317,31 @@ def grab_release(
         "client": client_name,
         "message": f"Successfully enqueued '{payload.release.title}'",
     }
+
+
+@router.get("/blocklist", summary="List blocklisted releases")
+def list_blocklist(
+    limit: int = 100,
+    offset: int = 0,
+    db: Database = Depends(get_db),
+    _admin: dict[str, Any] = Depends(require_admin),
+) -> list[dict[str, Any]]:
+    """Returns list of blocklisted downloads/releases (admin required)."""
+    return db.list_blocklist(limit=limit, offset=offset)
+
+
+@router.delete("/blocklist/{blocklist_id}", summary="Remove entry from blocklist")
+def remove_from_blocklist(
+    blocklist_id: str,
+    db: Database = Depends(get_db),
+    _admin: dict[str, Any] = Depends(require_admin),
+) -> dict[str, Any]:
+    """Removes an item from the download blocklist by ID (admin required)."""
+    success = db.remove_from_blocklist(blocklist_id)
+    if not success:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Blocklist item '{blocklist_id}' not found",
+        )
+    return {"success": True, "message": f"Blocklist item '{blocklist_id}' removed"}
+
