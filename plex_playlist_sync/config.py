@@ -79,6 +79,10 @@ class Config:
     feed_token: Optional[str] = None
     auto_approve_requests: bool = False
     user_request_quota: int = 25
+    enable_backlog_search: bool = True
+    backlog_search_interval_minutes: int = 60
+    enable_rss_sync: bool = True
+    rss_sync_interval_minutes: int = 15
 
     @classmethod
     def from_env(cls) -> "Config":
@@ -163,6 +167,10 @@ class Config:
             feed_token=os.getenv("FEED_TOKEN") or None,
             auto_approve_requests=_parse_bool(os.getenv("AUTO_APPROVE_REQUESTS"), False),
             user_request_quota=int(os.getenv("USER_REQUEST_QUOTA")) if os.getenv("USER_REQUEST_QUOTA") and os.getenv("USER_REQUEST_QUOTA").isdigit() else 25,
+            enable_backlog_search=_parse_bool(os.getenv("ENABLE_BACKLOG_SEARCH"), True),
+            backlog_search_interval_minutes=int(os.getenv("BACKLOG_SEARCH_INTERVAL_MINUTES")) if os.getenv("BACKLOG_SEARCH_INTERVAL_MINUTES") and os.getenv("BACKLOG_SEARCH_INTERVAL_MINUTES").isdigit() else 60,
+            enable_rss_sync=_parse_bool(os.getenv("ENABLE_RSS_SYNC"), True),
+            rss_sync_interval_minutes=int(os.getenv("RSS_SYNC_INTERVAL_MINUTES")) if os.getenv("RSS_SYNC_INTERVAL_MINUTES") and os.getenv("RSS_SYNC_INTERVAL_MINUTES").isdigit() else 15,
         )
 
     @property

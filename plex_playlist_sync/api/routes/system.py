@@ -77,6 +77,8 @@ class WorkerStatus(BaseModel):
     acquisition_worker: dict[str, Any]
     lidarr_worker: dict[str, Any]
     sync_coordinator: dict[str, Any]
+    backlog_worker: Optional[dict[str, Any]] = None
+    rss_worker: Optional[dict[str, Any]] = None
 
 
 class EnvironmentStatus(BaseModel):
@@ -514,10 +516,30 @@ def _get_worker_statuses() -> WorkerStatus:
         logger.warning("Failed to query sync state: %s", e)
         sync_status = {"is_syncing": False, "error": str(e)}
 
+    # 4. Wanted backlog worker status
+    try:
+        from plex_playlist_sync.backlog_worker import backlog_worker
+
+        backlog_status = backlog_worker.get_status()
+    except Exception as e:
+        logger.warning("Failed to query backlog worker: %s", e)
+        backlog_status = {"running": False, "error": str(e)}
+
+    # 5. RSS sync worker status
+    try:
+        from plex_playlist_sync.backlog_worker import rss_worker
+
+        rss_status = rss_worker.get_status()
+    except Exception as e:
+        logger.warning("Failed to query rss worker: %s", e)
+        rss_status = {"running": False, "error": str(e)}
+
     return WorkerStatus(
         acquisition_worker=acq_status,
         lidarr_worker=lidarr_status,
         sync_coordinator=sync_status,
+        backlog_worker=backlog_status,
+        rss_worker=rss_status,
     )
 
 

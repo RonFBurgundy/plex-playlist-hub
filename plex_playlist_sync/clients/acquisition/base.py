@@ -32,6 +32,10 @@ class AcquisitionDriver(ABC):
         """
         raise NotImplementedError
 
+    def fetch_recent(self, limit: int = 100) -> list[AcquisitionSearchResult]:
+        """Poll recent releases from indexer feed. Default empty implementation."""
+        return []
+
     @abstractmethod
     def download(self, result: AcquisitionSearchResult) -> str:
         """Submit a download request to the download client.

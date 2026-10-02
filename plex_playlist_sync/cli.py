@@ -305,6 +305,28 @@ def main() -> int:
         logger.info("Starting AcquisitionWorker (role=%s)", role)
         acquisition_worker.start(db=db, plex_client=plex_client, poll_interval=5.0)
 
+        from .backlog_worker import backlog_worker, rss_worker
+
+        if config.enable_backlog_search:
+            logger.info(
+                "Starting WantedBacklogWorker (interval: %d min)",
+                config.backlog_search_interval_minutes,
+            )
+            backlog_worker.start(
+                db=db,
+                interval_seconds=config.backlog_search_interval_minutes * 60,
+            )
+
+        if config.enable_rss_sync:
+            logger.info(
+                "Starting RSSSyncWorker (interval: %d min)",
+                config.rss_sync_interval_minutes,
+            )
+            rss_worker.start(
+                db=db,
+                interval_seconds=config.rss_sync_interval_minutes * 60,
+            )
+
     app = create_app(db=db, config=config)
 
     uvicorn_config = uvicorn.Config(
@@ -326,6 +348,13 @@ def main() -> int:
                 from .acquisition_worker import acquisition_worker
 
                 acquisition_worker.stop()
+            except Exception:
+                pass
+            try:
+                from .backlog_worker import backlog_worker, rss_worker
+
+                backlog_worker.stop()
+                rss_worker.stop()
             except Exception:
                 pass
         db.close()

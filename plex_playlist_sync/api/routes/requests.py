@@ -281,3 +281,109 @@ def delete_request(
         )
 
     return {"status": "deleted", "id": request_id}
+
+
+@router.post("/{request_id}/retry")
+def retry_request(
+    request_id: str,
+    db: Database = Depends(get_db),
+    config: Config = Depends(get_config),
+    current_user: dict[str, Any] = Depends(require_user),
+    lidarr_client: Optional[LidarrClient] = Depends(get_lidarr_client),
+) -> dict[str, Any]:
+    """Forces re-search and grab for an existing request."""
+    req = db.get_request(request_id)
+    if not req:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Request not found")
+
+    is_admin = bool(current_user.get("is_admin"))
+    is_owner = str(req.get("user_id")) == str(current_user.get("id"))
+    if not is_admin and not is_owner:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You are not authorized to retry this request",
+        )
+
+    if req.get("status") == "available":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Request is already fulfilled and available",
+        )
+
+    db.update_request_status(request_id, RequestStatus.PROCESSING)
+
+    clean_artist = req.get("artist", "").strip()
+    clean_title = req.get("title", "").strip()
+    clean_album = req.get("album", "").strip() if req.get("album") else None
+    item_type = req.get("item_type", "track")
+
+    grabbed = False
+    download_id: Optional[str] = None
+    msg = "Acquisition initiated"
+
+    has_native_clients = any(
+        c.get("enabled") for c in db.list_download_clients() if c.get("driver_type") != "lidarr"
+    )
+    has_indexers = any(i.get("enabled") for i in db.list_indexers()) or any(
+        c.get("driver_type") == "slskd" and c.get("enabled") for c in db.list_download_clients()
+    )
+
+    if has_native_clients and has_indexers:
+        try:
+            grab_res = acquisition_coordinator.search_and_grab(
+                artist=clean_artist,
+                title=clean_title,
+                album=clean_album,
+                item_type=item_type,
+                request_id=request_id,
+                db=db,
+            )
+            if grab_res.get("success"):
+                grabbed = True
+                download_id = grab_res.get("download_id")
+                msg = f"Grabbed release: {grab_res.get('release')}"
+                logger.info(
+                    "Native acquisition grabbed retried request %s (%s - %s)",
+                    request_id,
+                    clean_artist,
+                    clean_title,
+                )
+            else:
+                msg = grab_res.get("message") or "No matching release found on indexers"
+                logger.info(
+                    "Native acquisition found no match for retried request %s: %s",
+                    request_id,
+                    msg,
+                )
+        except Exception as e:
+            logger.error("Error in native acquisition for retried request %s: %s", request_id, e)
+            msg = f"Acquisition error: {str(e)}"
+
+    if not grabbed and lidarr_client is not None:
+        try:
+            lidarr_worker.start_trickle(
+                items=[
+                    {
+                        "id": request_id,
+                        "artist": clean_artist,
+                        "album": clean_album or clean_title,
+                        "title": clean_title,
+                        "is_request": True,
+                    }
+                ],
+                client=lidarr_client,
+                db=db,
+                delay_seconds=config.lidarr_trickle_rate_seconds,
+                auto_search=config.lidarr_auto_search,
+            )
+            logger.info("Enqueued retried request %s (%s - %s) to Lidarr worker", request_id, clean_artist, clean_title)
+            msg = "Enqueued to Lidarr for search"
+        except Exception as e:
+            logger.error("Failed to enqueue retried request %s to Lidarr worker: %s", request_id, e)
+
+    return {
+        "success": grabbed or (lidarr_client is not None),
+        "status": "processing",
+        "message": msg,
+        "download_id": download_id,
+    }
