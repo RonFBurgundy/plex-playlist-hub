@@ -11,6 +11,7 @@ import {
 } from '@/hooks';
 import {
   Header,
+  MobileDrawer,
   AudioPlayerBar,
   DiscoverView,
   RequestsView,
@@ -43,6 +44,7 @@ export const App: React.FC = () => {
 
   const [activeTab, setActiveTab] = useState<MainTab>('discover');
   const [isAuthModalOpen, setIsAuthModalOpen] = useState<boolean>(false);
+  const [isMobileMenuOpen, setIsMobileMenuOpen] = useState<boolean>(false);
   const mainRef = useRef<HTMLElement | null>(null);
 
   // Playlists & users data
@@ -140,6 +142,20 @@ export const App: React.FC = () => {
         onTabChange={handleTabChange}
         isAdmin={auth.isAdmin}
         onLogin={() => setIsAuthModalOpen(true)}
+        onLogout={auth.logout}
+        isMobileMenuOpen={isMobileMenuOpen}
+        onToggleMobileMenu={() => setIsMobileMenuOpen((prev) => !prev)}
+      />
+
+      {/* Mobile Drawer (Deck Controls) */}
+      <MobileDrawer
+        isOpen={isMobileMenuOpen}
+        onClose={() => setIsMobileMenuOpen(false)}
+        activeTab={activeTab}
+        onTabChange={handleTabChange}
+        user={auth.user}
+        quota={requestsHook.quota}
+        isAdmin={auth.isAdmin}
         onLogout={auth.logout}
       />
 
