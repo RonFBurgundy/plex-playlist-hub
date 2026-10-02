@@ -267,6 +267,8 @@ class ActiveDownload:
     client_name: Optional[str] = None
     speed_bps: Optional[int] = None
     eta_seconds: Optional[int] = None
+    track_id: Optional[str] = None
+    album_id: Optional[str] = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -288,6 +290,36 @@ class ActiveDownload:
             "client_name": self.client_name,
             "speed_bps": self.speed_bps,
             "eta_seconds": self.eta_seconds,
+            "track_id": self.track_id,
+            "album_id": self.album_id,
+        }
+
+
+@dataclass
+class BlocklistItem:
+    id: str
+    source_title: str
+    artist: Optional[str] = None
+    album: Optional[str] = None
+    release_guid: Optional[str] = None
+    info_hash: Optional[str] = None
+    protocol: Optional[str] = None
+    indexer: Optional[str] = None
+    reason: Optional[str] = None
+    created_at: Optional[str] = None
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "id": self.id,
+            "source_title": self.source_title,
+            "artist": self.artist,
+            "album": self.album,
+            "release_guid": self.release_guid,
+            "info_hash": self.info_hash,
+            "protocol": self.protocol,
+            "indexer": self.indexer,
+            "reason": self.reason,
+            "created_at": self.created_at,
         }
 
 

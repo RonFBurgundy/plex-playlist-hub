@@ -13,6 +13,7 @@ import shutil
 import threading
 import time
 import urllib.parse
+import uuid
 from pathlib import Path
 from typing import Any, Optional
 
@@ -30,7 +31,15 @@ from plex_playlist_sync.library import (
     resolve_collision,
     write_audio_tags,
 )
-from plex_playlist_sync.models import DownloadStatus, NotificationEvent, RequestStatus
+from plex_playlist_sync.models import (
+    DownloadStatus,
+    LibraryAlbum,
+    LibraryArtist,
+    LibraryFile,
+    LibraryTrack,
+    NotificationEvent,
+    RequestStatus,
+)
 from plex_playlist_sync.naming import build_track_path
 from plex_playlist_sync.notifications import notification_dispatcher
 from plex_playlist_sync.quality import evaluate_release, parse_release_title
@@ -412,6 +421,16 @@ class AcquisitionWorker:
                 err_msg = status_dict.get("error_message") or "Download failed"
                 db.update_download_status(download_id, status=DownloadStatus.FAILED.value, error_message=err_msg)
                 _notify_failed(err_msg)
+                try:
+                    db.add_to_blocklist(
+                        source_title=item.get("title", ""),
+                        artist=item.get("artist"),
+                        release_guid=item.get("id"),
+                        info_hash=item.get("download_hash"),
+                        reason=err_msg,
+                    )
+                except Exception as bl_err:
+                    logger.warning("Failed to add failed download to blocklist: %s", bl_err)
                 stats["failed"] += 1
                 continue
 
@@ -491,6 +510,16 @@ class AcquisitionWorker:
                         error_message=err_msg,
                     )
                     _notify_failed(err_msg)
+                    try:
+                        db.add_to_blocklist(
+                            source_title=item.get("title", ""),
+                            artist=item.get("artist"),
+                            release_guid=item.get("id"),
+                            info_hash=item.get("download_hash"),
+                            reason=err_msg,
+                        )
+                    except Exception as bl_err:
+                        logger.warning("Failed to add missing-audio download to blocklist: %s", bl_err)
                     stats["failed"] += 1
                     continue
 
@@ -593,6 +622,16 @@ class AcquisitionWorker:
                         error_message=err_msg,
                     )
                     _notify_failed(err_msg)
+                    try:
+                        db.add_to_blocklist(
+                            source_title=item.get("title", ""),
+                            artist=item.get("artist"),
+                            release_guid=item.get("id"),
+                            info_hash=item.get("download_hash"),
+                            reason=err_msg,
+                        )
+                    except Exception as bl_err:
+                        logger.warning("Failed to add unplaced download to blocklist: %s", bl_err)
                     stats["failed"] += 1
                     continue
 
@@ -603,6 +642,197 @@ class AcquisitionWorker:
                     status=DownloadStatus.IMPORTED.value,
                     target_path=target_summary,
                 )
+
+                # Native catalog upsert (when library_mode != "lidarr")
+                if media_settings.get("library_mode") != "lidarr":
+                    for placed_str in imported_paths:
+                        try:
+                            placed_p = Path(placed_str).resolve()
+                            try:
+                                f_meta = inspect_audio_file(placed_p)
+                            except Exception as insp_err:
+                                logger.warning(
+                                    "Could not inspect placed audio file %s: %s; using fallback metadata",
+                                    placed_p,
+                                    insp_err,
+                                )
+                                f_meta = {}
+
+                            artist_name = (
+                                f_meta.get("artist")
+                                or item.get("artist")
+                                or (req.get("artist") if req else None)
+                                or "Unknown Artist"
+                            ).strip()
+
+                            # 1. Resolve / upsert LibraryArtist
+                            artist_row = None
+                            existing_track = None
+                            if item.get("track_id"):
+                                existing_track = db.get_library_track(item["track_id"])
+                                if existing_track:
+                                    artist_row = db.get_library_artist(existing_track["artist_id"])
+                            if not artist_row:
+                                artist_row = db.get_library_artist_by_name(artist_name)
+                            if not artist_row:
+                                artist_id = str(uuid.uuid4())
+                                artist_folder = (
+                                    str(placed_p.parent.parent)
+                                    if placed_p.parent != root_path
+                                    else str(placed_p.parent)
+                                )
+                                artist_row = db.upsert_library_artist(
+                                    LibraryArtist(
+                                        id=artist_id,
+                                        name=artist_name,
+                                        path=artist_folder,
+                                    )
+                                )
+                            artist_id = artist_row["id"]
+
+                            # 2. Resolve / upsert LibraryAlbum
+                            album_title = (
+                                f_meta.get("album")
+                                or (item.get("title") if item.get("item_type") == "album" else None)
+                                or (req.get("album") or req.get("title") if req else None)
+                                or "Unknown Album"
+                            ).strip()
+                            year_val = f_meta.get("year")
+                            if year_val is None and req and req.get("release_date"):
+                                rdate = str(req["release_date"]).strip()
+                                if len(rdate) >= 4 and rdate[:4].isdigit():
+                                    year_val = int(rdate[:4])
+
+                            album_row = None
+                            if item.get("album_id"):
+                                album_row = db.get_library_album(item["album_id"])
+                            elif item.get("track_id") and existing_track:
+                                album_row = db.get_library_album(existing_track["album_id"])
+                            if not album_row:
+                                album_row = db.get_library_album_by_title(artist_id, album_title)
+                            if not album_row:
+                                album_id = str(uuid.uuid4())
+                                album_row = db.upsert_library_album(
+                                    LibraryAlbum(
+                                        id=album_id,
+                                        artist_id=artist_id,
+                                        title=album_title,
+                                        year=year_val,
+                                        path=str(placed_p.parent),
+                                    )
+                                )
+                            album_id = album_row["id"]
+
+                            # 3. Resolve / upsert LibraryTrack
+                            track_row = None
+                            if item.get("track_id"):
+                                track_row = existing_track or db.get_library_track(item["track_id"])
+                            if not track_row:
+                                track_title = (
+                                    f_meta.get("title")
+                                    or item.get("title")
+                                    or (req.get("title") if req else None)
+                                    or placed_p.stem
+                                ).strip()
+                                track_num = int(f_meta.get("track_number") or 1)
+                                track_row = db.get_library_track_by_title(
+                                    album_id, track_title, track_number=track_num
+                                )
+                                if not track_row:
+                                    track_id = str(uuid.uuid4())
+                                    track_row = db.upsert_library_track(
+                                        LibraryTrack(
+                                            id=track_id,
+                                            album_id=album_id,
+                                            artist_id=artist_id,
+                                            title=track_title,
+                                            track_number=track_num,
+                                            disc_number=int(f_meta.get("disc_number") or 1),
+                                            duration_seconds=(
+                                                float(f_meta["duration"])
+                                                if f_meta.get("duration") is not None
+                                                else None
+                                            ),
+                                        )
+                                    )
+                            track_id = track_row["id"]
+
+                            # 4. Evaluate cutoff against artist's quality profile (or default)
+                            qp_id = artist_row.get("quality_profile_id") or (
+                                req.get("quality_profile_id") if req else None
+                            )
+                            prof_dict = db.get_quality_profile(qp_id) if qp_id else None
+                            if not prof_dict:
+                                prof_dict = db.get_default_quality_profile()
+
+                            parsed = parse_release_title(item.get("title") or placed_p.name)
+                            if parsed.quality == "Unknown":
+                                codec_name = str(f_meta.get("codec", "")).upper()
+                                if codec_name == "FLAC":
+                                    parsed.quality = (
+                                        "FLAC 24bit"
+                                        if (f_meta.get("bits_per_sample") or 16) > 16
+                                        else "FLAC 16bit"
+                                    )
+                                elif codec_name == "MP3":
+                                    br = f_meta.get("bitrate") or 320
+                                    parsed.quality = (
+                                        "MP3 320"
+                                        if br >= 310 or br >= 300000
+                                        else "MP3 192"
+                                    )
+                                elif codec_name in ("AAC", "M4A"):
+                                    parsed.quality = "AAC 256"
+
+                            file_size = (
+                                placed_p.stat().st_size
+                                if placed_p.exists()
+                                else int(item.get("size_bytes") or 0)
+                            )
+                            cutoff_met = True
+                            quality_str = parsed.quality
+                            if prof_dict:
+                                profile_obj = _to_quality_profile(prof_dict)
+                                eval_res = evaluate_release(
+                                    release=parsed, profile=profile_obj, size_bytes=file_size
+                                )
+                                quality_str = eval_res.parsed_quality
+                                cutoff_met = eval_res.meets_cutoff
+
+                            # 5. Upsert LibraryFile
+                            rel_path = (
+                                str(placed_p.relative_to(root_path))
+                                if placed_p.is_relative_to(root_path)
+                                else str(placed_p)
+                            )
+                            file_id = f"fil-{uuid.uuid4().hex[:12]}"
+                            db.upsert_library_file(
+                                LibraryFile(
+                                    id=file_id,
+                                    track_id=track_id,
+                                    file_path=str(placed_p),
+                                    relative_path=rel_path,
+                                    codec=f_meta.get("codec") or placed_p.suffix.lstrip(".").upper(),
+                                    bitrate=int(f_meta["bitrate"]) if f_meta.get("bitrate") is not None else None,
+                                    sample_rate=int(f_meta["sample_rate"]) if f_meta.get("sample_rate") is not None else None,
+                                    bits_per_sample=int(f_meta["bits_per_sample"]) if f_meta.get("bits_per_sample") is not None else None,
+                                    quality_name=quality_str,
+                                    size_bytes=file_size,
+                                    cutoff_met=cutoff_met,
+                                )
+                            )
+                            logger.info(
+                                "Native catalog upserted file %s for track %s (cutoff_met=%s)",
+                                file_id,
+                                track_id,
+                                cutoff_met,
+                            )
+                        except Exception as upsert_err:
+                            logger.exception(
+                                "Error upserting native library records for %s: %s",
+                                placed_str,
+                                upsert_err,
+                            )
                 if item.get("request_id"):
                     db.update_request_status(item["request_id"], RequestStatus.AVAILABLE.value)
                     try:

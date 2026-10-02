@@ -202,6 +202,7 @@ class WantedBacklogWorker:
             errors_count += 1
 
         active_req_ids = {d["request_id"] for d in active_dls if d.get("request_id")}
+        active_track_ids = {d["track_id"] for d in active_dls if d.get("track_id")}
         active_artist_titles = {
             ((d.get("artist") or "").strip().lower(), (d.get("title") or "").strip().lower())
             for d in active_dls
@@ -217,6 +218,7 @@ class WantedBacklogWorker:
 
         media_settings = db.get_media_management_settings()
         enable_upgrades = bool(media_settings.get("enable_quality_upgrades", True))
+        library_mode = media_settings.get("library_mode", "native")
 
         unfulfilled_requests = [
             r
@@ -266,8 +268,21 @@ class WantedBacklogWorker:
             not in active_artist_titles
         ]
 
-        # Items to search: (artist, title, album, item_type, request_id, missing_track_id, quality_profile_id, min_score)
-        items_to_search: list[tuple[str, str, Optional[str], str, Optional[str], Optional[int], Optional[str], Optional[int]]] = []
+        # Items to search: (artist, title, album, item_type, request_id, missing_track_id, quality_profile_id, min_score, track_id, album_id)
+        items_to_search: list[
+            tuple[
+                str,
+                str,
+                Optional[str],
+                str,
+                Optional[str],
+                Optional[int],
+                Optional[str],
+                Optional[int],
+                Optional[str],
+                Optional[str],
+            ]
+        ] = []
         for r in unfulfilled_requests:
             is_upgrade = (r.get("status") == "available" or r.get("cutoff_met") == 0)
             min_score = None
@@ -294,6 +309,8 @@ class WantedBacklogWorker:
                     None,
                     qp_id,
                     min_score,
+                    None,
+                    None,
                 )
             )
 
@@ -308,10 +325,95 @@ class WantedBacklogWorker:
                     int(t["id"]),
                     None,
                     None,
+                    None,
+                    None,
                 )
             )
 
-        for artist, title, album, item_type, req_id, missing_id, qp_id, min_score in items_to_search:
+        # 4. Query native catalog missing and cutoff-unmet tracks if in native mode
+        if library_mode == "native":
+            try:
+                missing_catalog = db.get_monitored_missing_catalog_tracks(limit=100)
+                for t in missing_catalog:
+                    t_id = t["track_id"]
+                    t_pair = (
+                        (t.get("artist_name") or "").strip().lower(),
+                        (t.get("track_title") or "").strip().lower(),
+                    )
+                    if t_id in active_track_ids or t_pair in active_artist_titles:
+                        continue
+                    items_to_search.append(
+                        (
+                            t.get("artist_name", "").strip(),
+                            t.get("track_title", "").strip(),
+                            t.get("album_title", "").strip() if t.get("album_title") else None,
+                            "track",
+                            None,
+                            None,
+                            t.get("quality_profile_id"),
+                            None,
+                            t_id,
+                            t.get("album_id"),
+                        )
+                    )
+            except Exception as e:
+                logger.error("WantedBacklogWorker error querying missing catalog tracks: %s", e)
+                errors_count += 1
+
+            if enable_upgrades:
+                try:
+                    cutoff_unmet_catalog = db.get_cutoff_unmet_catalog_tracks(limit=100)
+                    for t in cutoff_unmet_catalog:
+                        t_id = t["track_id"]
+                        t_pair = (
+                            (t.get("artist_name") or "").strip().lower(),
+                            (t.get("track_title") or "").strip().lower(),
+                        )
+                        if t_id in active_track_ids or t_pair in active_artist_titles:
+                            continue
+
+                        qp_id = t.get("quality_profile_id")
+                        profile_dict = db.get_quality_profile(qp_id) if qp_id else db.get_default_quality_profile()
+                        min_score = 0
+                        if profile_dict:
+                            prof = _to_quality_profile(profile_dict)
+                            cur_q = t.get("quality_name")
+                            if cur_q:
+                                cur_p = parse_release_title(cur_q)
+                                if cur_p.quality == "Unknown":
+                                    cur_p.quality = cur_q
+                                min_score = evaluate_release(cur_p, prof).score
+
+                        items_to_search.append(
+                            (
+                                t.get("artist_name", "").strip(),
+                                t.get("track_title", "").strip(),
+                                t.get("album_title", "").strip() if t.get("album_title") else None,
+                                "track",
+                                None,
+                                None,
+                                qp_id,
+                                min_score,
+                                t_id,
+                                t.get("album_id"),
+                            )
+                        )
+                except Exception as e:
+                    logger.error("WantedBacklogWorker error querying cutoff unmet catalog tracks: %s", e)
+                    errors_count += 1
+
+        for (
+            artist,
+            title,
+            album,
+            item_type,
+            req_id,
+            missing_id,
+            qp_id,
+            min_score,
+            track_id,
+            album_id,
+        ) in items_to_search:
             if self._stop_event.is_set():
                 logger.info("WantedBacklogWorker sweep interrupted by stop event")
                 break
@@ -330,15 +432,18 @@ class WantedBacklogWorker:
                     db=db,
                     quality_profile_id=qp_id,
                     min_score=min_score,
+                    track_id=track_id,
+                    album_id=album_id,
                 )
                 if res.get("success"):
                     items_grabbed += 1
                     logger.info(
-                        "WantedBacklogWorker grabbed release for '%s - %s' (request_id=%s, missing_id=%s)",
+                        "WantedBacklogWorker grabbed release for '%s - %s' (request_id=%s, missing_id=%s, track_id=%s)",
                         artist,
                         title,
                         req_id,
                         missing_id,
+                        track_id,
                     )
                     if req_id:
                         db.update_request_status(req_id, RequestStatus.PROCESSING)

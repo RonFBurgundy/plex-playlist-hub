@@ -12,6 +12,7 @@ from typing import Any, Optional, Union
 
 from plex_playlist_sync.models import (
     ActiveDownload,
+    BlocklistItem,
     DownloadClientConfig,
     DownloadDriverType,
     DownloadStatus,
@@ -167,6 +168,7 @@ class Database:
                 (14, self._migration_v14),
                 (15, self._migration_v15),
                 (16, self._migration_v16),
+                (17, self._migration_v17),
             ]
 
             for version, migration_fn in migrations:
@@ -778,6 +780,50 @@ class Database:
         )
         cur.execute(
             "INSERT OR IGNORE INTO general_settings (id, application_url) VALUES (1, '');"
+        )
+
+    def _migration_v17(self, cur: sqlite3.Cursor) -> None:
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS download_blocklist (
+                id TEXT PRIMARY KEY,
+                source_title TEXT NOT NULL,
+                artist TEXT,
+                album TEXT,
+                release_guid TEXT,
+                info_hash TEXT,
+                protocol TEXT,
+                indexer TEXT,
+                reason TEXT,
+                created_at TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP)
+            );
+            """
+        )
+        cur.execute(
+            "CREATE INDEX IF NOT EXISTS idx_blocklist_hash ON download_blocklist(info_hash);"
+        )
+        cur.execute(
+            "CREATE INDEX IF NOT EXISTS idx_blocklist_title ON download_blocklist(source_title);"
+        )
+        cur.execute(
+            "CREATE INDEX IF NOT EXISTS idx_blocklist_guid ON download_blocklist(release_guid);"
+        )
+
+        cur.execute("PRAGMA table_info(active_downloads);")
+        columns = [row[1] for row in cur.fetchall()]
+        if "track_id" not in columns:
+            cur.execute(
+                "ALTER TABLE active_downloads ADD COLUMN track_id TEXT REFERENCES library_tracks(id);"
+            )
+        if "album_id" not in columns:
+            cur.execute(
+                "ALTER TABLE active_downloads ADD COLUMN album_id TEXT REFERENCES library_albums(id);"
+            )
+        cur.execute(
+            "CREATE INDEX IF NOT EXISTS idx_active_downloads_track ON active_downloads(track_id);"
+        )
+        cur.execute(
+            "CREATE INDEX IF NOT EXISTS idx_active_downloads_album ON active_downloads(album_id);"
         )
 
     # -------------------------------------------------------------------------
@@ -2018,6 +2064,14 @@ class Database:
     # Active Downloads CRUD
     # -------------------------------------------------------------------------
 
+    def _map_active_download(self, row: sqlite3.Row) -> dict[str, Any]:
+        res = dict(row)
+        res["progress"] = float(res.get("progress") or 0.0)
+        res["size_bytes"] = int(res.get("size_bytes") or 0)
+        res["track_id"] = res.get("track_id")
+        res["album_id"] = res.get("album_id")
+        return res
+
     def create_active_download(
         self, download: Union[dict[str, Any], ActiveDownload]
     ) -> dict[str, Any]:
@@ -2036,6 +2090,8 @@ class Database:
         source_path = d.get("source_path")
         target_path = d.get("target_path")
         error_message = d.get("error_message")
+        track_id = d.get("track_id")
+        album_id = d.get("album_id")
 
         with self._lock:
             self.conn.execute(
@@ -2043,8 +2099,8 @@ class Database:
                 INSERT INTO active_downloads (
                     id, request_id, client_id, download_hash, title, artist,
                     item_type, status, progress, size_bytes, source_path,
-                    target_path, error_message, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                    target_path, error_message, track_id, album_id, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
                 ON CONFLICT(id) DO UPDATE SET
                     request_id = excluded.request_id,
                     client_id = excluded.client_id,
@@ -2058,6 +2114,8 @@ class Database:
                     source_path = excluded.source_path,
                     target_path = excluded.target_path,
                     error_message = excluded.error_message,
+                    track_id = excluded.track_id,
+                    album_id = excluded.album_id,
                     updated_at = CURRENT_TIMESTAMP
                 """,
                 (
@@ -2074,6 +2132,8 @@ class Database:
                     source_path,
                     target_path,
                     error_message,
+                    track_id,
+                    album_id,
                 ),
             )
             self.conn.commit()
@@ -2094,10 +2154,7 @@ class Database:
             row = cur.fetchone()
             if not row:
                 return None
-            res = dict(row)
-            res["progress"] = float(res.get("progress") or 0.0)
-            res["size_bytes"] = int(res.get("size_bytes") or 0)
-            return res
+            return self._map_active_download(row)
 
     def list_active_downloads(
         self, statuses: Optional[list[str]] = None
@@ -2125,11 +2182,7 @@ class Database:
                     ORDER BY d.created_at DESC
                     """
                 )
-            rows = [dict(r) for r in cur.fetchall()]
-        for r in rows:
-            r["progress"] = float(r.get("progress") or 0.0)
-            r["size_bytes"] = int(r.get("size_bytes") or 0)
-        return rows
+            return [self._map_active_download(r) for r in cur.fetchall()]
 
     def update_download_progress(
         self, download_id: str, progress: float, size_bytes: Optional[int] = None
@@ -3269,6 +3322,201 @@ class Database:
                 "monitored_track_count": monitored_track_count,
                 "cutoff_unmet_track_count": cutoff_unmet_track_count,
             }
+
+    # -------------------------------------------------------------------------
+    # Download Blocklist CRUD
+    # -------------------------------------------------------------------------
+
+    def add_to_blocklist(
+        self,
+        source_title: str,
+        artist: Optional[str] = None,
+        album: Optional[str] = None,
+        release_guid: Optional[str] = None,
+        info_hash: Optional[str] = None,
+        protocol: Optional[str] = None,
+        indexer: Optional[str] = None,
+        reason: Optional[str] = None,
+    ) -> dict[str, Any]:
+        """Adds a release to the persistent download blocklist."""
+        item_id = f"bl-{uuid.uuid4().hex[:12]}"
+        clean_hash = info_hash.strip().lower() if info_hash else None
+        clean_guid = release_guid.strip() if release_guid else None
+        with self._lock:
+            self.conn.execute(
+                """
+                INSERT INTO download_blocklist (
+                    id, source_title, artist, album, release_guid, info_hash,
+                    protocol, indexer, reason, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                """,
+                (
+                    item_id,
+                    str(source_title).strip(),
+                    str(artist).strip() if artist else None,
+                    str(album).strip() if album else None,
+                    clean_guid,
+                    clean_hash,
+                    str(protocol).strip().lower() if protocol else None,
+                    str(indexer).strip() if indexer else None,
+                    str(reason).strip() if reason else None,
+                ),
+            )
+            self.conn.commit()
+        item = self.get_blocklist_item(item_id)
+        if item is None:
+            raise RuntimeError(f"Failed to retrieve blocklist item {item_id}")
+        return item
+
+    def get_blocklist_item(self, blocklist_id: str) -> Optional[dict[str, Any]]:
+        """Retrieves a single blocklist entry by ID."""
+        with self._lock:
+            cur = self.conn.execute(
+                "SELECT * FROM download_blocklist WHERE id = ?",
+                (str(blocklist_id),),
+            )
+            row = cur.fetchone()
+            return dict(row) if row else None
+
+    def is_blocklisted(
+        self,
+        release_title: Optional[str] = None,
+        release_guid: Optional[str] = None,
+        info_hash: Optional[str] = None,
+    ) -> bool:
+        """Checks if a release matches blocklist by info_hash (case-insensitive), guid, or title."""
+        with self._lock:
+            if info_hash:
+                clean_hash = str(info_hash).strip()
+                cur = self.conn.execute(
+                    "SELECT 1 FROM download_blocklist WHERE LOWER(info_hash) = LOWER(?) LIMIT 1",
+                    (clean_hash,),
+                )
+                if cur.fetchone():
+                    return True
+
+            if release_guid:
+                clean_guid = str(release_guid).strip()
+                cur = self.conn.execute(
+                    "SELECT 1 FROM download_blocklist WHERE release_guid = ? LIMIT 1",
+                    (clean_guid,),
+                )
+                if cur.fetchone():
+                    return True
+
+            if release_title:
+                clean_rt = str(release_title).strip()
+                cur = self.conn.execute(
+                    "SELECT 1 FROM download_blocklist WHERE LOWER(source_title) = LOWER(?) LIMIT 1",
+                    (clean_rt,),
+                )
+                if cur.fetchone():
+                    return True
+
+                target_clean = clean_library_name(clean_rt)
+                if target_clean:
+                    cur = self.conn.execute(
+                        "SELECT source_title FROM download_blocklist WHERE source_title IS NOT NULL"
+                    )
+                    for row in cur.fetchall():
+                        st = row["source_title"] or ""
+                        if clean_library_name(st) == target_clean:
+                            return True
+
+        return False
+
+    def list_blocklist(self, limit: int = 100, offset: int = 0) -> list[dict[str, Any]]:
+        """Returns paginated download blocklist items ordered by created_at DESC."""
+        with self._lock:
+            cur = self.conn.execute(
+                "SELECT * FROM download_blocklist ORDER BY created_at DESC LIMIT ? OFFSET ?",
+                (int(limit), int(offset)),
+            )
+            return [dict(r) for r in cur.fetchall()]
+
+    def remove_from_blocklist(self, blocklist_id: str) -> bool:
+        """Removes a download blocklist entry by ID."""
+        with self._lock:
+            cur = self.conn.execute(
+                "DELETE FROM download_blocklist WHERE id = ?",
+                (str(blocklist_id),),
+            )
+            self.conn.commit()
+            return cur.rowcount > 0
+
+    # -------------------------------------------------------------------------
+    # Catalog Wanted Queries
+    # -------------------------------------------------------------------------
+
+    def get_monitored_missing_catalog_tracks(
+        self, limit: int = 100
+    ) -> list[dict[str, Any]]:
+        """Queries tracks where artist, album, and track are monitored, but no file exists."""
+        sql = """
+            SELECT
+                t.id AS track_id,
+                t.title AS track_title,
+                t.track_number AS track_number,
+                t.disc_number AS disc_number,
+                al.id AS album_id,
+                al.title AS album_title,
+                al.year AS year,
+                ar.id AS artist_id,
+                ar.name AS artist_name,
+                ar.quality_profile_id AS quality_profile_id
+            FROM library_tracks t
+            JOIN library_albums al ON t.album_id = al.id
+            JOIN library_artists ar ON t.artist_id = ar.id
+            LEFT JOIN library_files f ON t.id = f.track_id
+            WHERE t.monitored = 1
+              AND al.monitored = 1
+              AND ar.monitored = 1
+              AND f.id IS NULL
+            ORDER BY ar.name ASC, al.year ASC, t.disc_number ASC, t.track_number ASC
+            LIMIT ?
+        """
+        with self._lock:
+            cur = self.conn.execute(sql, (int(limit),))
+            rows = []
+            for r in cur.fetchall():
+                d = dict(r)
+                d["track_number"] = int(d.get("track_number") or 1)
+                d["disc_number"] = int(d.get("disc_number") or 1)
+                if d.get("year") is not None:
+                    d["year"] = int(d["year"])
+                rows.append(d)
+            return rows
+
+    def get_cutoff_unmet_catalog_tracks(
+        self, limit: int = 100
+    ) -> list[dict[str, Any]]:
+        """Queries tracks where artist, album, and track are monitored, but file cutoff_met is 0."""
+        sql = """
+            SELECT
+                t.id AS track_id,
+                t.title AS track_title,
+                al.id AS album_id,
+                al.title AS album_title,
+                ar.id AS artist_id,
+                ar.name AS artist_name,
+                ar.quality_profile_id AS quality_profile_id,
+                f.id AS file_id,
+                f.quality_name AS quality_name,
+                f.file_path AS file_path
+            FROM library_tracks t
+            JOIN library_albums al ON t.album_id = al.id
+            JOIN library_artists ar ON t.artist_id = ar.id
+            JOIN library_files f ON t.id = f.track_id
+            WHERE t.monitored = 1
+              AND al.monitored = 1
+              AND ar.monitored = 1
+              AND f.cutoff_met = 0
+            ORDER BY ar.name ASC, al.year ASC, t.disc_number ASC, t.track_number ASC
+            LIMIT ?
+        """
+        with self._lock:
+            cur = self.conn.execute(sql, (int(limit),))
+            return [dict(r) for r in cur.fetchall()]
 
 
 

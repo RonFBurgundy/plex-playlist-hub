@@ -6,6 +6,7 @@ appropriate download clients (qBittorrent, SABnzbd, slskd), and tracks active tr
 """
 
 import logging
+import re
 from typing import Any, Optional, Union
 import uuid
 
@@ -25,6 +26,30 @@ from plex_playlist_sync.quality import evaluate_release, parse_release_title
 from plex_playlist_sync.storage import Database
 
 logger = logging.getLogger(__name__)
+
+
+_BTIH_RE = re.compile(r"urn:btih:([a-fA-F0-9]{40}|[a-zA-Z2-7]{32})", re.IGNORECASE)
+
+
+def _extract_info_hash(candidate: AcquisitionSearchResult) -> Optional[str]:
+    """Extracts a torrent/p2p info hash from candidate URLs, extra payload, or download_id."""
+    if candidate.magnet_url:
+        m = _BTIH_RE.search(candidate.magnet_url)
+        if m:
+            return m.group(1).lower()
+    if candidate.download_url:
+        m = _BTIH_RE.search(candidate.download_url)
+        if m:
+            return m.group(1).lower()
+    if candidate.extra and isinstance(candidate.extra, dict):
+        h = candidate.extra.get("info_hash") or candidate.extra.get("hash")
+        if h:
+            return str(h).strip().lower()
+    if candidate.download_id:
+        dl_id = candidate.download_id.strip()
+        if len(dl_id) in (32, 40) and re.fullmatch(r"[a-fA-F0-9]{32,40}", dl_id):
+            return dl_id.lower()
+    return None
 
 
 def _to_quality_profile(data: Union[QualityProfile, dict[str, Any]]) -> QualityProfile:
@@ -120,12 +145,27 @@ class AcquisitionCoordinator:
             except Exception as e:
                 logger.warning("Error searching slskd client '%s' (%s): %s", s_name, s_cfg.get("host_url"), e)
 
+        if db is not None:
+            filtered_results: list[AcquisitionSearchResult] = []
+            for candidate in all_results:
+                btih = _extract_info_hash(candidate)
+                if db.is_blocklisted(
+                    release_title=candidate.title,
+                    release_guid=candidate.download_id,
+                    info_hash=btih,
+                ):
+                    logger.info("Skipping blocklisted release candidate during search: '%s'", candidate.title)
+                    continue
+                filtered_results.append(candidate)
+            return filtered_results
+
         return all_results
 
     def evaluate_and_rank(
         self,
         candidates: list[AcquisitionSearchResult],
         profile: Union[QualityProfile, dict[str, Any]],
+        db: Optional[Database] = None,
     ) -> list[tuple[AcquisitionSearchResult, EvaluationResult]]:
         """Evaluates candidates against QualityProfile and sorts by score descending.
 
@@ -138,6 +178,16 @@ class AcquisitionCoordinator:
         ranked: list[tuple[AcquisitionSearchResult, EvaluationResult]] = []
 
         for candidate in candidates:
+            if db is not None:
+                btih = _extract_info_hash(candidate)
+                if db.is_blocklisted(
+                    release_title=candidate.title,
+                    release_guid=candidate.download_id,
+                    info_hash=btih,
+                ):
+                    logger.info("Skipping blocklisted release candidate during evaluation: '%s'", candidate.title)
+                    continue
+
             parsed = parse_release_title(candidate.title)
             eval_res = evaluate_release(
                 release=parsed,
@@ -207,6 +257,8 @@ class AcquisitionCoordinator:
         db: Optional[Database] = None,
         quality_profile_id: Optional[str] = None,
         min_score: Optional[int] = None,
+        track_id: Optional[str] = None,
+        album_id: Optional[str] = None,
     ) -> dict[str, Any]:
         """Searches indexers, ranks releases against the Quality Profile, and dispatches grab.
 
@@ -239,7 +291,7 @@ class AcquisitionCoordinator:
         candidates = self.search_all_indexers(artist=artist, title=title, album=album, db=db)
 
         # 3. Evaluate and rank
-        ranked = self.evaluate_and_rank(candidates=candidates, profile=profile)
+        ranked = self.evaluate_and_rank(candidates=candidates, profile=profile, db=db)
         if min_score is not None:
             ranked = [item for item in ranked if item[1].score > min_score]
         if not ranked:
@@ -294,6 +346,8 @@ class AcquisitionCoordinator:
             size_bytes=top_candidate.size_bytes,
             source_path=None,
             target_path=None,
+            track_id=track_id,
+            album_id=album_id,
         )
         db.create_active_download(active_dl)
 
