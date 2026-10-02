@@ -17,6 +17,7 @@ from plex_playlist_sync.api.routes import (
     download_clients,
     indexers,
     missing,
+    notifications,
     playlists,
     quality_profiles,
     queue,
@@ -109,6 +110,9 @@ def create_app(
     api_router.include_router(indexers.router, prefix="/settings/indexers", tags=["indexers"])
     api_router.include_router(
         quality_profiles.router, prefix="/settings/quality-profiles", tags=["quality_profiles"]
+    )
+    api_router.include_router(
+        notifications.router, prefix="/settings/notifications", tags=["notifications"]
     )
     api_router.include_router(queue.router, prefix="/queue", tags=["queue"])
     api_router.include_router(acquisition.router, prefix="/acquisition", tags=["acquisition"])

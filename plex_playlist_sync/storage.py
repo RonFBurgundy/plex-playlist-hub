@@ -15,6 +15,9 @@ from plex_playlist_sync.models import (
     DownloadStatus,
     IndexerConfig,
     MusicRequest,
+    NotificationChannel,
+    NotificationChannelType,
+    NotificationEvent,
     Playlist,
     QualityProfile,
     QualityProfileItem,
@@ -143,6 +146,7 @@ class Database:
                 (9, self._migration_v9),
                 (10, self._migration_v10),
                 (11, self._migration_v11),
+                (12, self._migration_v12),
             ]
 
             for version, migration_fn in migrations:
@@ -548,6 +552,27 @@ class Database:
         cur.execute(
             """
             ALTER TABLE media_management_settings ADD COLUMN save_cover_art_file INTEGER NOT NULL DEFAULT 1
+            """
+        )
+
+    def _migration_v12(self, cur: sqlite3.Cursor) -> None:
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS notification_channels (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                channel_type TEXT NOT NULL,
+                enabled INTEGER NOT NULL DEFAULT 1,
+                config_json TEXT NOT NULL DEFAULT '{}',
+                events_json TEXT NOT NULL DEFAULT '["request_created","request_approved","request_rejected","download_started","item_available","download_failed"]',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+            """
+        )
+        cur.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_notification_channels_enabled ON notification_channels(enabled);
             """
         )
 
@@ -1944,6 +1969,164 @@ class Database:
             )
             self.conn.commit()
             return cur.rowcount > 0
+
+    # -------------------------------------------------------------------------
+    # Notification Channels CRUD
+    # -------------------------------------------------------------------------
+
+    def create_notification_channel(
+        self, channel: Union[dict[str, Any], NotificationChannel]
+    ) -> dict[str, Any]:
+        """Creates or updates a notification channel."""
+        if isinstance(channel, NotificationChannel):
+            c_id = channel.id
+            name = channel.name
+            channel_type = (
+                channel.channel_type.value
+                if isinstance(channel.channel_type, NotificationChannelType)
+                else str(channel.channel_type)
+            )
+            enabled = 1 if channel.enabled else 0
+            config_json = json.dumps(channel.config if isinstance(channel.config, dict) else {})
+            events_list = [
+                e.value if isinstance(e, NotificationEvent) else str(e)
+                for e in (channel.events or [])
+            ]
+            events_json = json.dumps(events_list)
+        else:
+            c = dict(channel)
+            c_id = str(c.get("id") or "")
+            name = str(c.get("name") or "")
+            ctype_raw = c.get("channel_type", "")
+            channel_type = (
+                ctype_raw.value
+                if isinstance(ctype_raw, NotificationChannelType)
+                else str(ctype_raw)
+            )
+            enabled = 1 if c.get("enabled", True) else 0
+            cfg = c.get("config")
+            config_json = json.dumps(cfg if isinstance(cfg, dict) else {})
+            raw_events = c.get("events") or []
+            events_list = [
+                e.value if isinstance(e, NotificationEvent) else str(e)
+                for e in raw_events
+            ]
+            events_json = json.dumps(events_list)
+
+        with self._lock:
+            self.conn.execute(
+                """
+                INSERT INTO notification_channels (
+                    id, name, channel_type, enabled, config_json, events_json, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                ON CONFLICT(id) DO UPDATE SET
+                    name = excluded.name,
+                    channel_type = excluded.channel_type,
+                    enabled = excluded.enabled,
+                    config_json = excluded.config_json,
+                    events_json = excluded.events_json,
+                    updated_at = CURRENT_TIMESTAMP
+                """,
+                (c_id, name, channel_type, enabled, config_json, events_json),
+            )
+            self.conn.commit()
+
+        ret = self.get_notification_channel(c_id)
+        if not ret:
+            raise sqlite3.OperationalError(f"Failed to fetch saved notification channel '{c_id}'")
+        return ret
+
+    def get_notification_channel(self, channel_id: str) -> Optional[dict[str, Any]]:
+        """Retrieves a notification channel by ID."""
+        with self._lock:
+            cur = self.conn.execute(
+                "SELECT * FROM notification_channels WHERE id = ?", (str(channel_id),)
+            )
+            row = cur.fetchone()
+        if not row:
+            return None
+        return self._row_to_channel_dict(row)
+
+    def list_notification_channels(
+        self, enabled_only: bool = False
+    ) -> list[dict[str, Any]]:
+        """Lists notification channels, optionally filtering by enabled status."""
+        query = (
+            "SELECT * FROM notification_channels WHERE enabled = 1 ORDER BY created_at ASC"
+            if enabled_only
+            else "SELECT * FROM notification_channels ORDER BY created_at ASC"
+        )
+        with self._lock:
+            cur = self.conn.execute(query)
+            rows = cur.fetchall()
+        return [self._row_to_channel_dict(r) for r in rows]
+
+    def update_notification_channel(
+        self, channel_id: str, updates: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Updates fields of an existing notification channel."""
+        allowed = {"name", "channel_type", "enabled", "config", "events"}
+        filtered: dict[str, Any] = {}
+        for k, v in updates.items():
+            if k in allowed:
+                if k == "enabled":
+                    filtered["enabled"] = 1 if v else 0
+                elif k == "config":
+                    filtered["config_json"] = json.dumps(v if isinstance(v, dict) else {})
+                elif k == "events":
+                    ev_list = [
+                        e.value if isinstance(e, NotificationEvent) else str(e)
+                        for e in (v or [])
+                    ]
+                    filtered["events_json"] = json.dumps(ev_list)
+                elif k == "channel_type":
+                    filtered["channel_type"] = (
+                        v.value if isinstance(v, NotificationChannelType) else str(v)
+                    )
+                else:
+                    filtered[k] = v
+
+        if filtered:
+            set_clauses = [f"{k} = ?" for k in filtered.keys()]
+            set_clauses.append("updated_at = CURRENT_TIMESTAMP")
+            values = list(filtered.values())
+            values.append(str(channel_id))
+
+            with self._lock:
+                self.conn.execute(
+                    f"UPDATE notification_channels SET {', '.join(set_clauses)} WHERE id = ?",
+                    values,
+                )
+                self.conn.commit()
+
+        ret = self.get_notification_channel(channel_id)
+        if not ret:
+            raise KeyError(f"Notification channel '{channel_id}' not found")
+        return ret
+
+    def delete_notification_channel(self, channel_id: str) -> bool:
+        """Deletes a notification channel by ID."""
+        with self._lock:
+            cur = self.conn.execute(
+                "DELETE FROM notification_channels WHERE id = ?", (str(channel_id),)
+            )
+            self.conn.commit()
+            return cur.rowcount > 0
+
+    def _row_to_channel_dict(self, row: sqlite3.Row) -> dict[str, Any]:
+        d = dict(row)
+        d["enabled"] = bool(d.get("enabled", 1))
+        config_raw = d.pop("config_json", "{}")
+        try:
+            d["config"] = json.loads(config_raw) if config_raw else {}
+        except (json.JSONDecodeError, TypeError):
+            d["config"] = {}
+        events_raw = d.pop("events_json", "[]")
+        try:
+            d["events"] = json.loads(events_raw) if events_raw else []
+        except (json.JSONDecodeError, TypeError):
+            d["events"] = []
+        return d
 
 
 

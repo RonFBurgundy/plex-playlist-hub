@@ -19,7 +19,8 @@ from plex_playlist_sync.api.dependencies import (
 from plex_playlist_sync.clients.lidarr import LidarrClient
 from plex_playlist_sync.config import Config
 from plex_playlist_sync.lidarr_queue import lidarr_worker
-from plex_playlist_sync.models import MusicRequest, RequestStatus
+from plex_playlist_sync.models import MusicRequest, NotificationEvent, RequestStatus
+from plex_playlist_sync.notifications import notification_dispatcher
 from plex_playlist_sync.storage import Database
 
 logger = logging.getLogger(__name__)
@@ -112,6 +113,14 @@ def create_request(
     )
 
     created = db.create_request(new_request)
+
+    # Dispatch notification events
+    notification_data = dict(created)
+    if not notification_data.get("username"):
+        notification_data["username"] = current_user.get("username")
+    notification_dispatcher.dispatch(NotificationEvent.REQUEST_CREATED, data=notification_data, db=db)
+    if initial_status == RequestStatus.PROCESSING:
+        notification_dispatcher.dispatch(NotificationEvent.REQUEST_APPROVED, data=notification_data, db=db)
 
     # Dispatch to native acquisition coordinator if processing, otherwise fall back to Lidarr
     if initial_status == RequestStatus.PROCESSING:
@@ -228,7 +237,9 @@ def approve_request(
         except Exception as e:
             logger.error("Error enqueuing approved request %s to Lidarr: %s", request_id, e)
 
-    return updated or req
+    res_req = updated or req
+    notification_dispatcher.dispatch(NotificationEvent.REQUEST_APPROVED, data=res_req, db=db)
+    return res_req
 
 
 @router.post("/{request_id}/reject")
@@ -244,7 +255,9 @@ def reject_request(
 
     db.update_request_status(request_id, RequestStatus.REJECTED)
     updated = db.get_request(request_id)
-    return updated or req
+    res_req = updated or req
+    notification_dispatcher.dispatch(NotificationEvent.REQUEST_REJECTED, data=res_req, db=db)
+    return res_req
 
 
 @router.delete("/{request_id}")

@@ -16,9 +16,11 @@ from plex_playlist_sync.models import (
     DownloadClientConfig,
     DownloadStatus,
     EvaluationResult,
+    NotificationEvent,
     QualityProfile,
     QualityProfileItem,
 )
+from plex_playlist_sync.notifications import notification_dispatcher
 from plex_playlist_sync.quality import evaluate_release, parse_release_title
 from plex_playlist_sync.storage import Database
 
@@ -287,6 +289,25 @@ class AcquisitionCoordinator:
             target_path=None,
         )
         db.create_active_download(active_dl)
+
+        try:
+            notification_dispatcher.dispatch(
+                NotificationEvent.DOWNLOAD_STARTED,
+                data={
+                    "artist": artist,
+                    "title": top_candidate.title,
+                    "album": album,
+                    "item_type": item_type,
+                    "request_id": request_id,
+                    "client": client.get("name"),
+                    "release": top_candidate.title,
+                    "download_id": download_id,
+                    "size_bytes": top_candidate.size_bytes,
+                },
+                db=db,
+            )
+        except Exception as e:
+            logger.warning("Failed to dispatch DOWNLOAD_STARTED notification: %s", e)
 
         logger.info(
             "Successfully grabbed release '%s' via %s (download_id=%s, score=%d)",

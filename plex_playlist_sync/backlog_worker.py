@@ -25,8 +25,10 @@ from plex_playlist_sync.models import (
     AcquisitionSearchResult,
     ActiveDownload,
     DownloadStatus,
+    NotificationEvent,
     RequestStatus,
 )
+from plex_playlist_sync.notifications import notification_dispatcher
 from plex_playlist_sync.quality import evaluate_release, parse_release_title
 from plex_playlist_sync.storage import Database
 
@@ -563,6 +565,23 @@ class RSSSyncWorker:
                     db.update_request_status(matched_req["id"], RequestStatus.PROCESSING)
                     active_req_ids.add(matched_req["id"])
                     grabs_triggered += 1
+                    try:
+                        notification_dispatcher.dispatch(
+                            NotificationEvent.DOWNLOAD_STARTED,
+                            data={
+                                "artist": active_dl.artist,
+                                "title": active_dl.title,
+                                "release": candidate.title,
+                                "client": client.get("name"),
+                                "request_id": matched_req["id"],
+                                "download_id": download_id,
+                                "size_bytes": candidate.size_bytes,
+                            },
+                            db=db,
+                        )
+                    except Exception as ex:
+                        logger.warning("Failed to dispatch RSS DOWNLOAD_STARTED notification: %s", ex)
+
                     logger.info(
                         "RSSSyncWorker grabbed '%s' for request %s via %s (score=%s)",
                         candidate.title,

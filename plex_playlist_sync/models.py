@@ -2,6 +2,8 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, List, Optional
 
+from plex_playlist_sync.security import mask_channel_config
+
 
 class RequestStatus(str, Enum):
     PENDING = "pending"
@@ -377,6 +379,67 @@ class EvaluationResult:
             "rejection_reasons": list(self.rejection_reasons),
             "parsed_quality": self.parsed_quality,
             "meets_cutoff": bool(self.meets_cutoff),
+        }
+
+
+class NotificationChannelType(str, Enum):
+    DISCORD = "discord"
+    TELEGRAM = "telegram"
+    PUSHOVER = "pushover"
+    WEBHOOK = "webhook"
+    EMAIL = "email"
+
+
+class NotificationEvent(str, Enum):
+    REQUEST_CREATED = "request_created"
+    REQUEST_APPROVED = "request_approved"
+    REQUEST_REJECTED = "request_rejected"
+    DOWNLOAD_STARTED = "download_started"
+    ITEM_AVAILABLE = "item_available"
+    DOWNLOAD_FAILED = "download_failed"
+
+
+@dataclass
+class NotificationChannel:
+    id: str
+    name: str
+    channel_type: str
+    enabled: bool = True
+    config: dict[str, Any] = field(default_factory=dict)
+    events: list[str] = field(
+        default_factory=lambda: [
+            "request_created",
+            "request_approved",
+            "request_rejected",
+            "download_started",
+            "item_available",
+            "download_failed",
+        ]
+    )
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
+
+    def to_dict(self, mask_secrets: bool = False) -> dict[str, Any]:
+        cfg = dict(self.config) if isinstance(self.config, dict) else {}
+        ctype = (
+            self.channel_type.value
+            if isinstance(self.channel_type, NotificationChannelType)
+            else str(self.channel_type)
+        )
+        if mask_secrets:
+            cfg = mask_channel_config(ctype, cfg)
+        return {
+            "id": self.id,
+            "name": self.name,
+            "channel_type": ctype,
+            "enabled": bool(self.enabled),
+            "config": cfg,
+            "events": [
+                e.value if isinstance(e, NotificationEvent) else str(e)
+                for e in self.events
+            ],
+            "created_at": self.created_at,
+            "updated_at": self.updated_at,
         }
 
 

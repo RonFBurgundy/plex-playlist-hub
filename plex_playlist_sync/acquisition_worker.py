@@ -26,8 +26,9 @@ from plex_playlist_sync.library import (
     resolve_collision,
     write_audio_tags,
 )
-from plex_playlist_sync.models import DownloadStatus, RequestStatus
+from plex_playlist_sync.models import DownloadStatus, NotificationEvent, RequestStatus
 from plex_playlist_sync.naming import build_track_path
+from plex_playlist_sync.notifications import notification_dispatcher
 from plex_playlist_sync.security import is_safe_service_url
 from plex_playlist_sync.storage import Database
 
@@ -305,14 +306,32 @@ class AcquisitionWorker:
             client_id = item.get("client_id")
             stats["polled"] += 1
 
+            def _notify_failed(err_text: str) -> None:
+                try:
+                    notification_dispatcher.dispatch(
+                        NotificationEvent.DOWNLOAD_FAILED,
+                        data={
+                            "artist": item.get("artist"),
+                            "title": item.get("title"),
+                            "download_id": download_id,
+                            "request_id": item.get("request_id"),
+                            "error_message": err_text,
+                        },
+                        db=db,
+                    )
+                except Exception as ex:
+                    logger.warning("Failed to dispatch DOWNLOAD_FAILED notification: %s", ex)
+
             client_config = db.get_download_client(client_id) if client_id else None
             if not client_config:
                 logger.warning("Download client %s not found for active download %s", client_id, download_id)
+                err_msg = f"Client '{client_id}' not found"
                 db.update_download_status(
                     download_id,
                     status=DownloadStatus.FAILED.value,
-                    error_message=f"Client '{client_id}' not found",
+                    error_message=err_msg,
                 )
+                _notify_failed(err_msg)
                 stats["failed"] += 1
                 continue
 
@@ -320,11 +339,13 @@ class AcquisitionWorker:
                 driver = get_acquisition_driver(client_config)
             except Exception as e:
                 logger.error("Could not instantiate driver for client %s: %s", client_id, e)
+                err_msg = f"Driver error: {str(e)}"
                 db.update_download_status(
                     download_id,
                     status=DownloadStatus.FAILED.value,
-                    error_message=f"Driver error: {str(e)}",
+                    error_message=err_msg,
                 )
+                _notify_failed(err_msg)
                 stats["failed"] += 1
                 continue
 
@@ -345,6 +366,7 @@ class AcquisitionWorker:
             if cur_status == DownloadStatus.FAILED.value:
                 err_msg = status_dict.get("error_message") or "Download failed"
                 db.update_download_status(download_id, status=DownloadStatus.FAILED.value, error_message=err_msg)
+                _notify_failed(err_msg)
                 stats["failed"] += 1
                 continue
 
@@ -358,9 +380,28 @@ class AcquisitionWorker:
                 driver_type = str(client_config.get("driver_type", "")).lower()
                 if driver_type == "lidarr":
                     db.update_download_status(download_id, status=DownloadStatus.IMPORTED.value)
+                    req_row = None
                     if item.get("request_id"):
                         db.update_request_status(item["request_id"], RequestStatus.AVAILABLE.value)
+                        req_row = db.get_request(item["request_id"])
                     stats["imported"] += 1
+                    try:
+                        notification_dispatcher.dispatch(
+                            NotificationEvent.ITEM_AVAILABLE,
+                            data={
+                                "artist": item.get("artist"),
+                                "title": item.get("title"),
+                                "album": item.get("title") if item.get("item_type") == "album" else None,
+                                "request_id": item.get("request_id"),
+                                "download_id": download_id,
+                                "cover_url": req_row.get("cover_url") if req_row else None,
+                                "username": req_row.get("username") if req_row else None,
+                            },
+                            db=db,
+                        )
+                    except Exception as ex:
+                        logger.warning("Failed to dispatch ITEM_AVAILABLE notification for Lidarr import: %s", ex)
+
                     if plex_client:
                         try:
                             plex_client.refresh_music_library()
@@ -398,11 +439,13 @@ class AcquisitionWorker:
                         candidate_src,
                         self.staging_dir,
                     )
+                    err_msg = "No audio files found for import in download staging"
                     db.update_download_status(
                         download_id,
                         status=DownloadStatus.FAILED.value,
-                        error_message="No audio files found for import in download staging",
+                        error_message=err_msg,
                     )
+                    _notify_failed(err_msg)
                     stats["failed"] += 1
                     continue
 
@@ -496,11 +539,13 @@ class AcquisitionWorker:
 
                 if not imported_paths:
                     logger.error("No audio files were successfully imported for download %s", download_id)
+                    err_msg = "Destination escaped music root or placement failed"
                     db.update_download_status(
                         download_id,
                         status=DownloadStatus.FAILED.value,
-                        error_message="Destination escaped music root or placement failed",
+                        error_message=err_msg,
                     )
+                    _notify_failed(err_msg)
                     stats["failed"] += 1
                     continue
 
@@ -514,6 +559,24 @@ class AcquisitionWorker:
                 if item.get("request_id"):
                     db.update_request_status(item["request_id"], RequestStatus.AVAILABLE.value)
                 stats["imported"] += 1
+
+                try:
+                    notification_dispatcher.dispatch(
+                        NotificationEvent.ITEM_AVAILABLE,
+                        data={
+                            "artist": item.get("artist"),
+                            "title": item.get("title"),
+                            "album": item.get("title") if item.get("item_type") == "album" else None,
+                            "request_id": item.get("request_id"),
+                            "download_id": download_id,
+                            "target_path": target_summary,
+                            "cover_url": req.get("cover_url") if req else None,
+                            "username": req.get("username") if req else None,
+                        },
+                        db=db,
+                    )
+                except Exception as ex:
+                    logger.warning("Failed to dispatch ITEM_AVAILABLE notification for native import: %s", ex)
 
                 # Trigger Plex library refresh ping
                 if plex_client:

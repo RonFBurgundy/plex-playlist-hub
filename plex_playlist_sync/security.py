@@ -159,6 +159,43 @@ def mask_secret(secret: Optional[str], visible_chars: int = 4) -> str:
     return (mask_char * (len(secret) - visible_chars)) + secret[-visible_chars:]
 
 
+def mask_channel_config(channel_type: str, config: dict[str, Any]) -> dict[str, Any]:
+    """Masks sensitive credentials in notification channel configuration."""
+    if not isinstance(config, dict):
+        return {}
+    c = dict(config)
+    ctype = (channel_type or "").lower().strip()
+    if ctype == "discord":
+        url = c.get("webhook_url")
+        if url and isinstance(url, str):
+            parts = url.rstrip("/").rsplit("/", 1)
+            if len(parts) == 2 and "webhooks" in parts[0]:
+                c["webhook_url"] = f"{parts[0]}/{mask_secret(parts[1])}"
+            else:
+                c["webhook_url"] = mask_secret(url)
+    elif ctype == "telegram":
+        if c.get("bot_token"):
+            c["bot_token"] = mask_secret(str(c["bot_token"]))
+    elif ctype == "pushover":
+        if c.get("user_key"):
+            c["user_key"] = mask_secret(str(c["user_key"]))
+        if c.get("app_token"):
+            c["app_token"] = mask_secret(str(c["app_token"]))
+        if c.get("token"):
+            c["token"] = mask_secret(str(c["token"]))
+    elif ctype == "webhook":
+        if c.get("secret_header"):
+            c["secret_header"] = mask_secret(str(c["secret_header"]))
+        if c.get("secret"):
+            c["secret"] = mask_secret(str(c["secret"]))
+        if c.get("token"):
+            c["token"] = mask_secret(str(c["token"]))
+    elif ctype == "email":
+        if c.get("password"):
+            c["password"] = mask_secret(str(c["password"]))
+    return c
+
+
 _ALLOWED_IMAGE_HOSTS = {
     "i.scdn.co",
     "mosaic.scdn.co",
