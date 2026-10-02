@@ -13,6 +13,7 @@ from plex_playlist_sync.auth import get_or_create_secret_key, verify_session_tok
 from plex_playlist_sync.clients.deezer import DeezerClient
 from plex_playlist_sync.clients.discovery import DiscoveryClient
 from plex_playlist_sync.clients.lidarr import LidarrClient
+from plex_playlist_sync.clients.mbid_enricher import MbidEnricherClient
 from plex_playlist_sync.clients.plex import PlexClient
 from plex_playlist_sync.clients.spotify import SpotifyClient
 from plex_playlist_sync.clients.spotify_scraper import SpotifyWebScraper
@@ -27,6 +28,8 @@ _db_lock = threading.Lock()
 _db_instances: dict[str, Database] = {}
 _discovery_lock = threading.Lock()
 _discovery_client_instance: Optional[DiscoveryClient] = None
+_mbid_enricher_lock = threading.Lock()
+_mbid_enricher_instance: Optional[MbidEnricherClient] = None
 
 
 def get_config() -> Config:
@@ -110,6 +113,16 @@ def get_discovery_client() -> DiscoveryClient:
         if _discovery_client_instance is None:
             _discovery_client_instance = DiscoveryClient()
         return _discovery_client_instance
+
+
+def get_mbid_enricher() -> MbidEnricherClient:
+    """Dependency providing singleton MbidEnricherClient instance."""
+    global _mbid_enricher_instance
+    with _mbid_enricher_lock:
+        if _mbid_enricher_instance is None:
+            _mbid_enricher_instance = MbidEnricherClient()
+        return _mbid_enricher_instance
+
 
 
 def get_current_user(

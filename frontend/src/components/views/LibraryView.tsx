@@ -14,21 +14,34 @@ import {
   ChevronLeft,
   ChevronRight,
   Sliders,
+  Layers,
+  Plus,
+  Trash2,
+  ExternalLink,
+  BookmarkPlus,
+  Globe,
 } from 'lucide-react';
 import type { UseLibraryReturn, LibraryTab } from '@/hooks/useLibrary';
-import type { ArtistItem, AlbumItem, TrackItem } from '@/types/models';
+import type { ArtistItem, AlbumItem, TrackItem, CollectionItem } from '@/types/models';
 import {
   TapeTransportBay,
   TapeDeckButton,
   MachinedCard,
   SearchBar,
   TactileSwitch,
+  ObsidianModal,
 } from '@/components/ui';
 import {
   getArtistDetail,
   getAlbumDetail,
   refreshArtist,
   setArtistMonitoringPreset,
+  getCollections,
+  getCollectionDetail,
+  createCollection,
+  deleteCollection,
+  addAlbumToCollection,
+  removeAlbumFromCollection,
 } from '@/services/libraryService';
 
 export interface LibraryViewProps {
@@ -45,6 +58,7 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
     artists,
     albums,
     tracks,
+    collections,
     stats,
     searchQuery,
     isScanning,
@@ -66,11 +80,26 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
   const [artistDetail, setArtistDetail] = useState<(ArtistItem & { albums?: AlbumItem[] }) | null>(null);
   const [isLoadingDetail, setIsLoadingDetail] = useState<boolean>(false);
   const [isRefreshingArtist, setIsRefreshingArtist] = useState<boolean>(false);
-  const [discographyTab, setDiscographyTab] = useState<'studio' | 'singles_eps' | 'compilations'>('studio');
+  const [discographyTab, setDiscographyTab] = useState<'studio' | 'singles_eps' | 'live' | 'compilations'>('studio');
   const [expandedAlbumIds, setExpandedAlbumIds] = useState<Set<number | string>>(new Set());
   const [albumTracksMap, setAlbumTracksMap] = useState<Record<string, TrackItem[]>>({});
   const [loadingAlbumIds, setLoadingAlbumIds] = useState<Set<number | string>>(new Set());
   const [toastMessage, setToastMessage] = useState<string | null>(null);
+
+  // Collections state
+  const [selectedCollectionId, setSelectedCollectionId] = useState<string | null>(null);
+  const [selectedCollection, setSelectedCollection] = useState<CollectionItem | null>(null);
+  const [isLoadingCollection, setIsLoadingCollection] = useState<boolean>(false);
+  const [isCreateCollectionOpen, setIsCreateCollectionOpen] = useState<boolean>(false);
+  const [newColName, setNewColName] = useState<string>('');
+  const [newColSummary, setNewColSummary] = useState<string>('');
+  const [newColPosterUrl, setNewColPosterUrl] = useState<string>('');
+  const [isCreatingCollection, setIsCreatingCollection] = useState<boolean>(false);
+
+  // Add to Collection modal state
+  const [albumToAddToCollection, setAlbumToAddToCollection] = useState<AlbumItem | null>(null);
+  const [allCollectionsForModal, setAllCollectionsForModal] = useState<CollectionItem[]>([]);
+  const [isLoadingModalCollections, setIsLoadingModalCollections] = useState<boolean>(false);
 
   // Pagination state
   const [page, setPage] = useState<number>(1);
@@ -80,10 +109,137 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
     setTimeout(() => setToastMessage(null), 3000);
   };
 
-  // Reset page when tab or search query changes
+  // Reset page and selection when tab or search query changes
   useEffect(() => {
     setPage(1);
+    setSelectedCollectionId(null);
+    setSelectedCollection(null);
   }, [activeTab, searchQuery]);
+
+  // Load collection detail when selectedCollectionId changes
+  useEffect(() => {
+    if (!selectedCollectionId) {
+      setSelectedCollection(null);
+      return;
+    }
+
+    let isCancelled = false;
+    const fetchDetail = async () => {
+      setIsLoadingCollection(true);
+      try {
+        const data = await getCollectionDetail(selectedCollectionId);
+        if (!isCancelled) {
+          setSelectedCollection(data);
+        }
+      } catch {
+        if (!isCancelled) {
+          showToast('Failed to load collection details');
+        }
+      } finally {
+        if (!isCancelled) {
+          setIsLoadingCollection(false);
+        }
+      }
+    };
+
+    fetchDetail();
+    return () => {
+      isCancelled = true;
+    };
+  }, [selectedCollectionId]);
+
+  const handleCreateCollection = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    if (!newColName.trim()) return;
+    setIsCreatingCollection(true);
+    try {
+      await createCollection({
+        name: newColName.trim(),
+        summary: newColSummary.trim() || undefined,
+        poster_url: newColPosterUrl.trim() || undefined,
+        monitored: true,
+      });
+      setIsCreateCollectionOpen(false);
+      setNewColName('');
+      setNewColSummary('');
+      setNewColPosterUrl('');
+      await libraryHook.refresh();
+      showToast(`Collection "${newColName.trim()}" created`);
+    } catch {
+      showToast('Failed to create collection');
+    } finally {
+      setIsCreatingCollection(false);
+    }
+  };
+
+  const handleDeleteCollection = async (id: string, name: string) => {
+    try {
+      const ok = await deleteCollection(id);
+      if (ok) {
+        if (selectedCollectionId === id) {
+          setSelectedCollectionId(null);
+          setSelectedCollection(null);
+        }
+        await libraryHook.refresh();
+        showToast(`Collection "${name}" deleted`);
+      } else {
+        showToast('Failed to delete collection');
+      }
+    } catch {
+      showToast('Error deleting collection');
+    }
+  };
+
+  const handleOpenAddToCollection = async (album: AlbumItem) => {
+    setAlbumToAddToCollection(album);
+    setIsLoadingModalCollections(true);
+    try {
+      const cols = await getCollections();
+      setAllCollectionsForModal(cols);
+    } catch {
+      showToast('Failed to load collections');
+    } finally {
+      setIsLoadingModalCollections(false);
+    }
+  };
+
+  const handleAddAlbumToCollection = async (collectionId: string, collectionName: string) => {
+    if (!albumToAddToCollection) return;
+    try {
+      const ok = await addAlbumToCollection(collectionId, albumToAddToCollection.id);
+      if (ok) {
+        showToast(`Added "${albumToAddToCollection.title}" to ${collectionName}`);
+        setAlbumToAddToCollection(null);
+        await libraryHook.refresh();
+      } else {
+        showToast('Failed to add album to collection');
+      }
+    } catch {
+      showToast('Error adding album to collection');
+    }
+  };
+
+  const handleRemoveAlbumFromCollection = async (collectionId: string, albumId: number | string) => {
+    try {
+      const ok = await removeAlbumFromCollection(collectionId, albumId);
+      if (ok) {
+        setSelectedCollection((prev) => {
+          if (!prev) return null;
+          return {
+            ...prev,
+            albums: prev.albums?.filter((a) => a.id !== albumId),
+            album_count: Math.max(0, (prev.album_count || 1) - 1),
+          };
+        });
+        await libraryHook.refresh();
+        showToast('Album removed from collection');
+      } else {
+        showToast('Failed to remove album');
+      }
+    } catch {
+      showToast('Error removing album from collection');
+    }
+  };
 
   // Load artist detail when selectedArtistId changes
   useEffect(() => {
@@ -289,8 +445,9 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
   const currentList = useMemo(() => {
     if (activeTab === 'artists') return artists;
     if (activeTab === 'albums') return albums;
+    if (activeTab === 'collections') return collections;
     return tracks;
-  }, [activeTab, artists, albums, tracks]);
+  }, [activeTab, artists, albums, tracks, collections]);
 
   const totalItems = currentList.length;
   const totalPages = Math.max(1, Math.ceil(totalItems / pageSize));
@@ -303,11 +460,12 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
     { id: 'artists', label: 'Artists', icon: <User className="h-3.5 w-3.5" /> },
     { id: 'albums', label: 'Albums', icon: <Disc className="h-3.5 w-3.5" /> },
     { id: 'tracks', label: 'Tracks', icon: <Music className="h-3.5 w-3.5" /> },
+    { id: 'collections', label: 'Collections', icon: <Layers className="h-3.5 w-3.5" /> },
   ];
 
-  // Categorized albums for Artist Detail View
+  // Categorized albums for Artist Detail View (4 tiers: studio, singles_eps, live, compilations)
   const categorizedAlbums = useMemo(() => {
-    if (!artistDetail?.albums) return { studio: [], singles_eps: [], compilations: [] };
+    if (!artistDetail?.albums) return { studio: [], singles_eps: [], live: [], compilations: [] };
     const all = artistDetail.albums;
     const studio = all.filter(
       (a) => !a.album_type || ['album', 'studio'].includes(a.album_type.toLowerCase())
@@ -315,12 +473,15 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
     const singles_eps = all.filter(
       (a) => a.album_type && ['single', 'ep', 'singles', 'eps'].includes(a.album_type.toLowerCase())
     );
+    const live = all.filter(
+      (a) => a.album_type && a.album_type.toLowerCase() === 'live'
+    );
     const compilations = all.filter(
       (a) =>
         a.album_type &&
-        !['album', 'studio', 'single', 'ep', 'singles', 'eps'].includes(a.album_type.toLowerCase())
+        !['album', 'studio', 'single', 'ep', 'singles', 'eps', 'live'].includes(a.album_type.toLowerCase())
     );
-    return { studio, singles_eps, compilations };
+    return { studio, singles_eps, live, compilations };
   }, [artistDetail]);
 
   // Render Artist Detail Drilldown View
@@ -331,7 +492,15 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
         ? categorizedAlbums.studio
         : discographyTab === 'singles_eps'
         ? categorizedAlbums.singles_eps
+        : discographyTab === 'live'
+        ? categorizedAlbums.live
         : categorizedAlbums.compilations;
+
+    const genreList = Array.isArray(currentArtist?.genres)
+      ? currentArtist.genres
+      : typeof currentArtist?.genres === 'string'
+      ? currentArtist.genres.split(',').map((g) => g.trim()).filter(Boolean)
+      : [];
 
     return (
       <div className="space-y-6">
@@ -372,10 +541,21 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
           )}
         </div>
 
-        {/* Hero Banner */}
+        {/* Hero Banner Header with Backdrop */}
         <MachinedCard className="p-6 relative overflow-hidden">
-          <div className="flex flex-col sm:flex-row items-center sm:items-start gap-6">
-            <div className="h-32 w-32 rounded-[4px] bg-[#1a1a1a] border border-[#2a2a2a] overflow-hidden flex-shrink-0 flex items-center justify-center shadow-xl">
+          {currentArtist?.banner_url && (
+            <div className="absolute inset-0 z-0 pointer-events-none">
+              <img
+                src={currentArtist.banner_url}
+                alt={currentArtist.name}
+                className="w-full h-full object-cover opacity-20 filter blur-xs"
+              />
+              <div className="absolute inset-0 bg-gradient-to-t from-[#141414] via-[#141414]/85 to-transparent" />
+            </div>
+          )}
+
+          <div className="relative z-10 flex flex-col sm:flex-row items-center sm:items-start gap-6">
+            <div className="h-32 w-32 rounded-[4px] bg-[#1a1a1a] border-2 border-[#e5a00d]/70 overflow-hidden flex-shrink-0 flex items-center justify-center shadow-xl">
               {currentArtist?.image_url ? (
                 <img
                   src={currentArtist.image_url}
@@ -388,19 +568,19 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
               )}
             </div>
 
-            <div className="flex-1 text-center sm:text-left space-y-3">
+            <div className="flex-1 text-center sm:text-left space-y-3 min-w-0">
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                <div>
+                <div className="min-w-0">
                   <span className="text-[10px] font-mono uppercase tracking-widest text-[#e5a00d]">
                     Artist Catalog
                   </span>
-                  <h2 className="text-2xl sm:text-3xl font-black text-white font-mono tracking-tight mt-0.5">
+                  <h2 className="text-2xl sm:text-3xl font-black text-white font-mono tracking-tight mt-0.5 truncate">
                     {currentArtist?.name}
                   </h2>
                 </div>
 
                 {isAdmin && currentArtist && (
-                  <div className="flex items-center justify-center sm:justify-end gap-2">
+                  <div className="flex items-center justify-center sm:justify-end gap-2 flex-shrink-0">
                     <span
                       className={`text-[10px] font-mono uppercase tracking-wider ${
                         currentArtist.monitored ? 'text-[#e5a00d]' : 'text-neutral-500'
@@ -416,6 +596,45 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
                   </div>
                 )}
               </div>
+
+              {/* Badges: Country, Genres, MusicBrainz */}
+              <div className="flex flex-wrap items-center justify-center sm:justify-start gap-2 pt-0.5">
+                {currentArtist?.country && (
+                  <span className="px-2 py-0.5 rounded-[2px] text-[10px] font-mono font-bold bg-neutral-800 text-neutral-200 border border-neutral-700 flex items-center gap-1">
+                    <Globe className="h-3 w-3 text-[#e5a00d]" />
+                    {currentArtist.country}
+                  </span>
+                )}
+
+                {genreList.map((g) => (
+                  <span
+                    key={g}
+                    className="px-2 py-0.5 rounded-[2px] text-[10px] font-mono bg-[#e5a00d]/10 text-[#e5a00d] border border-[#e5a00d]/30"
+                  >
+                    {g}
+                  </span>
+                ))}
+
+                {currentArtist?.mbid && (
+                  <a
+                    href={`https://musicbrainz.org/artist/${currentArtist.mbid}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="px-2 py-0.5 rounded-[2px] text-[10px] font-mono font-bold bg-[#ba478f]/20 text-[#e599cf] border border-[#ba478f]/40 flex items-center gap-1 hover:bg-[#ba478f]/30 transition-colors"
+                    title={`MusicBrainz Artist: ${currentArtist.mbid}`}
+                  >
+                    <span>MusicBrainz</span>
+                    <ExternalLink className="h-3 w-3" />
+                  </a>
+                )}
+              </div>
+
+              {/* Bio snippet */}
+              {currentArtist?.bio && (
+                <p className="text-xs text-neutral-300 font-mono line-clamp-2 bg-black/40 p-2.5 rounded-[3px] border border-white/5 text-left">
+                  {currentArtist.bio}
+                </p>
+              )}
 
               <div className="flex flex-wrap items-center justify-center sm:justify-start gap-4 text-xs font-mono text-neutral-400">
                 <span>{artistDetail?.albums?.length || currentArtist?.album_count || 0} Releases</span>
@@ -463,8 +682,8 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
           </div>
         </MachinedCard>
 
-        {/* Categorized Discography Navigation */}
-        <TapeTransportBay className="flex items-center gap-1.5">
+        {/* Categorized Discography Navigation (4 tiers) */}
+        <TapeTransportBay className="flex items-center gap-1.5 overflow-x-auto">
           <TapeDeckButton
             size="sm"
             active={discographyTab === 'studio'}
@@ -479,7 +698,15 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
             onClick={() => setDiscographyTab('singles_eps')}
             icon={<Music className="h-3.5 w-3.5" />}
           >
-            Singles &amp; EPs ({categorizedAlbums.singles_eps.length})
+            EPs &amp; Singles ({categorizedAlbums.singles_eps.length})
+          </TapeDeckButton>
+          <TapeDeckButton
+            size="sm"
+            active={discographyTab === 'live'}
+            onClick={() => setDiscographyTab('live')}
+            icon={<Radio className="h-3.5 w-3.5" />}
+          >
+            Live Recordings ({categorizedAlbums.live.length})
           </TapeDeckButton>
           <TapeDeckButton
             size="sm"
@@ -487,7 +714,7 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
             onClick={() => setDiscographyTab('compilations')}
             icon={<HardDrive className="h-3.5 w-3.5" />}
           >
-            Compilations ({categorizedAlbums.compilations.length})
+            Compilations &amp; Box Sets ({categorizedAlbums.compilations.length})
           </TapeDeckButton>
         </TapeTransportBay>
 
@@ -567,6 +794,17 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
                           />
                         </div>
                       )}
+                      <TapeDeckButton
+                        size="sm"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleOpenAddToCollection(album);
+                        }}
+                        icon={<BookmarkPlus className="h-3.5 w-3.5 text-[#e5a00d]" />}
+                        title="Add to Collection"
+                      >
+                        Collect
+                      </TapeDeckButton>
                       <TapeDeckButton
                         size="sm"
                         onClick={() => handleToggleExpandAlbum(album.id)}
@@ -658,6 +896,188 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
             {currentAlbums.length === 0 && (
               <div className="text-center py-12 text-neutral-500 font-mono text-sm">
                 No releases categorized under this tab.
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Add Album to Collection Modal (Artist Drilldown) */}
+        <ObsidianModal
+          isOpen={albumToAddToCollection !== null}
+          onClose={() => setAlbumToAddToCollection(null)}
+          title="Add to Collection"
+          subtitle={`Select a collection to add "${albumToAddToCollection?.title}"`}
+        >
+          <div className="space-y-3">
+            {isLoadingModalCollections ? (
+              <div className="flex justify-center py-8">
+                <Loader2 className="h-6 w-6 text-[#e5a00d] animate-spin" />
+              </div>
+            ) : allCollectionsForModal.length > 0 ? (
+              <div className="divide-y divide-[#222] border border-[#262626] rounded-[4px] max-h-80 overflow-y-auto bg-[#141414]">
+                {allCollectionsForModal.map((col) => (
+                  <div
+                    key={col.id}
+                    onClick={() => handleAddAlbumToCollection(col.id, col.name)}
+                    className="p-3 flex items-center justify-between gap-3 hover:bg-[#1c1c1c] cursor-pointer transition-colors"
+                  >
+                    <div className="flex items-center gap-2.5 min-w-0">
+                      <Layers className="h-4 w-4 text-[#e5a00d] flex-shrink-0" />
+                      <div className="min-w-0">
+                        <h4 className="text-sm font-bold text-white truncate">{col.name}</h4>
+                        {col.summary && (
+                          <p className="text-xs text-neutral-400 truncate">{col.summary}</p>
+                        )}
+                      </div>
+                    </div>
+                    <span className="text-[10px] font-mono text-neutral-400 bg-neutral-800 px-2 py-0.5 rounded-[2px] flex-shrink-0">
+                      {col.album_count || 0} Albums
+                    </span>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="text-center py-8 text-neutral-500 font-mono text-xs">
+                No collections available. Create one in the Collections tab first.
+              </div>
+            )}
+          </div>
+        </ObsidianModal>
+      </div>
+    );
+  }
+
+  // Render Collection Detail Drilldown View
+  if (selectedCollectionId !== null) {
+    const col = selectedCollection || collections.find((c) => c.id === selectedCollectionId);
+    return (
+      <div className="space-y-6">
+        {/* Toast Notification */}
+        {toastMessage && (
+          <div className="fixed top-20 right-4 z-50 bg-[#161616] border border-[#e5a00d] px-4 py-2.5 rounded-[4px] text-xs font-mono text-[#e5a00d] shadow-lg flex items-center gap-2">
+            <Check className="h-4 w-4" />
+            <span>{toastMessage}</span>
+          </div>
+        )}
+
+        {/* Back Button */}
+        <div className="flex items-center justify-between">
+          <TapeDeckButton
+            size="sm"
+            onClick={() => {
+              setSelectedCollectionId(null);
+              setSelectedCollection(null);
+            }}
+            icon={<ArrowLeft className="h-4 w-4" />}
+          >
+            Back to Collections
+          </TapeDeckButton>
+
+          {isAdmin && col && (
+            <TapeDeckButton
+              size="sm"
+              variant="danger"
+              onClick={() => handleDeleteCollection(col.id, col.name)}
+              icon={<Trash2 className="h-3.5 w-3.5" />}
+            >
+              Delete Collection
+            </TapeDeckButton>
+          )}
+        </div>
+
+        {/* Collection Hero Header */}
+        <MachinedCard className="p-6">
+          <div className="flex flex-col sm:flex-row items-center sm:items-start gap-6">
+            <div className="h-32 w-32 rounded-[4px] bg-[#1a1a1a] border border-[#2a2a2a] overflow-hidden flex-shrink-0 flex items-center justify-center shadow-xl">
+              {col?.poster_url ? (
+                <img src={col.poster_url} alt={col.name} className="w-full h-full object-cover" />
+              ) : col?.preview_covers && col.preview_covers.length > 0 ? (
+                <div className="w-full h-full grid grid-cols-2 gap-0.5 bg-[#1f1f1f] p-0.5">
+                  {col.preview_covers.slice(0, 4).map((c, idx) => (
+                    <img key={idx} src={c} alt="" className="w-full h-full object-cover" />
+                  ))}
+                  {Array.from({ length: Math.max(0, 4 - col.preview_covers.length) }).map((_, idx) => (
+                    <div key={`empty-${idx}`} className="w-full h-full bg-[#161616] flex items-center justify-center">
+                      <Disc className="h-4 w-4 text-neutral-700" />
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <Layers className="h-16 w-16 text-neutral-600" />
+              )}
+            </div>
+
+            <div className="flex-1 text-center sm:text-left space-y-2 min-w-0">
+              <span className="text-[10px] font-mono uppercase tracking-widest text-[#e5a00d]">
+                Collection Drilldown
+              </span>
+              <h2 className="text-2xl sm:text-3xl font-black text-white font-mono tracking-tight truncate">
+                {col?.name}
+              </h2>
+              {col?.summary && (
+                <p className="text-xs text-neutral-300 font-mono">{col.summary}</p>
+              )}
+              <div className="flex items-center justify-center sm:justify-start gap-3 pt-1">
+                <span className="px-2.5 py-0.5 rounded-[2px] text-xs font-mono font-bold bg-[#e5a00d]/10 text-[#e5a00d] border border-[#e5a00d]/30">
+                  {col?.album_count ?? col?.albums?.length ?? 0} Albums
+                </span>
+              </div>
+            </div>
+          </div>
+        </MachinedCard>
+
+        {/* Albums list in collection */}
+        {isLoadingCollection ? (
+          <div className="flex flex-col items-center justify-center py-20 gap-3">
+            <Loader2 className="h-8 w-8 text-[#e5a00d] animate-spin" />
+            <span className="text-xs uppercase tracking-widest text-neutral-400 font-mono">
+              Loading Collection Albums...
+            </span>
+          </div>
+        ) : (
+          <div className="space-y-3">
+            <h3 className="text-sm font-mono uppercase tracking-wider text-neutral-400">
+              Included Albums ({col?.albums?.length || 0})
+            </h3>
+            {col?.albums && col.albums.length > 0 ? (
+              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
+                {col.albums.map((alb) => (
+                  <MachinedCard key={alb.id} className="p-4 flex flex-col justify-between gap-3 group">
+                    <div className="flex items-center gap-3 min-w-0">
+                      <div className="h-12 w-12 rounded-[3px] bg-[#1a1a1a] border border-[#2a2a2a] overflow-hidden flex-shrink-0 flex items-center justify-center">
+                        {alb.cover_url ? (
+                          <img src={alb.cover_url} alt={alb.title} className="w-full h-full object-cover" />
+                        ) : (
+                          <Disc className="h-6 w-6 text-neutral-600" />
+                        )}
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <h4 className="font-bold text-sm text-white truncate" title={alb.title}>
+                          {alb.title}
+                        </h4>
+                        <p className="text-xs text-neutral-400 truncate mt-0.5">
+                          {alb.artist_name || 'Unknown Artist'} {alb.release_date ? `(${alb.release_date.slice(0, 4)})` : ''}
+                        </p>
+                      </div>
+                    </div>
+
+                    <div className="pt-2 border-t border-[#1f1f1f] flex items-center justify-end">
+                      <TapeDeckButton
+                        size="sm"
+                        variant="danger"
+                        onClick={() => handleRemoveAlbumFromCollection(col.id, alb.id)}
+                        icon={<Trash2 className="h-3.5 w-3.5" />}
+                        title="Remove from collection"
+                      >
+                        Remove
+                      </TapeDeckButton>
+                    </div>
+                  </MachinedCard>
+                ))}
+              </div>
+            ) : (
+              <div className="text-center py-12 text-neutral-500 font-mono text-sm border border-dashed border-[#222] rounded-[4px]">
+                No albums in this collection yet. Drill down into an artist to add albums.
               </div>
             )}
           </div>
@@ -921,18 +1341,26 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
                   >
                     {album.monitored ? 'Monitored' : 'Unmonitored'}
                   </span>
-                  {isAdmin && (
-                    <TactileSwitch
-                      checked={album.monitored}
-                      onChange={(val) => toggleAlbumMonitored(album.id, val)}
-                      label={album.monitored ? 'Monitored' : 'Unmonitored'}
-                      title={
-                        album.monitored
-                          ? 'TrackSeerr will autonomously monitor and grab new releases'
-                          : 'Unmonitored: will not automatically grab releases'
-                      }
+                  <div className="flex items-center gap-2">
+                    <TapeDeckButton
+                      size="sm"
+                      onClick={() => handleOpenAddToCollection(album)}
+                      icon={<BookmarkPlus className="h-3.5 w-3.5 text-[#e5a00d]" />}
+                      title="Add to Collection"
                     />
-                  )}
+                    {isAdmin && (
+                      <TactileSwitch
+                        checked={album.monitored}
+                        onChange={(val) => toggleAlbumMonitored(album.id, val)}
+                        label={album.monitored ? 'Monitored' : 'Unmonitored'}
+                        title={
+                          album.monitored
+                            ? 'TrackSeerr will autonomously monitor and grab new releases'
+                            : 'Unmonitored: will not automatically grab releases'
+                        }
+                      />
+                    )}
+                  </div>
                 </div>
               </MachinedCard>
             ))}
@@ -1007,6 +1435,101 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
         </div>
       )}
 
+      {/* Collections Tab */}
+      {!isLoading && activeTab === 'collections' && (
+        <div className="space-y-4">
+          <div className="flex items-center justify-between pb-2 border-b border-[#1f1f1f]">
+            <span className="text-xs font-mono uppercase tracking-wider text-neutral-400">
+              Custom Collections ({totalItems})
+            </span>
+            {isAdmin && (
+              <TapeDeckButton
+                size="sm"
+                variant="amber"
+                onClick={() => setIsCreateCollectionOpen(true)}
+                icon={<Plus className="h-3.5 w-3.5" />}
+              >
+                New Collection
+              </TapeDeckButton>
+            )}
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
+            {(paginatedItems as CollectionItem[]).map((col) => (
+              <MachinedCard
+                key={col.id}
+                className="p-4 flex flex-col justify-between gap-3 cursor-pointer group hover:border-[#e5a00d]/50 transition-colors"
+                onClick={() => setSelectedCollectionId(col.id)}
+              >
+                <div>
+                  <div className="h-44 w-full rounded-[3px] bg-[#1a1a1a] border border-[#2a2a2a] overflow-hidden flex items-center justify-center mb-3">
+                    {col.poster_url ? (
+                      <img
+                        src={col.poster_url}
+                        alt={col.name}
+                        className="w-full h-full object-cover"
+                        loading="lazy"
+                      />
+                    ) : col.preview_covers && col.preview_covers.length > 0 ? (
+                      <div className="w-full h-full grid grid-cols-2 gap-0.5 bg-[#141414] p-0.5">
+                        {col.preview_covers.slice(0, 4).map((c, idx) => (
+                          <img key={idx} src={c} alt="" className="w-full h-full object-cover" />
+                        ))}
+                        {Array.from({ length: Math.max(0, 4 - col.preview_covers.length) }).map(
+                          (_, idx) => (
+                            <div
+                              key={`empty-${idx}`}
+                              className="w-full h-full bg-[#181818] flex items-center justify-center"
+                            >
+                              <Disc className="h-4 w-4 text-neutral-700" />
+                            </div>
+                          )
+                        )}
+                      </div>
+                    ) : (
+                      <Layers className="h-12 w-12 text-neutral-600 group-hover:text-[#e5a00d] transition-colors" />
+                    )}
+                  </div>
+
+                  <h4 className="font-bold text-sm text-white truncate" title={col.name}>
+                    {col.name}
+                  </h4>
+                  {col.summary && (
+                    <p className="text-xs text-neutral-400 line-clamp-2 mt-1 font-mono">
+                      {col.summary}
+                    </p>
+                  )}
+                </div>
+
+                <div className="pt-2 border-t border-[#1f1f1f] flex items-center justify-between">
+                  <span className="text-[10px] font-mono text-[#e5a00d] bg-[#e5a00d]/10 px-2 py-0.5 rounded-[2px] border border-[#e5a00d]/20">
+                    {col.album_count || 0} Albums
+                  </span>
+                  {isAdmin && (
+                    <TapeDeckButton
+                      size="sm"
+                      variant="danger"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleDeleteCollection(col.id, col.name);
+                      }}
+                      icon={<Trash2 className="h-3 w-3" />}
+                      title="Delete Collection"
+                    />
+                  )}
+                </div>
+              </MachinedCard>
+            ))}
+          </div>
+
+          {totalItems === 0 && (
+            <div className="text-center py-12 text-neutral-500 font-mono text-sm">
+              No collections found. Click &quot;New Collection&quot; to build your first playlist or box set collection.
+            </div>
+          )}
+        </div>
+      )}
+
       {/* Pagination Toolbar */}
       {!isLoading && totalItems > pageSize && (
         <div className="flex flex-col sm:flex-row items-center justify-between gap-3 pt-4 border-t border-[#1f1f1f] text-xs font-mono">
@@ -1042,6 +1565,124 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
           </div>
         </div>
       )}
+
+      {/* Create Collection Modal */}
+      <ObsidianModal
+        isOpen={isCreateCollectionOpen}
+        onClose={() => setIsCreateCollectionOpen(false)}
+        title="Create Collection"
+        subtitle="Organize albums into custom playlists, box sets, or anthologies"
+        footer={
+          <div className="flex items-center justify-end gap-2">
+            <TapeDeckButton
+              size="sm"
+              onClick={() => setIsCreateCollectionOpen(false)}
+            >
+              Cancel
+            </TapeDeckButton>
+            <TapeDeckButton
+              size="sm"
+              variant="amber"
+              disabled={!newColName.trim() || isCreatingCollection}
+              onClick={() => handleCreateCollection()}
+              icon={
+                isCreatingCollection ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <Plus className="h-3.5 w-3.5" />
+                )
+              }
+            >
+              Create Collection
+            </TapeDeckButton>
+          </div>
+        }
+      >
+        <form onSubmit={handleCreateCollection} className="space-y-4">
+          <div>
+            <label className="block text-xs font-mono uppercase tracking-wider text-neutral-400 mb-1">
+              Collection Name *
+            </label>
+            <input
+              type="text"
+              value={newColName}
+              onChange={(e) => setNewColName(e.target.value)}
+              placeholder="e.g. 90s Grunge Essentials"
+              required
+              className="w-full bg-[#181818] border border-[#2e2e2e] focus:border-[#e5a00d] rounded-[3px] px-3 py-2 text-sm text-white placeholder-neutral-500 outline-none font-mono"
+            />
+          </div>
+
+          <div>
+            <label className="block text-xs font-mono uppercase tracking-wider text-neutral-400 mb-1">
+              Summary / Notes (Optional)
+            </label>
+            <textarea
+              value={newColSummary}
+              onChange={(e) => setNewColSummary(e.target.value)}
+              placeholder="Brief description of this collection..."
+              rows={3}
+              className="w-full bg-[#181818] border border-[#2e2e2e] focus:border-[#e5a00d] rounded-[3px] px-3 py-2 text-sm text-white placeholder-neutral-500 outline-none font-mono resize-none"
+            />
+          </div>
+
+          <div>
+            <label className="block text-xs font-mono uppercase tracking-wider text-neutral-400 mb-1">
+              Poster URL (Optional)
+            </label>
+            <input
+              type="url"
+              value={newColPosterUrl}
+              onChange={(e) => setNewColPosterUrl(e.target.value)}
+              placeholder="https://... (Leave blank to use 2x2 collage of album covers)"
+              className="w-full bg-[#181818] border border-[#2e2e2e] focus:border-[#e5a00d] rounded-[3px] px-3 py-2 text-sm text-white placeholder-neutral-500 outline-none font-mono"
+            />
+          </div>
+        </form>
+      </ObsidianModal>
+
+      {/* Add Album to Collection Modal (Main View) */}
+      <ObsidianModal
+        isOpen={albumToAddToCollection !== null}
+        onClose={() => setAlbumToAddToCollection(null)}
+        title="Add to Collection"
+        subtitle={`Select a collection to add "${albumToAddToCollection?.title}"`}
+      >
+        <div className="space-y-3">
+          {isLoadingModalCollections ? (
+            <div className="flex justify-center py-8">
+              <Loader2 className="h-6 w-6 text-[#e5a00d] animate-spin" />
+            </div>
+          ) : allCollectionsForModal.length > 0 ? (
+            <div className="divide-y divide-[#222] border border-[#262626] rounded-[4px] max-h-80 overflow-y-auto bg-[#141414]">
+              {allCollectionsForModal.map((col) => (
+                <div
+                  key={col.id}
+                  onClick={() => handleAddAlbumToCollection(col.id, col.name)}
+                  className="p-3 flex items-center justify-between gap-3 hover:bg-[#1c1c1c] cursor-pointer transition-colors"
+                >
+                  <div className="flex items-center gap-2.5 min-w-0">
+                    <Layers className="h-4 w-4 text-[#e5a00d] flex-shrink-0" />
+                    <div className="min-w-0">
+                      <h4 className="text-sm font-bold text-white truncate">{col.name}</h4>
+                      {col.summary && (
+                        <p className="text-xs text-neutral-400 truncate">{col.summary}</p>
+                      )}
+                    </div>
+                  </div>
+                  <span className="text-[10px] font-mono text-neutral-400 bg-neutral-800 px-2 py-0.5 rounded-[2px] flex-shrink-0">
+                    {col.album_count || 0} Albums
+                  </span>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="text-center py-8 text-neutral-500 font-mono text-xs">
+              No collections available. Create one in the Collections tab first.
+            </div>
+          )}
+        </div>
+      </ObsidianModal>
     </div>
   );
 };

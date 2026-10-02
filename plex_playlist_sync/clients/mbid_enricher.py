@@ -244,3 +244,163 @@ class MbidEnricherClient:
         elif release_id:
             return f"https://coverartarchive.org/release/{release_id}/front-500"
         return None
+
+    def search_artist_mbid(self, artist_name: str) -> Optional[str]:
+        """Queries the mirror for the canonical artist MBID (alias for lookup_artist_mbid)."""
+        return self.lookup_artist_mbid(artist_name)
+
+    def get_artist_details(self, mbid: str) -> Optional[dict[str, Any]]:
+        """Queries the mirror for artist metadata (country, disambiguation, genres, urls)."""
+        if not mbid or not str(mbid).strip():
+            return None
+
+        clean_mbid = str(mbid).strip()
+        cache_key = f"artist_details:{clean_mbid.lower()}"
+        hit, cached_data = self._get_cached(cache_key)
+        if hit:
+            return cached_data
+
+        try:
+            url = f"{self.base_url}/ws/2/artist/{clean_mbid}"
+            params = {"inc": "genres+tags+url-rels", "fmt": "json"}
+            resp = self._session.get(url, params=params, timeout=self.timeout)
+            if resp.status_code != 200:
+                self._set_cached(cache_key, None)
+                return None
+
+            data = resp.json()
+            if not isinstance(data, dict):
+                self._set_cached(cache_key, None)
+                return None
+
+            genre_names: list[str] = []
+            for g in (data.get("genres") or []):
+                if isinstance(g, dict) and g.get("name"):
+                    genre_names.append(str(g["name"]))
+                elif isinstance(g, str):
+                    genre_names.append(g)
+
+            for t in (data.get("tags") or []):
+                if isinstance(t, dict) and t.get("name"):
+                    tname = str(t["name"])
+                    if tname not in genre_names:
+                        genre_names.append(tname)
+                elif isinstance(t, str) and t not in genre_names:
+                    genre_names.append(t)
+
+            urls: dict[str, str] = {}
+            relations = data.get("relations") or []
+            if isinstance(relations, list):
+                for rel in relations:
+                    if isinstance(rel, dict):
+                        rel_type = str(rel.get("type") or "").strip().lower()
+                        url_obj = rel.get("url")
+                        if isinstance(url_obj, dict):
+                            resource = url_obj.get("resource")
+                            if resource and rel_type:
+                                urls[rel_type] = str(resource)
+
+            result: dict[str, Any] = {
+                "id": data.get("id") or clean_mbid,
+                "name": data.get("name"),
+                "country": data.get("country"),
+                "disambiguation": data.get("disambiguation"),
+                "bio": data.get("disambiguation"),
+                "genres": genre_names,
+                "urls": urls,
+            }
+            self._set_cached(cache_key, result)
+            return result
+
+        except Exception as exc:
+            logger.warning(
+                "MbidEnricherClient: get_artist_details failed for '%s': %s",
+                clean_mbid,
+                exc,
+            )
+            return None
+
+    def get_artist_discography(self, mbid: str, limit: int = 100) -> list[dict[str, Any]]:
+        """Queries the mirror for full artist release groups and categorizes release types."""
+        if not mbid or not str(mbid).strip():
+            return []
+
+        clean_mbid = str(mbid).strip()
+        cache_key = f"discography:{clean_mbid.lower()}:{limit}"
+        hit, cached_data = self._get_cached(cache_key)
+        if hit:
+            return cached_data
+
+        try:
+            url = f"{self.base_url}/ws/2/release-group"
+            params = {"artist": clean_mbid, "limit": limit, "fmt": "json"}
+            resp = self._session.get(url, params=params, timeout=self.timeout)
+            if resp.status_code != 200:
+                self._set_cached(cache_key, [])
+                return []
+
+            data = resp.json()
+            if not isinstance(data, dict):
+                self._set_cached(cache_key, [])
+                return []
+
+            release_groups = data.get("release-groups") or []
+            results: list[dict[str, Any]] = []
+
+            for rg in release_groups:
+                if not isinstance(rg, dict):
+                    continue
+                rg_id = str(rg.get("id") or "")
+                title = str(rg.get("title") or "Unknown Album")
+                primary_type = str(rg.get("primary-type") or "Album")
+                raw_secondary = rg.get("secondary-types") or []
+                secondary_types = [str(st).lower() for st in raw_secondary if st]
+
+                first_release_date = rg.get("first-release-date")
+                year: Optional[int] = None
+                if first_release_date:
+                    date_str = str(first_release_date).strip()
+                    if len(date_str) >= 4 and date_str[:4].isdigit():
+                        year = int(date_str[:4])
+
+                pt_lower = primary_type.lower()
+                st_set = set(secondary_types)
+
+                if "live" in st_set:
+                    album_type = "live"
+                elif bool(st_set.intersection({"compilation", "soundtrack", "remix"})):
+                    album_type = "compilation"
+                elif pt_lower in ("single", "ep"):
+                    album_type = pt_lower
+                else:
+                    album_type = "album"
+
+                cover_url = (
+                    f"https://coverartarchive.org/release-group/{rg_id}/front-500"
+                    if rg_id
+                    else None
+                )
+
+                results.append(
+                    {
+                        "id": rg_id,
+                        "title": title,
+                        "primary_type": primary_type,
+                        "secondary_types": secondary_types,
+                        "first_release_date": first_release_date,
+                        "year": year,
+                        "album_type": album_type,
+                        "cover_url": cover_url,
+                    }
+                )
+
+            self._set_cached(cache_key, results)
+            return results
+
+        except Exception as exc:
+            logger.warning(
+                "MbidEnricherClient: get_artist_discography failed for '%s': %s",
+                clean_mbid,
+                exc,
+            )
+            return []

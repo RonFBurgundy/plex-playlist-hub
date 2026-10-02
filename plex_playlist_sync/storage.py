@@ -3257,6 +3257,19 @@ class Database:
             row = cur.fetchone()
             return self._map_library_album(row) if row else None
 
+    def get_library_album_by_release_group_id(
+        self, mb_release_group_id: str
+    ) -> Optional[dict[str, Any]]:
+        """Retrieves a library album by MusicBrainz release group ID."""
+        with self._lock:
+            cur = self.conn.execute(
+                "SELECT * FROM library_albums WHERE mb_release_group_id = ? LIMIT 1",
+                (str(mb_release_group_id),),
+            )
+            row = cur.fetchone()
+            return self._map_library_album(row) if row else None
+
+
     def list_library_albums(
         self,
         artist_id: Optional[str] = None,
@@ -3910,6 +3923,10 @@ class Database:
         res["monitored"] = bool(res.get("monitored", 1))
         if "album_count" in res and res["album_count"] is not None:
             res["album_count"] = int(res["album_count"])
+        else:
+            res["album_count"] = 0
+        if "preview_covers" not in res:
+            res["preview_covers"] = []
         return res
 
     def upsert_library_collection(
@@ -3952,7 +3969,7 @@ class Database:
         return col
 
     def get_library_collection(self, collection_id: str) -> Optional[dict[str, Any]]:
-        """Retrieves a single library collection by ID."""
+        """Retrieves a single library collection by ID with album count and preview covers."""
         with self._lock:
             cur = self.conn.execute(
                 """
@@ -3965,12 +3982,27 @@ class Database:
                 (str(collection_id),),
             )
             row = cur.fetchone()
-            return self._map_library_collection(row) if row else None
+            if not row:
+                return None
+            col = self._map_library_collection(row)
+            p_cur = self.conn.execute(
+                """
+                SELECT a.cover_url
+                FROM library_albums a
+                JOIN library_collection_albums ca ON a.id = ca.album_id
+                WHERE ca.collection_id = ? AND a.cover_url IS NOT NULL AND a.cover_url != ''
+                ORDER BY ca.order_index ASC
+                LIMIT 4
+                """,
+                (str(collection_id),),
+            )
+            col["preview_covers"] = [r[0] for r in p_cur.fetchall() if r[0]]
+            return col
 
     def list_library_collections(
         self, limit: int = 100, offset: int = 0, query: Optional[str] = None
     ) -> list[dict[str, Any]]:
-        """Lists library collections with optional search query and pagination."""
+        """Lists library collections with optional search query, album counts, preview covers, and pagination."""
         sql = """
             SELECT c.*, (
                 SELECT COUNT(*) FROM library_collection_albums ca WHERE ca.collection_id = c.id
@@ -3988,7 +4020,22 @@ class Database:
 
         with self._lock:
             cur = self.conn.execute(sql, params)
-            return [self._map_library_collection(row) for row in cur.fetchall()]
+            collections = [self._map_library_collection(row) for row in cur.fetchall()]
+            for col in collections:
+                col_id = col["id"]
+                p_cur = self.conn.execute(
+                    """
+                    SELECT a.cover_url
+                    FROM library_albums a
+                    JOIN library_collection_albums ca ON a.id = ca.album_id
+                    WHERE ca.collection_id = ? AND a.cover_url IS NOT NULL AND a.cover_url != ''
+                    ORDER BY ca.order_index ASC
+                    LIMIT 4
+                    """,
+                    (col_id,),
+                )
+                col["preview_covers"] = [r[0] for r in p_cur.fetchall() if r[0]]
+            return collections
 
     def delete_library_collection(self, collection_id: str) -> bool:
         """Deletes a library collection and cascades to collection albums."""

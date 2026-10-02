@@ -3,6 +3,7 @@ import type {
   ArtistItem,
   AlbumItem,
   TrackItem,
+  CollectionItem,
   LibraryStats,
   ScanStatus,
   LidarrStatus,
@@ -11,6 +12,7 @@ import {
   getArtists,
   getAlbums,
   getTracks,
+  getCollections,
   getLibraryStats,
   triggerScan as apiTriggerScan,
   getScanStatus as apiGetScanStatus,
@@ -21,13 +23,14 @@ import {
   toggleTrackMonitored as apiToggleTrackMonitored,
 } from '@/services/libraryService';
 
-export type LibraryTab = 'artists' | 'albums' | 'tracks';
+export type LibraryTab = 'artists' | 'albums' | 'tracks' | 'collections';
 
 export interface UseLibraryReturn {
   activeTab: LibraryTab;
   artists: ArtistItem[];
   albums: AlbumItem[];
   tracks: TrackItem[];
+  collections: CollectionItem[];
   stats: LibraryStats | null;
   searchQuery: string;
   isScanning: boolean;
@@ -50,6 +53,7 @@ export function useLibrary(): UseLibraryReturn {
   const [artists, setArtists] = useState<ArtistItem[]>([]);
   const [albums, setAlbums] = useState<AlbumItem[]>([]);
   const [tracks, setTracks] = useState<TrackItem[]>([]);
+  const [collections, setCollections] = useState<CollectionItem[]>([]);
   const [stats, setStats] = useState<LibraryStats | null>(null);
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [isScanning, setIsScanning] = useState<boolean>(false);
@@ -87,6 +91,9 @@ export function useLibrary(): UseLibraryReturn {
       } else if (activeTab === 'tracks') {
         const data = await getTracks(undefined, undefined, searchQuery);
         setTracks(data);
+      } else if (activeTab === 'collections') {
+        const data = await getCollections(searchQuery);
+        setCollections(data);
       }
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : 'Failed to load library items';
@@ -181,6 +188,7 @@ export function useLibrary(): UseLibraryReturn {
     artists,
     albums,
     tracks,
+    collections,
     stats,
     searchQuery,
     isScanning,

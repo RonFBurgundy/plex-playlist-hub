@@ -27,6 +27,7 @@ from plex_playlist_sync.api.dependencies import (
     get_db,
     get_discovery_client,
     get_lidarr_client,
+    get_mbid_enricher,
     get_plex_client,
     require_admin,
     require_core_tier,
@@ -35,6 +36,7 @@ from plex_playlist_sync.api.dependencies import (
 from plex_playlist_sync.clients.core_client import CoreClient
 from plex_playlist_sync.clients.discovery import DiscoveryClient
 from plex_playlist_sync.clients.lidarr import LidarrClient
+from plex_playlist_sync.clients.mbid_enricher import MbidEnricherClient
 from plex_playlist_sync.clients.plex import PlexClient
 from plex_playlist_sync.config import Config
 from plex_playlist_sync.library_availability import get_item_availability
@@ -602,26 +604,133 @@ def refresh_artist(
     artist_id: str,
     db: Database = Depends(get_db),
     discovery_client: DiscoveryClient = Depends(get_discovery_client),
+    enricher: MbidEnricherClient = Depends(get_mbid_enricher),
     _admin: dict[str, Any] = Depends(require_admin),
 ) -> dict[str, Any]:
-    """Refreshes artist discography from discovery metadata without overwriting existing files."""
+    """Refreshes artist discography from MusicBrainz/BrainzMash or discovery metadata."""
     artist = db.get_library_artist(artist_id)
     if artist is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Artist not found")
 
-    foreign_artist_id = artist.get("foreign_artist_id")
-    if not foreign_artist_id:
-        return {"success": False, "message": "Artist has no linked discovery foreign ID"}
+    # 1. Attempt MusicBrainz / BrainzMash resolution
+    mbid = artist.get("mbid")
+    if not mbid and artist.get("name"):
+        try:
+            mbid = enricher.lookup_artist_mbid(artist["name"])
+            if mbid:
+                with db._lock:
+                    db.conn.execute(
+                        "UPDATE library_artists SET mbid = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                        (mbid, artist_id),
+                    )
+                    db.conn.commit()
+                artist["mbid"] = mbid
+        except Exception as exc:
+            logger.warning("Error looking up artist MBID for %s: %s", artist.get("name"), exc)
 
-    artist_details: Optional[dict[str, Any]] = None
-    try:
-        artist_details = discovery_client.get_artist_details(foreign_artist_id)
-    except Exception as exc:
-        logger.warning(
-            "Discovery client get_artist_details failed for refresh of %s: %s",
-            foreign_artist_id,
-            exc,
-        )
+    mb_discography_found = False
+    if mbid:
+        try:
+            artist_details = enricher.get_artist_details(mbid)
+            if artist_details:
+                country = artist_details.get("country")
+                genres_raw = artist_details.get("genres")
+                genres_str = (
+                    ", ".join(genres_raw)
+                    if isinstance(genres_raw, (list, tuple))
+                    else (str(genres_raw) if genres_raw else None)
+                )
+                bio = artist_details.get("bio") or artist_details.get("disambiguation")
+
+                art_updates: list[str] = []
+                art_params: list[Any] = []
+                if country:
+                    art_updates.append("country = ?")
+                    art_params.append(country)
+                    artist["country"] = country
+
+                if genres_str:
+                    art_updates.append("genres = ?")
+                    art_params.append(genres_str)
+                    artist["genres"] = genres_str
+
+                if bio and not artist.get("bio"):
+                    art_updates.append("bio = ?")
+                    art_params.append(bio)
+                    artist["bio"] = bio
+
+                if art_updates:
+                    art_updates.append("updated_at = CURRENT_TIMESTAMP")
+                    sql = f"UPDATE library_artists SET {', '.join(art_updates)} WHERE id = ?"
+                    art_params.append(artist_id)
+                    with db._lock:
+                        db.conn.execute(sql, art_params)
+                        db.conn.commit()
+
+            discography = enricher.get_artist_discography(mbid)
+            if discography:
+                mb_discography_found = True
+                artist_path = artist.get("path")
+                for rg in discography:
+                    rg_id = rg.get("id")
+                    title = rg.get("title") or "Unknown Album"
+                    existing_alb = None
+                    if rg_id:
+                        existing_alb = db.get_library_album_by_release_group_id(rg_id)
+                    if not existing_alb:
+                        existing_alb = db.get_library_album_by_title(artist_id, title)
+
+                    if existing_alb:
+                        upd_album: list[str] = []
+                        upd_params: list[Any] = []
+                        if rg_id and existing_alb.get("mb_release_group_id") != rg_id:
+                            upd_album.append("mb_release_group_id = ?")
+                            upd_params.append(rg_id)
+                        if not existing_alb.get("cover_url") and rg.get("cover_url"):
+                            upd_album.append("cover_url = ?")
+                            upd_params.append(rg["cover_url"])
+                        if upd_album:
+                            upd_album.append("updated_at = CURRENT_TIMESTAMP")
+                            alb_sql = f"UPDATE library_albums SET {', '.join(upd_album)} WHERE id = ?"
+                            upd_params.append(existing_alb["id"])
+                            with db._lock:
+                                db.conn.execute(alb_sql, upd_params)
+                                db.conn.commit()
+                    else:
+                        new_album_id = str(uuid.uuid4())
+                        alb_path = str(Path(artist_path) / title) if artist_path else None
+                        db.upsert_library_album(
+                            LibraryAlbum(
+                                id=new_album_id,
+                                artist_id=artist_id,
+                                title=title,
+                                clean_title=clean_library_name(title),
+                                mb_release_group_id=rg_id,
+                                album_type=rg.get("album_type", "album"),
+                                year=rg.get("year"),
+                                cover_url=rg.get("cover_url"),
+                                monitored=bool(artist.get("monitored", True)),
+                                path=alb_path,
+                            )
+                        )
+        except Exception as exc:
+            logger.warning("Error fetching MusicBrainz discography for artist %s: %s", artist_id, exc)
+
+    # 2. Fall back to Deezer/iTunes if no MBID found or if MusicBrainz returned 0 release groups
+    if not mb_discography_found:
+        foreign_artist_id = artist.get("foreign_artist_id")
+        if not foreign_artist_id:
+            return {"success": False, "message": "Artist has no linked discovery foreign ID"}
+
+        artist_details: Optional[dict[str, Any]] = None
+        try:
+            artist_details = discovery_client.get_artist_details(foreign_artist_id)
+        except Exception as exc:
+            logger.warning(
+                "Discovery client get_artist_details failed for refresh of %s: %s",
+                foreign_artist_id,
+                exc,
+            )
 
     if artist_details:
         sections = [

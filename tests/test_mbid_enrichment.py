@@ -245,6 +245,99 @@ class TestMbidEnricher:
         assert client.get_cover_art_url(release_id="rel-456") == "https://coverartarchive.org/release/rel-456/front-500"
         assert client.get_cover_art_url() is None
 
+    def test_get_artist_discography(self):
+        client = MbidEnricherClient(base_url="https://api.brainzmash.org")
+        mock_resp = MagicMock(status_code=200)
+        mock_resp.json.return_value = {
+            "release-groups": [
+                {
+                    "id": "rg-studio",
+                    "title": "OK Computer",
+                    "primary-type": "Album",
+                    "secondary-types": [],
+                    "first-release-date": "1997-05-21",
+                },
+                {
+                    "id": "rg-ep",
+                    "title": "Airbag / How Am I Driving?",
+                    "primary-type": "EP",
+                    "secondary-types": [],
+                    "first-release-date": "1998-04-21",
+                },
+                {
+                    "id": "rg-single",
+                    "title": "Paranoid Android",
+                    "primary-type": "Single",
+                    "secondary-types": [],
+                    "first-release-date": "1997-05-26",
+                },
+                {
+                    "id": "rg-live",
+                    "title": "I Might Be Wrong: Live Recordings",
+                    "primary-type": "Album",
+                    "secondary-types": ["Live"],
+                    "first-release-date": "2001-11-12",
+                },
+                {
+                    "id": "rg-comp",
+                    "title": "Radiohead: The Best Of",
+                    "primary-type": "Album",
+                    "secondary-types": ["Compilation"],
+                    "first-release-date": "2008-06-02",
+                },
+            ]
+        }
+        with patch.object(client._session, "get", return_value=mock_resp):
+            disco = client.get_artist_discography("art-radiohead")
+
+        assert len(disco) == 5
+        types_by_id = {item["id"]: item["album_type"] for item in disco}
+        years_by_id = {item["id"]: item["year"] for item in disco}
+        covers_by_id = {item["id"]: item["cover_url"] for item in disco}
+
+        assert types_by_id["rg-studio"] == "album"
+        assert years_by_id["rg-studio"] == 1997
+        assert covers_by_id["rg-studio"] == "https://coverartarchive.org/release-group/rg-studio/front-500"
+
+        assert types_by_id["rg-ep"] == "ep"
+        assert years_by_id["rg-ep"] == 1998
+
+        assert types_by_id["rg-single"] == "single"
+        assert years_by_id["rg-single"] == 1997
+
+        assert types_by_id["rg-live"] == "live"
+        assert years_by_id["rg-live"] == 2001
+
+        assert types_by_id["rg-comp"] == "compilation"
+        assert years_by_id["rg-comp"] == 2008
+
+    def test_get_artist_details(self):
+        client = MbidEnricherClient(base_url="https://api.brainzmash.org")
+        mock_resp = MagicMock(status_code=200)
+        mock_resp.json.return_value = {
+            "id": "art-radiohead",
+            "name": "Radiohead",
+            "country": "GB",
+            "disambiguation": "British alternative rock band",
+            "genres": [{"name": "alternative rock", "count": 10}],
+            "tags": [{"name": "art rock", "count": 5}],
+            "relations": [
+                {
+                    "type": "wikidata",
+                    "url": {"resource": "https://www.wikidata.org/wiki/Q44190"},
+                }
+            ],
+        }
+        with patch.object(client._session, "get", return_value=mock_resp):
+            details = client.get_artist_details("art-radiohead")
+
+        assert details is not None
+        assert details["country"] == "GB"
+        assert "alternative rock" in details["genres"]
+        assert "art rock" in details["genres"]
+        assert details["urls"].get("wikidata") == "https://www.wikidata.org/wiki/Q44190"
+
+
 
 # ===========================================================================
 # 2. TestMutagenMbidTagging
@@ -663,6 +756,115 @@ class TestCollectionsStorageAndAPI:
         assert data["bio"] == "Artist biography"
         assert data["genres"] == "Electronic, Synthpop"
         assert data["country"] == "FR"
+
+    def test_collections_with_preview_covers(self, test_db: Database):
+        # 1. Create collection
+        col = LibraryCollection(id="col-preview", name="Test Cover Grid", monitored=True)
+        test_db.upsert_library_collection(col)
+
+        # 2. Insert albums with cover URLs
+        art = test_db.upsert_library_artist(LibraryArtist(id="art-p", name="Artist P"))
+        alb1 = test_db.upsert_library_album(
+            LibraryAlbum(
+                id="alb-p1",
+                artist_id=art["id"],
+                title="Album 1",
+                cover_url="https://caa.org/front1.jpg",
+            )
+        )
+        alb2 = test_db.upsert_library_album(
+            LibraryAlbum(
+                id="alb-p2",
+                artist_id=art["id"],
+                title="Album 2",
+                cover_url="https://caa.org/front2.jpg",
+            )
+        )
+
+        test_db.add_album_to_collection("col-preview", alb1["id"], order_index=1)
+        test_db.add_album_to_collection("col-preview", alb2["id"], order_index=2)
+
+        cols = test_db.list_library_collections()
+        target = next((c for c in cols if c["id"] == "col-preview"), None)
+        assert target is not None
+        assert target["album_count"] == 2
+        assert target["preview_covers"] == [
+            "https://caa.org/front1.jpg",
+            "https://caa.org/front2.jpg",
+        ]
+
+    def test_refresh_artist_via_musicbrainz(
+        self,
+        app_and_client,
+        test_db: Database,
+        test_config: Config,
+        seeded_users,
+    ):
+        _, client = app_and_client
+        admin = seeded_users["admin"]
+        headers = _auth_headers(admin, test_db, test_config)
+
+        art = test_db.upsert_library_artist(
+            LibraryArtist(id="art-mb-refresh", name="The Cure", mbid="mbid-cure")
+        )
+
+        mock_details = {
+            "id": "mbid-cure",
+            "name": "The Cure",
+            "country": "GB",
+            "disambiguation": "English rock band formed in 1978",
+            "genres": ["gothic rock", "post-punk"],
+            "urls": {},
+        }
+        mock_disco = [
+            {
+                "id": "rg-disintegration",
+                "title": "Disintegration",
+                "primary_type": "Album",
+                "secondary_types": [],
+                "first_release_date": "1989-05-02",
+                "year": 1989,
+                "album_type": "album",
+                "cover_url": "https://coverartarchive.org/release-group/rg-disintegration/front-500",
+            },
+            {
+                "id": "rg-boys-dont-cry",
+                "title": "Boys Don't Cry",
+                "primary_type": "Single",
+                "secondary_types": [],
+                "first_release_date": "1979-06-12",
+                "year": 1979,
+                "album_type": "single",
+                "cover_url": "https://coverartarchive.org/release-group/rg-boys-dont-cry/front-500",
+            },
+        ]
+
+        with patch("plex_playlist_sync.clients.mbid_enricher.MbidEnricherClient.get_artist_details", return_value=mock_details), \
+             patch("plex_playlist_sync.clients.mbid_enricher.MbidEnricherClient.get_artist_discography", return_value=mock_disco):
+            res = client.post(f"/api/library/artists/{art['id']}/refresh", headers=headers)
+
+        assert res.status_code == 200
+        body = res.json()
+        assert body["success"] is True
+
+        refreshed_artist = test_db.get_library_artist(art["id"])
+        assert refreshed_artist is not None
+        assert refreshed_artist["country"] == "GB"
+        assert "gothic rock" in refreshed_artist["genres"]
+        assert "English rock band" in refreshed_artist["bio"]
+
+        albums = test_db.list_library_albums(artist_id=art["id"])
+        assert len(albums) == 2
+        titles = {a["title"]: a for a in albums}
+        assert "Disintegration" in titles
+        assert titles["Disintegration"]["mb_release_group_id"] == "rg-disintegration"
+        assert titles["Disintegration"]["year"] == 1989
+        assert titles["Disintegration"]["album_type"] == "album"
+        assert "https://coverartarchive.org/release-group/rg-disintegration/front-500" in titles["Disintegration"]["cover_url"]
+
+        assert "Boys Don't Cry" in titles
+        assert titles["Boys Don't Cry"]["album_type"] == "single"
+
 
 
 # ===========================================================================

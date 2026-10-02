@@ -3,6 +3,7 @@ import type {
   ArtistItem,
   AlbumItem,
   TrackItem,
+  CollectionItem,
   LibraryStats,
   ScanStatus,
   LidarrStatus,
@@ -122,3 +123,63 @@ export async function startLidarrMigration(autoSwitch: boolean = true): Promise<
     body: { auto_switch: autoSwitch },
   });
 }
+
+export async function getCollections(query?: string): Promise<CollectionItem[]> {
+  const params = new URLSearchParams();
+  if (query) params.set('query', query);
+  params.set('limit', '500');
+  const res = await apiRequest<CollectionItem[]>(`/api/library/collections?${params.toString()}`);
+  return res || [];
+}
+
+export async function getCollectionDetail(id: string): Promise<CollectionItem> {
+  return apiRequest<CollectionItem>(`/api/library/collections/${id}`);
+}
+
+export async function createCollection(data: {
+  name: string;
+  summary?: string;
+  poster_url?: string;
+  monitored?: boolean;
+}): Promise<CollectionItem> {
+  return apiRequest<CollectionItem>('/api/library/collections', {
+    method: 'POST',
+    body: data,
+  });
+}
+
+export async function deleteCollection(id: string): Promise<boolean> {
+  const res = await apiRequest<{ success: boolean; id: string }>(`/api/library/collections/${id}`, {
+    method: 'DELETE',
+  });
+  return Boolean(res?.success);
+}
+
+export async function addAlbumToCollection(
+  collectionId: string,
+  albumId: string | number,
+  orderIndex: number = 0
+): Promise<boolean> {
+  const res = await apiRequest<{ success: boolean; collection_id: string; album_id: string }>(
+    `/api/library/collections/${collectionId}/albums`,
+    {
+      method: 'POST',
+      body: { album_id: String(albumId), order_index: orderIndex },
+    }
+  );
+  return Boolean(res?.success);
+}
+
+export async function removeAlbumFromCollection(
+  collectionId: string,
+  albumId: string | number
+): Promise<boolean> {
+  const res = await apiRequest<{ success: boolean; collection_id: string; album_id: string }>(
+    `/api/library/collections/${collectionId}/albums/${albumId}`,
+    {
+      method: 'DELETE',
+    }
+  );
+  return Boolean(res?.success);
+}
+

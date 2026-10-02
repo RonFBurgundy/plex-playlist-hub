@@ -86,6 +86,21 @@ export interface MissingTrack {
   created_at: string;
 }
 
+export interface CollectionItem {
+  id: string;
+  name: string;
+  clean_name?: string;
+  summary?: string;
+  poster_url?: string;
+  monitored: boolean;
+  foreign_id?: string;
+  album_count?: number;
+  preview_covers?: string[];
+  albums?: AlbumItem[];
+  created_at?: string;
+  updated_at?: string;
+}
+
 export interface ArtistItem {
   id: number | string;
   name: string;
@@ -93,9 +108,13 @@ export interface ArtistItem {
   overview?: string;
   artist_type?: string;
   disambiguation?: string;
-  genres?: string[];
+  genres?: string[] | string;
   images?: Array<{ cover_type: string; url: string }>;
   image_url?: string;
+  banner_url?: string;
+  bio?: string;
+  country?: string;
+  mbid?: string;
   album_count?: number;
   track_count?: number;
 }
@@ -112,6 +131,8 @@ export interface AlbumItem {
   images?: Array<{ cover_type: string; url: string }>;
   cover_url?: string;
   track_count?: number;
+  mb_release_group_id?: string;
+  mb_release_id?: string;
 }
 
 export interface TrackItem {
