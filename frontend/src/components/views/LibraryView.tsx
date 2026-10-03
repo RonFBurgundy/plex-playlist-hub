@@ -1135,7 +1135,44 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
         </div>
       )}
 
-      {/* Scan Banner / Actions */}
+      {/* Live Scan Telemetry Banner */}
+      {(isScanning || scanStatus?.is_scanning) && (
+        <MachinedCard className="p-4 border-[#e5a00d]/50 bg-[#161616]/90 shadow-lg space-y-2.5">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div className="flex items-center gap-3">
+              <RefreshCw className="h-5 w-5 text-[#e5a00d] animate-spin flex-shrink-0" />
+              <div>
+                <h4 className="text-sm font-bold text-white font-mono flex items-center gap-2">
+                  <span>Library Scan In Progress</span>
+                  <span className="text-xs text-[#e5a00d] font-normal">
+                    {scanStatus?.processed_files || 0} / {scanStatus?.total_files_found || 0} files ({Math.round(((scanStatus?.processed_files || 0) / Math.max(1, scanStatus?.total_files_found || 1)) * 100)}%)
+                  </span>
+                </h4>
+                <p className="text-xs text-neutral-300 font-mono mt-0.5">
+                  {scanStatus?.artists_created || 0} artists &bull; {scanStatus?.albums_created || 0} albums &bull; {scanStatus?.files_indexed || 0} files indexed
+                </p>
+              </div>
+            </div>
+
+            <TapeDeckButton
+              size="sm"
+              variant="danger"
+              onClick={cancelScan}
+              className="self-start sm:self-center flex-shrink-0"
+            >
+              Cancel Scan
+            </TapeDeckButton>
+          </div>
+
+          {scanStatus?.current_file && (
+            <p className="truncate font-mono text-[10px] text-neutral-400">
+              {scanStatus.current_file}
+            </p>
+          )}
+        </MachinedCard>
+      )}
+
+      {/* Tab Bar / Actions */}
       <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-4">
         <TapeTransportBay className="flex items-center gap-1.5 overflow-x-auto">
           {tabs.map((tab) => (
@@ -1175,23 +1212,6 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
           </div>
         )}
       </div>
-
-      {/* Live Scan Status Indicator */}
-      {isScanning && scanStatus && (
-        <div className="p-3 bg-[#161616] border border-[#e5a00d]/40 rounded-[4px] flex items-center justify-between text-xs font-mono">
-          <div className="flex items-center gap-2.5">
-            <Radio className="h-4 w-4 text-[#e5a00d] animate-pulse" />
-            <span className="text-neutral-300">
-              Scanning disk: {scanStatus.processed_tracks} / {scanStatus.total_tracks} tracks processed
-            </span>
-          </div>
-          {scanStatus.current_path && (
-            <span className="text-neutral-500 truncate max-w-xs hidden sm:inline">
-              {scanStatus.current_path}
-            </span>
-          )}
-        </div>
-      )}
 
       {/* Lidarr Migration Panel (if present) */}
       {lidarrStatus && lidarrStatus.is_migrating && (

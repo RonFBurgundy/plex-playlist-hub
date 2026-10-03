@@ -103,9 +103,66 @@ export function useLibrary(): UseLibraryReturn {
     }
   }, [activeTab, searchQuery]);
 
+  const loadDataRef = useRef(loadData);
+  useEffect(() => {
+    loadDataRef.current = loadData;
+  }, [loadData]);
+
+  const startScanPolling = useCallback(() => {
+    stopScanPolling();
+    scanPollRef.current = window.setInterval(async () => {
+      try {
+        const [status, statsData] = await Promise.all([
+          apiGetScanStatus(),
+          getLibraryStats().catch(() => null),
+        ]);
+        setScanStatus(status);
+        if (statsData) {
+          setStats(statsData);
+        }
+
+        const isCurrentlyScanning = Boolean(
+          status.is_scanning || status.status === 'scanning' || status.status === 'running'
+        );
+        if (!isCurrentlyScanning) {
+          setIsScanning(false);
+          stopScanPolling();
+          loadDataRef.current();
+        }
+      } catch {
+        setIsScanning(false);
+        stopScanPolling();
+      }
+    }, 1500);
+  }, [stopScanPolling]);
+
   useEffect(() => {
     loadData();
   }, [loadData]);
+
+  // Check if a scan is already running on mount
+  useEffect(() => {
+    let isCancelled = false;
+    const checkInitialScan = async () => {
+      try {
+        const status = await apiGetScanStatus();
+        if (
+          !isCancelled &&
+          (status.is_scanning || status.status === 'scanning' || status.status === 'running')
+        ) {
+          setIsScanning(true);
+          setScanStatus(status);
+          startScanPolling();
+        }
+      } catch {
+        // ignore error fetching initial scan status
+      }
+    };
+    checkInitialScan();
+    return () => {
+      isCancelled = true;
+    };
+  }, [startScanPolling]);
 
   useEffect(() => {
     return () => {
@@ -119,29 +176,14 @@ export function useLibrary(): UseLibraryReturn {
       setIsScanning(true);
       try {
         await apiTriggerScan(pruneMissing);
-        stopScanPolling();
-
-        scanPollRef.current = window.setInterval(async () => {
-          try {
-            const status = await apiGetScanStatus();
-            setScanStatus(status);
-            if (status.status !== 'running') {
-              setIsScanning(false);
-              stopScanPolling();
-              loadData();
-            }
-          } catch {
-            setIsScanning(false);
-            stopScanPolling();
-          }
-        }, 1500);
+        startScanPolling();
       } catch (err: unknown) {
         const msg = err instanceof Error ? err.message : 'Failed to trigger library scan';
         setError(msg);
         setIsScanning(false);
       }
     },
-    [loadData, stopScanPolling]
+    [startScanPolling]
   );
 
   const cancelScan = useCallback(async () => {
@@ -150,8 +192,9 @@ export function useLibrary(): UseLibraryReturn {
     } finally {
       setIsScanning(false);
       stopScanPolling();
+      await loadData();
     }
-  }, [stopScanPolling]);
+  }, [loadData, stopScanPolling]);
 
   const toggleArtistMonitored = useCallback(
     async (artistId: number | string, monitored: boolean) => {

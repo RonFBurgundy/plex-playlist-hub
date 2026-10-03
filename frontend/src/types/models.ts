@@ -239,9 +239,21 @@ export interface AudioPreviewTrack {
 }
 
 export interface ScanStatus {
-  status: 'idle' | 'running' | 'completed' | 'failed';
-  processed_tracks: number;
-  total_tracks: number;
+  status: 'idle' | 'running' | 'completed' | 'failed' | 'scanning' | 'cancelled' | 'skipped';
+  is_scanning?: boolean;
+  total_files_found?: number;
+  processed_files?: number;
+  files_indexed?: number;
+  artists_created?: number;
+  albums_created?: number;
+  tracks_created?: number;
+  files_pruned?: number;
+  current_file?: string | null;
+  error?: string | null;
+  started_at?: string | null;
+  completed_at?: string | null;
+  processed_tracks?: number;
+  total_tracks?: number;
   current_path?: string;
 }
 
@@ -326,5 +338,16 @@ export interface SystemLogItem {
   name: string;
   message: string;
   raw?: string;
+}
+
+export interface ScheduledTaskItem {
+  id: string;
+  name: string;
+  description: string;
+  interval: string;
+  status: 'idle' | 'running' | 'paused' | 'failed';
+  last_run_at?: string | null;
+  can_trigger: boolean;
+  can_cancel: boolean;
 }
 

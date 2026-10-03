@@ -1,5 +1,6 @@
 import { apiRequest } from './apiClient';
 import type {
+  ScheduledTaskItem,
   SystemEventsResponse,
   SystemLogItem,
 } from '@/types/models';
@@ -61,4 +62,31 @@ export async function clearSystemLogs(): Promise<{ success: boolean }> {
 
 export function getSystemLogDownloadUrl(): string {
   return '/api/system/logs/download';
+}
+
+export async function getScheduledTasks(): Promise<ScheduledTaskItem[]> {
+  const res = await apiRequest<ScheduledTaskItem[]>('/api/system/tasks');
+  return res || [];
+}
+
+export async function triggerScheduledTask(
+  taskId: string
+): Promise<{ success: boolean; message: string }> {
+  return await apiRequest<{ success: boolean; message: string }>(
+    `/api/system/tasks/${taskId}/run`,
+    {
+      method: 'POST',
+    }
+  );
+}
+
+export async function cancelScheduledTask(
+  taskId: string
+): Promise<{ success: boolean; message: string }> {
+  return await apiRequest<{ success: boolean; message: string }>(
+    `/api/system/tasks/${taskId}/cancel`,
+    {
+      method: 'POST',
+    }
+  );
 }

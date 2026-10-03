@@ -13,6 +13,7 @@ from plex_playlist_sync.api.routes.system import (
     _ping_download_clients,
     _ping_indexers,
     _ping_plex,
+    get_all_scheduled_tasks,
     log_ring_buffer,
 )
 from plex_playlist_sync.auth import create_session_token, get_or_create_secret_key
@@ -561,4 +562,113 @@ def test_system_logs_api_and_stream(app_and_client, seeded_users, secret_key, te
     # Direct clear verifies empty buffer
     log_ring_buffer.clear()
     assert len(log_ring_buffer.get_logs()) == 0
+
+
+# =============================================================================
+# Scheduled Tasks Registry & Worker Control Tests
+# =============================================================================
+
+
+def test_get_scheduled_tasks_api(app_and_client, seeded_users, secret_key, test_db):
+    """Tests GET /api/system/tasks: admin gets full task registry, non-admin gets 403."""
+    _, client = app_and_client
+    alice_cookies = create_auth_cookies(test_db, seeded_users["alice"], secret_key)
+    admin_cookies = create_auth_cookies(test_db, seeded_users["admin"], secret_key)
+
+    # 1. Non-admin gets 403
+    resp_non_admin = client.get("/api/system/tasks", cookies=alice_cookies)
+    assert resp_non_admin.status_code == 403
+    assert "Administrator access required" in resp_non_admin.json()["detail"]
+
+    # 2. Admin gets 200 with all core background tasks
+    resp_admin = client.get("/api/system/tasks", cookies=admin_cookies)
+    assert resp_admin.status_code == 200
+    tasks = resp_admin.json()
+    assert isinstance(tasks, list)
+    task_ids = {t["id"] for t in tasks}
+
+    expected_tasks = {
+        "filesystem_scan",
+        "playlist_sync",
+        "wanted_backlog_sweep",
+        "indexer_rss_sync",
+        "lidarr_auto_trickle",
+    }
+    assert expected_tasks.issubset(task_ids)
+
+    # Verify task structure
+    for t in tasks:
+        assert "id" in t
+        assert "name" in t
+        assert "description" in t
+        assert "interval" in t
+        assert "status" in t
+        assert "can_trigger" in t
+        assert "can_cancel" in t
+
+
+def test_run_scheduled_task_api(app_and_client, seeded_users, secret_key, test_db):
+    """Tests POST /api/system/tasks/{task_id}/run: triggers task or returns 404 for invalid ID."""
+    _, client = app_and_client
+    alice_cookies = create_auth_cookies(test_db, seeded_users["alice"], secret_key)
+    admin_cookies = create_auth_cookies(test_db, seeded_users["admin"], secret_key)
+
+    # 1. Non-admin gets 403
+    resp_non_admin = client.post(
+        "/api/system/tasks/wanted_backlog_sweep/run", cookies=alice_cookies
+    )
+    assert resp_non_admin.status_code == 403
+
+    # 2. Admin successfully triggers wanted_backlog_sweep
+    with patch("plex_playlist_sync.backlog_worker.backlog_worker.poll_once") as mock_sweep:
+        resp_admin = client.post(
+            "/api/system/tasks/wanted_backlog_sweep/run", cookies=admin_cookies
+        )
+        assert resp_admin.status_code == 200
+        data = resp_admin.json()
+        assert data["success"] is True
+        assert "dispatched" in data["message"]
+
+    # 3. Invalid task ID returns 404
+    resp_invalid = client.post(
+        "/api/system/tasks/nonexistent/run", cookies=admin_cookies
+    )
+    assert resp_invalid.status_code == 404
+    assert "not found" in resp_invalid.json()["detail"]
+
+
+def test_cancel_scheduled_task_api(app_and_client, seeded_users, secret_key, test_db):
+    """Tests POST /api/system/tasks/{task_id}/cancel: cancels cancellable task or errors."""
+    _, client = app_and_client
+    alice_cookies = create_auth_cookies(test_db, seeded_users["alice"], secret_key)
+    admin_cookies = create_auth_cookies(test_db, seeded_users["admin"], secret_key)
+
+    # 1. Non-admin gets 403
+    resp_non_admin = client.post(
+        "/api/system/tasks/filesystem_scan/cancel", cookies=alice_cookies
+    )
+    assert resp_non_admin.status_code == 403
+
+    # 2. Admin cancels filesystem_scan -> 200
+    with patch("plex_playlist_sync.library_scanner.library_scanner.cancel_scan") as mock_cancel:
+        mock_cancel.return_value = {"status": "cancelled", "is_scanning": False}
+        resp_admin = client.post(
+            "/api/system/tasks/filesystem_scan/cancel", cookies=admin_cookies
+        )
+        assert resp_admin.status_code == 200
+        assert resp_admin.json()["success"] is True
+
+    # 3. Task without cancellation support returns 400
+    resp_no_cancel = client.post(
+        "/api/system/tasks/playlist_sync/cancel", cookies=admin_cookies
+    )
+    assert resp_no_cancel.status_code == 400
+    assert "does not support cancellation" in resp_no_cancel.json()["detail"]
+
+    # 4. Invalid task ID returns 404
+    resp_invalid = client.post(
+        "/api/system/tasks/nonexistent/cancel", cookies=admin_cookies
+    )
+    assert resp_invalid.status_code == 404
+
 
