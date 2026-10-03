@@ -10,3 +10,4 @@ export * from './systemService';
 export * from './plexPlaylistService';
 export * from './scrobbleService';
 export * from './mixService';
+export * from './issueService';

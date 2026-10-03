@@ -1,6 +1,6 @@
 # Backlog (queued 2026-10-03, in order)
 
-1. **Issue reporting UI**: "Report issue" on album/artist detail in Discover, plus a "My issues" list. The server API already exists and is user-accessible.
+1. ~~**Issue reporting UI**~~ (done): "Report issue" on album/artist detail in Discover, plus a "My issues" list. The server API already exists and is user-accessible.
 2. **User management (Settings → Users, admin, core-only)**:
    - list, view and delete users
    - edit the request quota per user

@@ -9,6 +9,8 @@ import {
   SearchBar,
   ObsidianModal,
 } from '@/components/ui';
+import { IssueReportButton } from '@/components/issues';
+import type { UseIssuesReturn } from '@/hooks/useIssues';
 import { getDiscoveryAlbumDetail } from '@/services/discoveryService';
 
 export interface DiscoverViewProps {
@@ -18,6 +20,7 @@ export interface DiscoverViewProps {
   isPreviewPlaying?: boolean;
   onRequest: (item: DiscoveryItem) => Promise<void>;
   requestedIds: Set<string>;
+  issuesHook: UseIssuesReturn;
 }
 
 export const DiscoverView: React.FC<DiscoverViewProps> = ({
@@ -27,6 +30,7 @@ export const DiscoverView: React.FC<DiscoverViewProps> = ({
   isPreviewPlaying = false,
   onRequest,
   requestedIds,
+  issuesHook,
 }) => {
   const [selectedAlbum, setSelectedAlbum] = useState<DiscoveryItem | null>(null);
   const [albumDetails, setAlbumDetails] = useState<{
@@ -333,6 +337,15 @@ export const DiscoverView: React.FC<DiscoverViewProps> = ({
                   <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-[2px] text-[10px] font-mono font-bold bg-emerald-500/90 text-black">
                     <Check className="h-3 w-3" /> In Library
                   </span>
+                )}
+                {Boolean(selectedAlbum.in_library || selectedAlbum.status === 'in_library' || selectedAlbum.status === 'available') && (
+                  <div>
+                    <IssueReportButton
+                      mediaTitle={selectedAlbum.title}
+                      artist={selectedAlbum.artist}
+                      issuesHook={issuesHook}
+                    />
+                  </div>
                 )}
               </div>
             </div>

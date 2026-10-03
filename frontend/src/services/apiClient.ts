@@ -21,6 +21,17 @@ export interface ApiRequestOptions extends Omit<RequestInit, 'body'> {
   body?: unknown;
 }
 
+/** Error carrying the HTTP status so callers can map specific failures. */
+export class ApiError extends Error {
+  readonly status: number;
+
+  constructor(message: string, status: number) {
+    super(message);
+    this.name = 'ApiError';
+    this.status = status;
+  }
+}
+
 export async function apiRequest<T>(
   endpoint: string,
   options: ApiRequestOptions = {}
@@ -94,7 +105,7 @@ export async function apiRequest<T>(
         detailMsg = errorData.detail.map((e) => e.msg).join('; ');
       }
     }
-    throw new Error(detailMsg);
+    throw new ApiError(detailMsg, response.status);
   }
 
   return data as T;

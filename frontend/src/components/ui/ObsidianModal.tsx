@@ -1,6 +1,9 @@
-import React, { useEffect } from 'react';
+import React, { useEffect, useRef } from 'react';
 import { X } from 'lucide-react';
 import { TapeDeckButton } from './TapeDeckButton';
+
+// Open modals, topmost last. Only the topmost handles Escape.
+const openModalStack: symbol[] = [];
 
 export interface ObsidianModalProps {
   isOpen: boolean;
@@ -21,20 +24,34 @@ export const ObsidianModal: React.FC<ObsidianModalProps> = ({
   footer,
   maxWidth = 'sm:max-w-2xl',
 }) => {
+  const idRef = useRef<symbol>(Symbol('obsidian-modal'));
+
+  useEffect(() => {
+    if (!isOpen) return;
+    const id = idRef.current;
+    openModalStack.push(id);
+    document.body.style.overflow = 'hidden';
+    return () => {
+      const idx = openModalStack.indexOf(id);
+      if (idx !== -1) openModalStack.splice(idx, 1);
+      if (openModalStack.length === 0) document.body.style.overflow = '';
+    };
+  }, [isOpen]);
+
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape' && isOpen) {
+      if (
+        e.key === 'Escape' &&
+        isOpen &&
+        openModalStack[openModalStack.length - 1] === idRef.current
+      ) {
         onClose();
       }
     };
     if (isOpen) {
-      document.body.style.overflow = 'hidden';
       window.addEventListener('keydown', handleKeyDown);
-    } else {
-      document.body.style.overflow = '';
     }
     return () => {
-      document.body.style.overflow = '';
       window.removeEventListener('keydown', handleKeyDown);
     };
   }, [isOpen, onClose]);

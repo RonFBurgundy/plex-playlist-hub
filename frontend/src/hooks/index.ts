@@ -7,3 +7,4 @@ export * from './useQueue';
 export * from './usePlexPlaylists';
 export * from './useScrobbling';
 export * from './useTailoredMixes';
+export * from './useIssues';

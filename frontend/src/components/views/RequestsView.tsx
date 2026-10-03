@@ -8,15 +8,21 @@ import {
   MachinedCard,
   QuotaBadge,
 } from '@/components/ui';
+import { IssueReportButton, MyIssuesList } from '@/components/issues';
+import type { UseIssuesReturn } from '@/hooks/useIssues';
 
 export interface RequestsViewProps {
   requestsHook: UseRequestsReturn;
   isAdmin?: boolean;
+  issuesHook: UseIssuesReturn;
+  currentUserId?: string | number;
 }
 
 export const RequestsView: React.FC<RequestsViewProps> = ({
   requestsHook,
   isAdmin = false,
+  issuesHook,
+  currentUserId,
 }) => {
   const {
     requests,
@@ -31,6 +37,7 @@ export const RequestsView: React.FC<RequestsViewProps> = ({
   } = requestsHook;
 
   const [processingId, setProcessingId] = useState<number | null>(null);
+  const [section, setSection] = useState<'requests' | 'issues'>('requests');
 
   const filters: Array<{ id: RequestFilter; label: string }> = [
     { id: 'all', label: 'All' },
@@ -107,19 +114,31 @@ export const RequestsView: React.FC<RequestsViewProps> = ({
             <TapeDeckButton
               key={f.id}
               size="sm"
-              active={filter === f.id}
-              onClick={() => setFilter(f.id)}
+              active={section === 'requests' && filter === f.id}
+              onClick={() => {
+                setSection('requests');
+                setFilter(f.id);
+              }}
             >
               {f.label}
             </TapeDeckButton>
           ))}
+          <TapeDeckButton
+            size="sm"
+            active={section === 'issues'}
+            onClick={() => setSection('issues')}
+          >
+            My issues
+          </TapeDeckButton>
         </TapeTransportBay>
 
         {quota && <QuotaBadge quota={quota} />}
       </div>
 
+      {section === 'issues' && <MyIssuesList issuesHook={issuesHook} />}
+
       {/* Loading state */}
-      {isLoading && (
+      {section === 'requests' && isLoading && (
         <div className="flex flex-col items-center justify-center py-20 gap-3">
           <Loader2 className="h-8 w-8 text-[#e5a00d] animate-spin" />
           <span className="text-xs uppercase tracking-widest text-neutral-400 font-mono">
@@ -129,7 +148,7 @@ export const RequestsView: React.FC<RequestsViewProps> = ({
       )}
 
       {/* Error state */}
-      {error && !isLoading && (
+      {section === 'requests' && error && !isLoading && (
         <div className="p-4 bg-red-950/40 border border-red-800/50 rounded-[4px] text-xs text-red-300 font-mono flex items-center gap-2">
           <AlertCircle className="h-4 w-4 shrink-0" />
           <span>{error}</span>
@@ -137,13 +156,13 @@ export const RequestsView: React.FC<RequestsViewProps> = ({
       )}
 
       {/* Requests List */}
-      {!isLoading && requests.length === 0 && !error && (
+      {section === 'requests' && !isLoading && requests.length === 0 && !error && (
         <div className="text-center py-16 text-neutral-500 font-mono text-sm">
           No requests in this queue.
         </div>
       )}
 
-      {!isLoading && requests.length > 0 && (
+      {section === 'requests' && !isLoading && requests.length > 0 && (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
           {requests.map((req) => {
             const isBusy = processingId === req.id;
@@ -183,6 +202,17 @@ export const RequestsView: React.FC<RequestsViewProps> = ({
 
                 {/* Actions */}
                 <div className="flex items-center justify-end gap-2 pt-2 border-t border-[#1f1f1f]">
+                  {(req.status === 'fulfilled' || req.status === 'available') &&
+                    currentUserId !== undefined &&
+                    (req.user_id ?? req.requested_by_id) !== undefined &&
+                    String(req.user_id ?? req.requested_by_id) === String(currentUserId) && (
+                      <IssueReportButton
+                        mediaTitle={req.title}
+                        artist={req.artist}
+                        requestId={String(req.id)}
+                        issuesHook={issuesHook}
+                      />
+                    )}
                   {isAdmin && req.status === 'pending' && (
                     <>
                       <TapeDeckButton

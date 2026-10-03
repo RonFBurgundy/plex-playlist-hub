@@ -60,6 +60,8 @@ export interface RequestItem {
   album?: string;
   status: 'pending' | 'approved' | 'rejected' | 'fulfilled' | 'available';
   requested_by_id?: number;
+  /** Owner id as returned by the backend DB row (plex id stored as TEXT, so usually a string). */
+  user_id?: string | number;
   requested_by_username?: string;
   created_at: string;
   cover_url?: string;
@@ -595,3 +597,55 @@ export interface TailoredMixResult {
 export interface MixGenerateResponse {
   status: string;
 }
+
+// --- Issue reporting ---
+
+export type IssueType =
+  | 'audio_quality'
+  | 'corrupted_file'
+  | 'wrong_release'
+  | 'missing_tracks'
+  | 'incorrect_tags'
+  | 'other';
+
+export type IssueStatus = 'open' | 'in_progress' | 'resolved';
+
+export interface Issue {
+  id: number;
+  media_title: string;
+  artist: string;
+  issue_type: IssueType;
+  problem_details: string;
+  status: IssueStatus;
+  user_id: number;
+  request_id: string | null;
+  username: string | null;
+  created_at: string | null;
+  updated_at: string | null;
+}
+
+export interface CreateIssuePayload {
+  media_title: string;
+  artist: string;
+  issue_type: IssueType;
+  problem_details: string;
+  request_id?: string;
+}
+
+export const ISSUE_TYPE_LABELS: Record<IssueType, string> = {
+  audio_quality: 'Audio quality',
+  corrupted_file: 'Corrupted file',
+  wrong_release: 'Wrong release',
+  missing_tracks: 'Missing tracks',
+  incorrect_tags: 'Incorrect tags',
+  other: 'Other',
+};
+
+export const ISSUE_STATUS_LABELS: Record<IssueStatus, string> = {
+  open: 'Open',
+  in_progress: 'In progress',
+  resolved: 'Resolved',
+};
+
+export const ISSUE_MAX_TITLE = 300;
+export const ISSUE_MAX_DETAILS = 2000;

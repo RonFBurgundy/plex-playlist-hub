@@ -6,6 +6,7 @@ import {
   useAudioPlayer,
   useDiscovery,
   useRequests,
+  useIssues,
   useLibrary,
   useQueue,
 } from '@/hooks';
@@ -39,6 +40,7 @@ export const App: React.FC = () => {
   const audioPlayer = useAudioPlayer();
   const discovery = useDiscovery();
   const requestsHook = useRequests();
+  const issuesHook = useIssues(auth.user?.id);
   const libraryHook = useLibrary(auth.canUseAdminUi);
   const queueHook = useQueue(auth.canUseAdminUi);
 
@@ -254,6 +256,7 @@ export const App: React.FC = () => {
                 isPreviewPlaying={audioPlayer.isPlaying}
                 onRequest={handleRequestItem}
                 requestedIds={requestedIds}
+                issuesHook={issuesHook}
               />
             )}
 
@@ -261,6 +264,8 @@ export const App: React.FC = () => {
               <RequestsView
                 requestsHook={requestsHook}
                 isAdmin={auth.canUseAdminUi}
+                issuesHook={issuesHook}
+                currentUserId={auth.user?.id}
               />
             )}
 

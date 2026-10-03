@@ -3356,8 +3356,39 @@ class Database:
             row = cur.fetchone()
             return dict(row) if row else None
 
+    def count_recent_issues(self, user_id: str, hours: int = 24) -> int:
+        """Counts issues created by ``user_id`` within the rolling window (from the DB, restart-safe)."""
+        with self._lock:
+            cur = self.conn.execute(
+                "SELECT COUNT(*) FROM media_issues WHERE user_id = ? AND created_at >= datetime('now', ?)",
+                (str(user_id), f"-{int(hours)} hours"),
+            )
+            return int(cur.fetchone()[0])
+
+    def find_active_duplicate_issue(
+        self, user_id: str, media_title: str, artist: str, issue_type: str
+    ) -> Optional[dict[str, Any]]:
+        """Returns the user's open/in_progress issue matching title+artist (case-insensitive) and type, if any."""
+        with self._lock:
+            cur = self.conn.execute(
+                """
+                SELECT id, status FROM media_issues
+                WHERE user_id = ? AND status IN ('open', 'in_progress')
+                  AND lower(media_title) = lower(?) AND lower(artist) = lower(?)
+                  AND issue_type = ?
+                ORDER BY created_at DESC LIMIT 1
+                """,
+                (str(user_id), str(media_title), str(artist), str(issue_type).lower()),
+            )
+            row = cur.fetchone()
+            return dict(row) if row else None
+
     def list_issues(
-        self, status: Optional[str] = None, user_id: Optional[str] = None
+        self,
+        status: Optional[str] = None,
+        user_id: Optional[str] = None,
+        media_title: Optional[str] = None,
+        artist: Optional[str] = None,
     ) -> list[dict[str, Any]]:
         """Lists media issues filtered by status and/or user_id with username joined."""
         query = """
@@ -3375,6 +3406,12 @@ class Database:
         if user_id:
             query += " AND i.user_id = ?"
             params.append(str(user_id))
+        if media_title:
+            query += " AND lower(i.media_title) = lower(?)"
+            params.append(str(media_title))
+        if artist:
+            query += " AND lower(i.artist) = lower(?)"
+            params.append(str(artist))
         query += " ORDER BY i.created_at DESC"
 
         with self._lock:
