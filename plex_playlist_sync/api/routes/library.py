@@ -2061,6 +2061,7 @@ def manual_import_commit(
             meta["title"] = track["title"]
             meta["track_number"] = track["track_number"]
             meta["disc_number"] = track["disc_number"]
+            meta["total_discs"] = _album_total_discs(db, album_id, disc, inspected.get("total_discs"))
             if album.get("year"):
                 meta["year"] = album["year"]
                 meta["release_year"] = album["year"]
@@ -2173,6 +2174,25 @@ def manual_import_commit(
 # 5. Preview & Batch Renamer
 # -------------------------------------------------------------------------
 
+def _album_total_discs(db: Database, album_id: str, *extra: Any) -> int:
+    """Disc count of an album: the highest disc number in the catalog (or in ``extra`` hints), minimum 1.
+
+    Needed so disc 1 of a multi-disc release is routed to the multi-disc naming format too.
+    """
+    discs: list[int] = []
+    for value in extra:
+        try:
+            discs.append(int(value))
+        except (TypeError, ValueError):
+            pass
+    for trk in db.list_library_tracks(album_id=album_id, limit=1000):
+        try:
+            discs.append(int(trk.get("disc_number") or 1))
+        except (TypeError, ValueError):
+            pass
+    return max([1, *discs])
+
+
 @router.post("/rename/preview", dependencies=[Depends(require_core_tier)])
 def rename_preview(
     body: Optional[RenamePreviewRequest] = None,
@@ -2228,6 +2248,7 @@ def rename_preview(
             "title": t["title"],
             "track_number": t["track_number"],
             "disc_number": t["disc_number"],
+            "total_discs": _album_total_discs(db, alb_id),
             "year": album.get("year"),
             "release_year": album.get("year"),
             "codec": f.get("codec"),
@@ -2301,6 +2322,7 @@ def rename_apply(
                 "title": track["title"],
                 "track_number": track["track_number"],
                 "disc_number": track["disc_number"],
+                "total_discs": _album_total_discs(db, track["album_id"]),
                 "year": album.get("year"),
                 "release_year": album.get("year"),
                 "codec": f.get("codec"),

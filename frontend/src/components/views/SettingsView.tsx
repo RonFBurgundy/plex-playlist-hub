@@ -54,6 +54,7 @@ import {
   testLidarrConnection,
 } from '@/services/settingsService';
 import { ScrobblingSettings } from '@/components/scrobbling';
+import { NamingFormatsEditor } from '@/components/naming/NamingFormatsEditor';
 import {
   getScheduledTasks,
   triggerScheduledTask,
@@ -563,56 +564,20 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
               />
             </div>
 
-            <div>
-              <label className="block text-xs uppercase font-mono tracking-wider text-neutral-300 mb-1.5">
-                Artist Folder Format
-              </label>
-              <input
-                type="text"
-                value={mediaSettings?.artist_folder_format || ''}
-                onChange={(e) =>
-                  setMediaSettings((prev) =>
-                    prev ? { ...prev, artist_folder_format: e.target.value } : null
-                  )
-                }
-                placeholder="{Artist CleanName}"
-                className="w-full bg-[#0d0d0d] border border-[#2a2a2a] rounded-[3px] px-3 py-2 text-sm text-white focus:outline-none focus:border-[#e5a00d] font-mono"
-              />
-            </div>
-
-            <div>
-              <label className="block text-xs uppercase font-mono tracking-wider text-neutral-300 mb-1.5">
-                Album Folder Format
-              </label>
-              <input
-                type="text"
-                value={mediaSettings?.album_folder_format || ''}
-                onChange={(e) =>
-                  setMediaSettings((prev) =>
-                    prev ? { ...prev, album_folder_format: e.target.value } : null
-                  )
-                }
-                placeholder="{Album Title} ({Release Year})"
-                className="w-full bg-[#0d0d0d] border border-[#2a2a2a] rounded-[3px] px-3 py-2 text-sm text-white focus:outline-none focus:border-[#e5a00d] font-mono"
-              />
-            </div>
-
-            <div>
-              <label className="block text-xs uppercase font-mono tracking-wider text-neutral-300 mb-1.5">
-                Standard Track Format
-              </label>
-              <input
-                type="text"
-                value={mediaSettings?.standard_track_format || ''}
-                onChange={(e) =>
-                  setMediaSettings((prev) =>
-                    prev ? { ...prev, standard_track_format: e.target.value } : null
-                  )
-                }
-                placeholder="{Track:02} - {Track Title}"
-                className="w-full bg-[#0d0d0d] border border-[#2a2a2a] rounded-[3px] px-3 py-2 text-sm text-white focus:outline-none focus:border-[#e5a00d] font-mono"
-              />
-            </div>
+            <NamingFormatsEditor
+              value={{
+                artist_folder_format: mediaSettings?.artist_folder_format || '',
+                standard_track_format: mediaSettings?.standard_track_format || '',
+                multi_disc_track_format: mediaSettings?.multi_disc_track_format || '',
+                compilation_track_format: mediaSettings?.compilation_track_format || '',
+              }}
+              context={{
+                root_folder_path: mediaSettings?.root_folder_path,
+                colon_replacement_format: mediaSettings?.colon_replacement_format,
+                clean_artist_names: mediaSettings?.clean_artist_names,
+              }}
+              onChange={(patch) => setMediaSettings((prev) => (prev ? { ...prev, ...patch } : null))}
+            />
 
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 pt-2 border-t border-[#1f1f1f]">
               <div>

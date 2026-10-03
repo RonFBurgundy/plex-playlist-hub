@@ -68,7 +68,14 @@ class TestMediaManagementStorage:
         settings = test_db.get_media_management_settings()
         assert settings["artist_folder_format"] == "{Artist Name}"
         assert settings["album_folder_format"] == "{Album Title} ({Release Year}){[ - Album Type]}"
-        assert settings["standard_track_format"] == "{track:00} - {Track Title}{[ (Quality Full)]}"
+        # Lidarr-style: the track formats are full paths relative to the artist folder (album folder included)
+        assert settings["standard_track_format"] == (
+            "{Album Title} ({Release Year}){[ - Album Type]}/{track:00} - {Track Title}{[ (Quality Full)]}"
+        )
+        assert settings["multi_disc_track_format"] == (
+            "{Album Title} ({Release Year}){[ - Album Type]}/{Medium Format} {medium:00}/"
+            "{track:00} - {Track Title}{[ (Quality Full)]}"
+        )
         assert settings["compilation_track_format"] == "{track:00} - {Artist Name} - {Track Title}{[ (Quality Full)]}"
         assert settings["multi_disc_folder_format"] == "{Medium Format} {medium:00}"
         assert settings["root_folder_path"] == "/data/media/music"
@@ -214,7 +221,7 @@ class TestMediaManagementAPI:
         assert resp.status_code == 200
         data = resp.json()
         assert "previews" in data
-        assert len(data["previews"]) == 3
+        assert len(data["previews"]) == 4
 
         previews_by_id = {p["id"]: p for p in data["previews"]}
 
@@ -239,7 +246,7 @@ class TestMediaManagementAPI:
 
         custom_override = {
             "root_folder_path": "/library",
-            "standard_track_format": "{track:0} {Track Title}",
+            "standard_track_format": "{Album Title} ({Release Year})/{track:0} {Track Title}",
         }
         resp = client.post("/api/settings/media-management/preview", json=custom_override, headers=headers)
         assert resp.status_code == 200

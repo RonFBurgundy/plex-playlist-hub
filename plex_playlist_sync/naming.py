@@ -13,12 +13,22 @@ SUPPORTED_TOKENS: list[str] = [
     "Artist CleanName",
     "Artist Disambiguation",
     "Artist Name",
+    "Artist NameThe",
+    "Artist CleanNameThe",
+    "Artist NameFirstCharacter",
+    "Artist Genre",
+    "Artist MbId",
     # Album
     "Album CleanTitle",
     "Album Disambiguation",
     "Original Release Year",
     "Release Year",
     "Album Title",
+    "Album TitleThe",
+    "Album CleanTitleThe",
+    "Album TitleFirstCharacter",
+    "Album Genre",
+    "Album MbId",
     "Album Type",
     # Disc / Medium
     "Medium Format",
@@ -30,6 +40,12 @@ SUPPORTED_TOKENS: list[str] = [
     # Track
     "Track CleanTitle",
     "Track Title",
+    "Track TitleThe",
+    "Track CleanTitleThe",
+    "Track ArtistName",
+    "Track ArtistCleanName",
+    "Track ArtistNameThe",
+    "Original Filename",
     "track:00",
     "track:0",
     # Audio / Quality / MediaInfo
@@ -40,38 +56,120 @@ SUPPORTED_TOKENS: list[str] = [
     "MediaInfo SampleRate",
 ]
 
+DEFAULT_ARTIST_FOLDER_FORMAT = "{Artist Name}"
+DEFAULT_ALBUM_FOLDER_FORMAT = "{Album Title} ({Release Year}){[ - Album Type]}"
+DEFAULT_LEGACY_TRACK_FILE_FORMAT = "{track:00} - {Track Title}{[ (Quality Full)]}"
+DEFAULT_LEGACY_DISC_FOLDER_FORMAT = "{Medium Format} {medium:00}"
+DEFAULT_COMPILATION_TRACK_FORMAT = "{track:00} - {Artist Name} - {Track Title}{[ (Quality Full)]}"
+
+# Lidarr-style formats: the track formats are a '/'-separated path *relative to the artist
+# folder*; every segment but the last is a folder, the last is the file name (no extension).
+DEFAULT_STANDARD_TRACK_FORMAT = f"{DEFAULT_ALBUM_FOLDER_FORMAT}/{DEFAULT_LEGACY_TRACK_FILE_FORMAT}"
+DEFAULT_MULTI_DISC_TRACK_FORMAT = (
+    f"{DEFAULT_ALBUM_FOLDER_FORMAT}/{DEFAULT_LEGACY_DISC_FOLDER_FORMAT}/{DEFAULT_LEGACY_TRACK_FILE_FORMAT}"
+)
+
+
+def legacy_to_track_formats(settings: dict[str, Any]) -> tuple[str, str]:
+    """Composes (standard_track_format, multi_disc_track_format) from the pre-Lidarr-style split settings.
+
+    Legacy settings stored the album folder, disc folder and file name separately; this joins
+    them so old data renders identically under the full-path model.
+    """
+    album = str(settings.get("album_folder_format") or DEFAULT_ALBUM_FOLDER_FORMAT)
+    track = str(settings.get("standard_track_format") or DEFAULT_LEGACY_TRACK_FILE_FORMAT)
+    disc = str(settings.get("multi_disc_folder_format") or DEFAULT_LEGACY_DISC_FOLDER_FORMAT)
+    return f"{album}/{track}", f"{album}/{disc}/{track}"
+
+
+def _legacy_preset(**legacy: Any) -> dict[str, Any]:
+    """Builds a full-path preset from legacy split values, keeping the legacy keys for old clients."""
+    std, multi = legacy_to_track_formats(legacy)
+    preset = dict(legacy)
+    preset["standard_track_format"] = std
+    preset["multi_disc_track_format"] = multi
+    return preset
+
+
 # Preset templates
 PRESETS: dict[str, dict[str, Any]] = {
-    "Lidarr Standard": {
-        "artist_folder_format": "{Artist Name}",
-        "album_folder_format": "{Album Title} ({Release Year}){[ - Album Type]}",
-        "standard_track_format": "{track:00} - {Track Title}{[ (Quality Full)]}",
-        "compilation_track_format": "{track:00} - {Artist Name} - {Track Title}{[ (Quality Full)]}",
-        "multi_disc_folder_format": "{Medium Format} {medium:00}",
+    "Trackseerr": {
+        "artist_folder_format": "{Artist CleanName}",
+        "standard_track_format": "{Album Title}{ - [{Album Type}]}{ (Release Year)}/{track:00} - {Track Title}",
+        "multi_disc_track_format": (
+            "{Album Title}{ - [{Album Type}]}{ (Release Year)}/Disc {medium:00}/{track:00} - {Track Title}"
+        ),
+        "compilation_track_format": "",
         "root_folder_path": "/music",
         "colon_replacement_format": " - ",
         "clean_artist_names": True,
     },
-    "Clean Minimal": {
-        "artist_folder_format": "{Artist CleanName}",
-        "album_folder_format": "{Album CleanTitle} ({Release Year})",
-        "standard_track_format": "{track:00} - {Track CleanTitle}",
-        "compilation_track_format": "{track:00} - {Artist CleanName} - {Track CleanTitle}",
-        "multi_disc_folder_format": "Disc {medium:0}",
-        "root_folder_path": "/music",
-        "colon_replacement_format": "_",
-        "clean_artist_names": True,
-    },
-    "Audiophile / Detailed": {
-        "artist_folder_format": "{Artist Name}",
-        "album_folder_format": "{Album Title} ({Release Year}){[ - Album Type]}",
-        "standard_track_format": "{track:00} - {Track Title} [{MediaInfo AudioCodec} {MediaInfo BitDepth} {MediaInfo SampleRate}]",
-        "compilation_track_format": "{track:00} - {Artist Name} - {Track Title} [{MediaInfo AudioCodec} {MediaInfo BitDepth} {MediaInfo SampleRate}]",
-        "multi_disc_folder_format": "{Medium Format} {medium:00}",
+    # TRaSH Guides has no official Lidarr naming page; this mirrors the Lidarr defaults the
+    # community recommends (artist/album in the file name so loose files stay identifiable).
+    "TRaSH Guides": {
+        "artist_folder_format": "{Artist Name}{ (Artist Disambiguation)}",
+        "standard_track_format": (
+            "{Album Title}{ [Album Disambiguation]}{ (Release Year)}/{Artist Name} - {Album Title} - {track:00} - {Track Title}"
+        ),
+        "multi_disc_track_format": (
+            "{Album Title}{ [Album Disambiguation]}{ (Release Year)}/{Medium Format} {medium:00}/"
+            "{Artist Name} - {Album Title} - {track:00} - {Track Title}"
+        ),
+        "compilation_track_format": "",
         "root_folder_path": "/music",
         "colon_replacement_format": " - ",
         "clean_artist_names": False,
     },
+    # Plex's documented layout: Artist/Album/NN - Title. Multi-disc albums stay in one folder
+    # with the disc number prefixed to the track number (101, 102, 201, ...).
+    "Plex": {
+        "artist_folder_format": "{Artist Name}",
+        "standard_track_format": "{Album Title}/{track:00} - {Track Title}",
+        "multi_disc_track_format": "{Album Title}/{medium:0}{track:00} - {Track Title}",
+        "compilation_track_format": "",
+        "root_folder_path": "/music",
+        "colon_replacement_format": " - ",
+        "clean_artist_names": False,
+    },
+    "Lidarr Standard": _legacy_preset(
+        artist_folder_format="{Artist Name}",
+        album_folder_format="{Album Title} ({Release Year}){[ - Album Type]}",
+        standard_track_format="{track:00} - {Track Title}{[ (Quality Full)]}",
+        compilation_track_format="{track:00} - {Artist Name} - {Track Title}{[ (Quality Full)]}",
+        multi_disc_folder_format="{Medium Format} {medium:00}",
+        root_folder_path="/music",
+        colon_replacement_format=" - ",
+        clean_artist_names=True,
+    ),
+    "Clean Minimal": _legacy_preset(
+        artist_folder_format="{Artist CleanName}",
+        album_folder_format="{Album CleanTitle} ({Release Year})",
+        standard_track_format="{track:00} - {Track CleanTitle}",
+        compilation_track_format="{track:00} - {Artist CleanName} - {Track CleanTitle}",
+        multi_disc_folder_format="Disc {medium:0}",
+        root_folder_path="/music",
+        colon_replacement_format="_",
+        clean_artist_names=True,
+    ),
+    "Audiophile / Detailed": _legacy_preset(
+        artist_folder_format="{Artist Name}",
+        album_folder_format="{Album Title} ({Release Year}){[ - Album Type]}",
+        standard_track_format="{track:00} - {Track Title} [{MediaInfo AudioCodec} {MediaInfo BitDepth} {MediaInfo SampleRate}]",
+        compilation_track_format="{track:00} - {Artist Name} - {Track Title} [{MediaInfo AudioCodec} {MediaInfo BitDepth} {MediaInfo SampleRate}]",
+        multi_disc_folder_format="{Medium Format} {medium:00}",
+        root_folder_path="/music",
+        colon_replacement_format=" - ",
+        clean_artist_names=False,
+    ),
+}
+
+PRESET_DESCRIPTIONS: dict[str, str] = {
+    "Trackseerr": "Trackseerr default: clean artist folders, 'Album - [Type] (Year)' folders, Disc NN subfolders.",
+    "TRaSH Guides": "Lidarr-community style (TRaSH has no official Lidarr page): artist & album repeated in every file name.",
+    "Plex": "Plex's recommended Artist/Album/NN - Title layout; multi-disc albums use 101/201-style numbering in one folder.",
+    "Lidarr Standard": "Previous Trackseerr default with quality suffix on the file name.",
+    "Clean Minimal": "Article-stripped (no leading The/A/An) names with underscore colon replacement.",
+    "Audiophile / Detailed": "Appends codec, bit depth and sample rate to every file name.",
 }
 
 
@@ -81,6 +179,16 @@ def strip_leading_articles(name: str | None) -> str:
         return ""
     stripped = re.sub(r"^(?:the|a|an)\s+", "", str(name).strip(), flags=re.IGNORECASE)
     return stripped.strip()
+
+
+def move_leading_article(name: str | None) -> str:
+    """Moves a leading article to the end: 'The Beatles' -> 'Beatles, The'."""
+    if not name:
+        return ""
+    m = re.match(r"^(the|a|an)\s+(.+)$", str(name).strip(), flags=re.IGNORECASE)
+    if not m:
+        return str(name).strip()
+    return f"{m.group(2).strip()}, {m.group(1)}"
 
 
 def format_quality(metadata: dict[str, Any]) -> str:
@@ -191,6 +299,19 @@ def resolve_token(token: str, metadata: dict[str, Any], clean_artist_names: bool
     if t == "Artist Name":
         val = metadata.get("artist") or metadata.get("artist_name") or metadata.get("album_artist") or ""
         return str(val) or None
+    if t in ("Artist NameThe", "Artist CleanNameThe"):
+        val = metadata.get("artist") or metadata.get("artist_name") or metadata.get("album_artist") or ""
+        return move_leading_article(str(val)) or None
+    if t == "Artist NameFirstCharacter":
+        val = metadata.get("artist") or metadata.get("artist_name") or metadata.get("album_artist") or ""
+        clean = strip_leading_articles(str(val))
+        return clean[0].upper() if clean else None
+    if t == "Artist Genre":
+        val = metadata.get("artist_genre") or metadata.get("genre")
+        return str(val).strip() if val else None
+    if t == "Artist MbId":
+        val = metadata.get("artist_mbid") or metadata.get("musicbrainz_artistid")
+        return str(val).strip() if val else None
     if t == "Artist Disambiguation":
         val = metadata.get("artist_disambiguation")
         return str(val).strip() if val else None
@@ -199,6 +320,19 @@ def resolve_token(token: str, metadata: dict[str, Any], clean_artist_names: bool
     if t == "Album CleanTitle":
         val = metadata.get("album") or metadata.get("album_title") or ""
         return strip_leading_articles(str(val)) or None
+    if t in ("Album TitleThe", "Album CleanTitleThe"):
+        val = metadata.get("album") or metadata.get("album_title") or ""
+        return move_leading_article(str(val)) or None
+    if t == "Album TitleFirstCharacter":
+        val = metadata.get("album") or metadata.get("album_title") or ""
+        clean = strip_leading_articles(str(val))
+        return clean[0].upper() if clean else None
+    if t == "Album Genre":
+        val = metadata.get("album_genre") or metadata.get("genre")
+        return str(val).strip() if val else None
+    if t == "Album MbId":
+        val = metadata.get("album_mbid") or metadata.get("musicbrainz_albumid")
+        return str(val).strip() if val else None
     if t == "Album Title":
         val = metadata.get("album") or metadata.get("album_title") or ""
         return str(val).strip() or None
@@ -261,6 +395,19 @@ def resolve_token(token: str, metadata: dict[str, Any], clean_artist_names: bool
     if t == "Track Title":
         val = metadata.get("title") or metadata.get("track_title")
         return str(val).strip() if val else None
+    if t in ("Track TitleThe", "Track CleanTitleThe"):
+        val = metadata.get("title") or metadata.get("track_title") or ""
+        return move_leading_article(str(val)) or None
+    if t in ("Track ArtistName", "Track ArtistCleanName", "Track ArtistNameThe"):
+        val = metadata.get("track_artist") or metadata.get("artist") or metadata.get("artist_name") or ""
+        if t == "Track ArtistCleanName":
+            return strip_leading_articles(str(val)) or None
+        if t == "Track ArtistNameThe":
+            return move_leading_article(str(val)) or None
+        return str(val).strip() or None
+    if t == "Original Filename":
+        src = metadata.get("file_path") or metadata.get("filename")
+        return Path(str(src)).stem if src else None
     if t == "Track CleanTitle":
         val = metadata.get("title") or metadata.get("track_title") or ""
         return strip_leading_articles(str(val)) or None
@@ -349,26 +496,84 @@ def _evaluate_conditional_block(block_content: str, metadata: dict[str, Any], cl
     return result
 
 
+_PURE_TOKEN_RE = re.compile(r"^[A-Za-z0-9_:]+(?: [A-Za-z0-9_:]+)*$")
+_BRACE_BLOCK_RE = re.compile(r"\{([^{}]+)\}")
+_NESTED_BLOCK_RE = re.compile(r"\{([^{}]*\{[^{}]+\}[^{}]*)\}")
+_BARE_TOKEN_RE = re.compile(
+    r"(?<![A-Za-z0-9_:])("
+    + "|".join(re.escape(t) for t in sorted(SUPPORTED_TOKENS, key=len, reverse=True))
+    + r")(?![A-Za-z0-9_:])"
+)
+
+
+def _render_nested_block(match: re.Match[str], metadata: dict[str, Any], clean_artist_names: bool) -> str:
+    """Lidarr-style optional block with inner tokens, e.g. ``{ - [{Album Type}]}``.
+
+    Everything outside the inner ``{Token}``s (prefix, suffix, brackets) is kept literally and the
+    whole block is dropped when any inner token resolves empty.
+    """
+    content = match.group(1)
+    for tok in _BRACE_BLOCK_RE.findall(content):
+        if not resolve_token(tok, metadata, clean_artist_names=clean_artist_names):
+            return ""
+
+    def sub(m: re.Match[str]) -> str:
+        return resolve_token(m.group(1), metadata, clean_artist_names=clean_artist_names) or ""
+
+    return _BRACE_BLOCK_RE.sub(sub, content)
+
+
+def _render_brace_block(match: re.Match[str], metadata: dict[str, Any], clean_artist_names: bool) -> str:
+    """Renders ``{Token}`` or a Lidarr optional block with bare tokens such as ``{ (Release Year)}``.
+
+    A plain token (no surrounding whitespace/punctuation) resolves to its value or "". Anything
+    else is an optional block: prefix/suffix text is kept literally (brackets included) when all
+    bare tokens inside resolve, otherwise the entire block disappears.
+    """
+    content = match.group(1)
+    if _PURE_TOKEN_RE.match(content):
+        return resolve_token(content, metadata, clean_artist_names=clean_artist_names) or ""
+
+    tokens = _BARE_TOKEN_RE.findall(content)
+    if not tokens:
+        return ""
+    values: dict[str, str] = {}
+    for tok in tokens:
+        val = resolve_token(tok, metadata, clean_artist_names=clean_artist_names)
+        if not val:
+            return ""
+        values[tok] = val
+    return _BARE_TOKEN_RE.sub(lambda m: values[m.group(1)], content)
+
+
 def render_template(
     template: str,
     metadata: dict[str, Any],
     clean_artist_names: bool = False,
     colon_replacement: str = " - ",
 ) -> str:
-    """Renders a token naming template with conditional block evaluation and token replacement."""
+    """Renders a token naming template with conditional block evaluation and token replacement.
+
+    Supported syntax:
+      * ``{Token}``                  - replaced by the token value (empty when unknown).
+      * ``{ (Release Year)}``        - Lidarr optional block: kept with its literal prefix/suffix only
+                                       when the token has a value.
+      * ``{ - [{Album Type}]}``      - same, with nested ``{Token}`` so brackets are preserved.
+      * ``{[ - Album Type]}`` / ``{(Token)}`` - legacy Trackseerr conditional forms.
+    """
     if not template:
         return ""
 
     result = template
 
-    # 1. Evaluate {[prefix]Token[suffix]} conditional blocks
+    # 1. Legacy {[prefix Token suffix]} conditional blocks (brackets are delimiters, not output)
     def replace_bracket_conditional(match: re.Match[str]) -> str:
         inner = match.group(1)
         return _evaluate_conditional_block(inner, metadata, clean_artist_names=clean_artist_names)
 
     result = re.sub(r"\{\[(.*?)\]\}", replace_bracket_conditional, result)
 
-    # 2. Evaluate {(Token)} conditional blocks
+    # 2. Legacy {(Token)} conditional blocks
     def replace_paren_conditional(match: re.Match[str]) -> str:
         inner = match.group(1)
         eval_res = _evaluate_conditional_block(inner, metadata, clean_artist_names=clean_artist_names)
@@ -376,126 +581,119 @@ def render_template(
 
     result = re.sub(r"\{\((.*?)\)\}", replace_paren_conditional, result)
 
-    # 3. Evaluate standard tokens {Token}
-    def replace_standard_token(match: re.Match[str]) -> str:
-        token_name = match.group(1)
-        val = resolve_token(token_name, metadata, clean_artist_names=clean_artist_names)
-        return val if val is not None else ""
+    # 3. Lidarr optional blocks with nested {Token}s, e.g. { - [{Album Type}]}
+    result = _NESTED_BLOCK_RE.sub(lambda m: _render_nested_block(m, metadata, clean_artist_names), result)
 
-    result = re.sub(r"\{([A-Za-z0-9_:\s]+)\}", replace_standard_token, result)
+    # 4. Plain {Token}s and Lidarr optional blocks with bare tokens, e.g. { (Release Year)}
+    result = _BRACE_BLOCK_RE.sub(lambda m: _render_brace_block(m, metadata, clean_artist_names), result)
 
-    # 4. Clean up any remaining double spaces or dangling formatting artifacts
+    # 5. Clean up any remaining double spaces or dangling formatting artifacts
     result = re.sub(r" +", " ", result).strip()
     return result
 
 
-def build_track_path(metadata: dict[str, Any], settings: dict[str, Any]) -> str:
-    """Builds a fully sanitized, cross-platform media track path.
+def split_template_segments(template: str) -> list[str]:
+    """Splits a format on '/' (or '\\') that sit outside ``{...}`` blocks, dropping empty segments."""
+    segments: list[str] = []
+    buf: list[str] = []
+    depth = 0
+    for ch in template:
+        if ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth = max(0, depth - 1)
+        if ch in "/\\" and depth == 0:
+            segments.append("".join(buf))
+            buf = []
+        else:
+            buf.append(ch)
+    segments.append("".join(buf))
+    return [s for s in segments if s.strip()]
 
-    - Omission of multi-disc folder when total_discs <= 1.
-    - Handling of compilation / Various Artists vs standard artist.
-    - Path sanitization per component preventing directory traversal.
-    - Extension preservation.
+
+def resolve_track_formats(settings: dict[str, Any]) -> tuple[str, str]:
+    """Returns the effective (standard, multi_disc) full-path track formats for a settings dict.
+
+    Settings that predate the Lidarr-style model (no ``multi_disc_track_format`` key) are composed
+    from the legacy album/disc/file formats so existing callers render unchanged.
     """
-    root_folder = str(settings.get("root_folder_path") or "/music").rstrip("/\\")
-    colon_replacement = str(settings.get("colon_replacement_format") or " - ")
-    clean_artist_names = bool(settings.get("clean_artist_names", True))
+    if settings.get("multi_disc_track_format") is None:
+        return legacy_to_track_formats(settings)
 
-    artist_format = str(settings.get("artist_folder_format") or "{Artist Name}")
-    album_format = str(settings.get("album_folder_format") or "{Album Title} ({Release Year}){[ - Album Type]}")
-    standard_track_format = str(settings.get("standard_track_format") or "{track:00} - {Track Title}{[ (Quality Full)]}")
-    compilation_track_format = str(
-        settings.get("compilation_track_format") or "{track:00} - {Artist Name} - {Track Title}{[ (Quality Full)]}"
-    )
-    multi_disc_format = str(settings.get("multi_disc_folder_format") or "{Medium Format} {medium:00}")
+    standard = str(settings.get("standard_track_format") or DEFAULT_STANDARD_TRACK_FORMAT)
+    multi = str(settings.get("multi_disc_track_format") or "").strip()
+    if not multi:
+        # No explicit multi-disc format: put a disc folder between the album folder(s) and the file.
+        segs = split_template_segments(standard)
+        disc = str(settings.get("multi_disc_folder_format") or "Disc {medium:00}")
+        multi = "/".join(segs[:-1] + [disc] + segs[-1:])
+    return standard, multi
 
-    meta = dict(metadata)
 
-    # Detect Compilation / Various Artists
+def validate_format(template: str, kind: str = "track") -> list[str]:
+    """Returns human-readable warnings for a format string (never raises).
+
+    ``kind`` is ``"artist"`` (single folder) or ``"track"`` (folders + file name).
+    """
+    warnings: list[str] = []
+    if not template or not template.strip():
+        return ["Format is empty - the default will be used."]
+
+    depth = 0
+    for ch in template:
+        if ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth < 0:
+                break
+    if depth != 0:
+        warnings.append("Unbalanced braces: every '{' needs a matching '}'.")
+
+    for content in _BRACE_BLOCK_RE.findall(template):
+        if content.startswith(("[", "(")):
+            continue  # legacy conditional forms
+        if _PURE_TOKEN_RE.match(content) and content not in SUPPORTED_TOKENS:
+            warnings.append(f"Unknown token '{{{content}}}' renders as empty.")
+
+    if kind == "artist":
+        if len(split_template_segments(template)) > 1:
+            warnings.append("Artist folder format should be a single folder (no '/').")
+        return warnings
+
+    if template.rstrip().endswith(("/", "\\")):
+        warnings.append("Trailing '/' ignored - the last segment is the file name.")
+    segments = split_template_segments(template)
+    if segments:
+        name = segments[-1]
+        if "Track Title" not in name and "Track CleanTitle" not in name and "track:" not in name:
+            warnings.append("File name has no {track:00}/{Track Title} token - tracks may overwrite each other.")
+    return warnings
+
+
+def _detect_compilation(meta: dict[str, Any]) -> bool:
     album_artist = str(meta.get("album_artist") or "").strip()
-    is_compilation = (
+    return bool(
         meta.get("is_compilation") is True
         or meta.get("compilation") is True
         or album_artist.lower() in ("various artists", "various")
         or str(meta.get("album_type", "")).strip().lower() == "compilation"
     )
 
-    # Determine Artist Folder
-    if is_compilation:
-        comp_meta = dict(meta)
-        if not comp_meta.get("artist") or album_artist.lower() in ("various artists", "various"):
-            comp_meta["artist"] = album_artist or "Various Artists"
-        artist_raw = render_template(
-            artist_format,
-            comp_meta,
-            clean_artist_names=clean_artist_names,
-            colon_replacement=colon_replacement,
-        )
-        if not artist_raw:
-            artist_raw = "Various Artists"
-    else:
-        artist_raw = render_template(
-            artist_format,
-            meta,
-            clean_artist_names=clean_artist_names,
-            colon_replacement=colon_replacement,
-        )
-        if not artist_raw:
-            artist_raw = "Unknown Artist"
 
-    artist_component = sanitize_component(artist_raw, colon_replacement=colon_replacement)
-
-    # Determine Album Folder
-    album_raw = render_template(
-        album_format,
-        meta,
-        clean_artist_names=clean_artist_names,
-        colon_replacement=colon_replacement,
-    )
-    if not album_raw:
-        album_raw = "Unknown Album"
-    album_component = sanitize_component(album_raw, colon_replacement=colon_replacement)
-
-    # Detect Multi-Disc
+def _detect_multi_disc(meta: dict[str, Any]) -> bool:
     total_discs = meta.get("total_discs") or meta.get("disc_total") or meta.get("total_mediums")
     disc_number = meta.get("disc_number") or meta.get("medium_number") or meta.get("disc")
+    value = total_discs if total_discs is not None else disc_number
+    if value is None:
+        return False
+    try:
+        return int(value) > 1
+    except (ValueError, TypeError):
+        return False
 
-    is_multi_disc = False
-    if total_discs is not None:
-        try:
-            is_multi_disc = int(total_discs) > 1
-        except (ValueError, TypeError):
-            is_multi_disc = False
-    elif disc_number is not None:
-        try:
-            is_multi_disc = int(disc_number) > 1
-        except (ValueError, TypeError):
-            is_multi_disc = False
 
-    disc_component: str | None = None
-    if is_multi_disc:
-        disc_raw = render_template(
-            multi_disc_format,
-            meta,
-            clean_artist_names=clean_artist_names,
-            colon_replacement=colon_replacement,
-        )
-        disc_component = sanitize_component(disc_raw, colon_replacement=colon_replacement)
-
-    # Determine Track Filename
-    track_format = compilation_track_format if is_compilation else standard_track_format
-    track_raw = render_template(
-        track_format,
-        meta,
-        clean_artist_names=clean_artist_names,
-        colon_replacement=colon_replacement,
-    )
-    if not track_raw:
-        track_raw = "Track"
-
-    track_component = sanitize_component(track_raw, colon_replacement=colon_replacement)
-
-    # Extract / Append Extension
+def _guess_extension(meta: dict[str, Any]) -> str:
     ext = meta.get("extension") or meta.get("ext")
     if not ext and meta.get("file_path"):
         ext = Path(str(meta["file_path"])).suffix
@@ -515,26 +713,166 @@ def build_track_path(metadata: dict[str, Any], settings: dict[str, Any]) -> str:
             "AIFF": ".aiff",
         }
         ext = codec_ext_map.get(str(meta["codec"]).upper().strip(), "")
+    return str(ext).strip() if ext else ""
 
+
+def build_path_parts(
+    metadata: dict[str, Any],
+    settings: dict[str, Any],
+    multi_disc: bool | None = None,
+) -> dict[str, Any]:
+    """Renders the sanitized path pieces: ``artist`` folder, ``folders`` (below the artist) and ``file`` name.
+
+    ``multi_disc`` forces which track format is used (used for previews); ``None`` auto-detects from
+    the metadata.
+    """
+    colon_replacement = str(settings.get("colon_replacement_format") or " - ")
+    clean_artist_names = bool(settings.get("clean_artist_names", True))
+    artist_format = str(settings.get("artist_folder_format") or DEFAULT_ARTIST_FOLDER_FORMAT)
+    compilation_track_format = str(settings.get("compilation_track_format") or "").strip()
+    if "compilation_track_format" not in settings and settings.get("multi_disc_track_format") is None:
+        compilation_track_format = DEFAULT_COMPILATION_TRACK_FORMAT  # legacy callers
+    standard_format, multi_format = resolve_track_formats(settings)
+
+    meta = dict(metadata)
+    album_artist = str(meta.get("album_artist") or "").strip()
+    is_compilation = _detect_compilation(meta)
+
+    def render(fmt: str, m: dict[str, Any]) -> str:
+        raw = render_template(fmt, m, clean_artist_names=clean_artist_names, colon_replacement=colon_replacement)
+        return sanitize_component(raw, colon_replacement=colon_replacement)
+
+    # Artist folder
+    artist_meta = meta
+    if is_compilation and (not meta.get("artist") or album_artist.lower() in ("various artists", "various")):
+        artist_meta = dict(meta)
+        artist_meta["artist"] = album_artist or "Various Artists"
+    artist_component = render(artist_format, artist_meta)
+    if not artist_component:
+        artist_component = "Various Artists" if is_compilation else "Unknown Artist"
+
+    # Track format -> folders + file name
+    use_multi = _detect_multi_disc(meta) if multi_disc is None else multi_disc
+    segments = split_template_segments(multi_format if use_multi else standard_format)
+    if not segments:
+        segments = ["Track"]
+    folder_templates, file_template = segments[:-1], segments[-1]
+
+    if is_compilation and compilation_track_format:
+        comp_segments = split_template_segments(compilation_track_format)
+        if comp_segments:
+            file_template = comp_segments[-1]
+
+    folders: list[str] = []
+    for idx, folder_tpl in enumerate(folder_templates):
+        comp = render(folder_tpl, meta)
+        if comp:
+            folders.append(comp)
+        elif idx == 0:
+            folders.append("Unknown Album")
+
+    file_component = render(file_template, meta) or "Track"
+
+    ext = _guess_extension(meta)
     if ext:
-        ext_clean = str(ext).strip()
-        if not ext_clean.startswith("."):
-            ext_clean = f".{ext_clean}"
-        if not track_component.lower().endswith(ext_clean.lower()):
-            track_component = f"{track_component}{ext_clean}"
+        if not ext.startswith("."):
+            ext = f".{ext}"
+        if not file_component.lower().endswith(ext.lower()):
+            file_component = f"{file_component}{ext}"
 
-    # Assemble components
-    components: list[str] = []
-    if artist_component:
-        components.append(artist_component)
-    if album_component:
-        components.append(album_component)
-    if disc_component:
-        components.append(disc_component)
-    if track_component:
-        components.append(track_component)
+    return {"artist": artist_component, "folders": folders, "file": file_component}
 
-    rel_path = "/".join(components)
+
+def build_track_path(metadata: dict[str, Any], settings: dict[str, Any]) -> str:
+    """Builds a fully sanitized, cross-platform media track path.
+
+    - Artist folder from ``artist_folder_format``.
+    - Album folder(s) and file name from the standard or multi-disc track format (Lidarr-style
+      '/'-separated relative path); multi-disc is chosen when total_discs > 1.
+    - Path sanitization per component preventing directory traversal.
+    - Extension preservation.
+    """
+    root_folder = str(settings.get("root_folder_path") or "/music").rstrip("/\\")
+    parts = build_path_parts(metadata, settings)
+    rel_path = "/".join([parts["artist"], *parts["folders"], parts["file"]])
     if root_folder:
         return f"{root_folder}/{rel_path}"
     return rel_path
+
+
+# Help catalog shown in the UI's "?" modal. Every entry in SUPPORTED_TOKENS must appear here
+# (enforced by tests) so the documentation can never drift from the engine.
+TOKEN_HELP: list[dict[str, Any]] = [
+    {
+        "group": "Artist",
+        "tokens": [
+            ("{Artist Name}", "The artist's name exactly as stored", "Artist Name"),
+            ("{Artist CleanName}", "Artist name without a leading The / A / An", "Beatles"),
+            ("{Artist NameThe}", "Artist name with the leading article moved to the end", "Beatles, The"),
+            ("{Artist CleanNameThe}", "Clean artist name with the leading article moved to the end", "Beatles, The"),
+            ("{Artist NameFirstCharacter}", "First letter of the artist (article ignored), upper-case", "B"),
+            ("{Artist Disambiguation}", "MusicBrainz disambiguation text (empty when none)", "UK rock band"),
+            ("{Artist Genre}", "Primary genre of the artist (empty when unknown)", "Pop"),
+            ("{Artist MbId}", "MusicBrainz artist ID", "db92a151-1ac2-438b-bc43-b82e149ddd50"),
+        ],
+    },
+    {
+        "group": "Album",
+        "tokens": [
+            ("{Album Title}", "Album title", "The White Album"),
+            ("{Album CleanTitle}", "Album title without a leading The / A / An", "White Album"),
+            ("{Album TitleThe}", "Album title with the leading article moved to the end", "White Album, The"),
+            ("{Album CleanTitleThe}", "Clean album title with the leading article moved to the end", "White Album, The"),
+            ("{Album TitleFirstCharacter}", "First letter of the album (article ignored), upper-case", "W"),
+            ("{Album Genre}", "Genre of the album (empty when unknown)", "Rock"),
+            ("{Album MbId}", "MusicBrainz release group ID", "1b022e01-4da6-387b-8658-8678046e4cef"),
+            ("{Album Type}", "Release type (Album, EP, Single, ...)", "EP"),
+            ("{Album Disambiguation}", "MusicBrainz release disambiguation (empty when none)", "Remastered"),
+            ("{Release Year}", "Year of this release", "1968"),
+            ("{Original Release Year}", "Year the album was first released", "1968"),
+        ],
+    },
+    {
+        "group": "Disc",
+        "tokens": [
+            ("{Medium Format}", "Physical medium (CD, Vinyl, Digital Media, ...)", "CD"),
+            ("{Medium Title}", "Disc title (empty when none)", "Bonus Disc"),
+            ("{medium:00}", "Disc number, 2 digits", "02"),
+            ("{medium:0}", "Disc number, no padding", "2"),
+            ("{disc:00}", "Same as {medium:00}", "02"),
+            ("{disc:0}", "Same as {medium:0}", "2"),
+        ],
+    },
+    {
+        "group": "Track",
+        "tokens": [
+            ("{Track Title}", "Track title", "Revolution 1"),
+            ("{Track CleanTitle}", "Track title without a leading The / A / An", "Revolution 1"),
+            ("{Track TitleThe}", "Track title with the leading article moved to the end", "Fool on the Hill, The"),
+            ("{Track CleanTitleThe}", "Clean track title with the leading article moved to the end", "Fool on the Hill, The"),
+            ("{Track ArtistName}", "Artist of this track (differs from the album artist on compilations)", "The Beatles"),
+            ("{Track ArtistCleanName}", "Track artist without a leading The / A / An", "Beatles"),
+            ("{Track ArtistNameThe}", "Track artist with the leading article moved to the end", "Beatles, The"),
+            ("{Original Filename}", "File name the file had before renaming (no extension)", "01 revolution 1"),
+            ("{track:00}", "Track number, 2 digits", "01"),
+            ("{track:0}", "Track number, no padding", "1"),
+        ],
+    },
+    {
+        "group": "Audio / Quality",
+        "tokens": [
+            ("{Quality Full}", "Codec with bit depth / sample rate or bitrate", "FLAC 24bit 96kHz"),
+            ("{MediaInfo AudioCodec}", "Audio codec", "FLAC"),
+            ("{MediaInfo BitDepth}", "Bit depth", "24bit"),
+            ("{MediaInfo SampleRate}", "Sample rate", "96kHz"),
+            ("{MediaInfo Bitrate}", "Bitrate", "320kbps"),
+        ],
+    },
+]
+
+SYNTAX_HELP: list[tuple[str, str, str]] = [
+    ("/", "Separates folders. The last part is the file name (the extension is added automatically).", "{Album Title}/{track:00} - {Track Title}"),
+    ("{ (Release Year)}", "Optional block: text around a token is kept only when the token has a value.", " (1968), or nothing"),
+    ("{ - [{Album Type}]}", "Optional block with nested token; brackets are kept literally.", " - [EP], or nothing"),
+    ("{Token}", "Plain token: replaced by its value, or nothing when unknown.", "{Album Title}"),
+]

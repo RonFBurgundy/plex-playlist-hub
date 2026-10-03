@@ -193,6 +193,8 @@ class Database:
                         "INSERT INTO schema_migrations (version) VALUES (?)",
                         (version,),
                     )
+            # Idempotent (column-existence guarded), so it is deliberately not version-numbered.
+            self._ensure_naming_formats(cur)
             self.conn.commit()
 
     def _migration_v1(self, cur: sqlite3.Cursor) -> None:
@@ -2236,6 +2238,37 @@ class Database:
     # Media Management Settings CRUD
     # -------------------------------------------------------------------------
 
+    def _ensure_naming_formats(self, cur: sqlite3.Cursor) -> None:
+        """Lidarr-style naming (idempotent, runs on every start): adds multi_disc_track_format and folds album/disc folders into the track formats.
+
+        standard_track_format / multi_disc_track_format become '/'-separated paths relative to the artist
+        folder. Existing rows are converted so every install keeps its current output paths.
+        """
+        from plex_playlist_sync.naming import legacy_to_track_formats
+
+        cur.execute("PRAGMA table_info(media_management_settings);")
+        mm_cols = {row[1] for row in cur.fetchall()}
+        if "multi_disc_track_format" in mm_cols:
+            return
+        cur.execute("ALTER TABLE media_management_settings ADD COLUMN multi_disc_track_format TEXT NOT NULL DEFAULT '';")
+        cur.execute(
+            "SELECT album_folder_format, standard_track_format, multi_disc_folder_format "
+            "FROM media_management_settings WHERE id = 1"
+        )
+        row = cur.fetchone()
+        if row:
+            std, multi = legacy_to_track_formats(
+                {
+                    "album_folder_format": row[0],
+                    "standard_track_format": row[1],
+                    "multi_disc_folder_format": row[2],
+                }
+            )
+            cur.execute(
+                "UPDATE media_management_settings SET standard_track_format = ?, multi_disc_track_format = ? WHERE id = 1",
+                (std, multi),
+            )
+
     def get_media_management_settings(self) -> dict[str, Any]:
         """Retrieves media management settings (singleton row id=1)."""
         with self._lock:
@@ -2278,6 +2311,7 @@ class Database:
             "standard_track_format",
             "compilation_track_format",
             "multi_disc_folder_format",
+            "multi_disc_track_format",
             "root_folder_path",
             "colon_replacement_format",
             "clean_artist_names",
@@ -2319,6 +2353,20 @@ class Database:
                     updates[k] = str(v) if v is not None else None
                 elif v is not None:
                     updates[k] = str(v)
+
+        # Legacy clients send a file-name-only standard_track_format plus separate album/disc folder
+        # formats and no multi_disc_track_format; fold those into the Lidarr-style full-path formats.
+        legacy_std = settings.get("standard_track_format")
+        if (
+            isinstance(legacy_std, str)
+            and "/" not in legacy_std
+            and "\\" not in legacy_std
+            and settings.get("multi_disc_track_format") is None
+        ):
+            from plex_playlist_sync.naming import legacy_to_track_formats
+
+            merged = {**self.get_media_management_settings(), **{k: v for k, v in settings.items() if v is not None}}
+            updates["standard_track_format"], updates["multi_disc_track_format"] = legacy_to_track_formats(merged)
 
         if updates:
             set_clauses = [f"{k} = ?" for k in updates.keys()]

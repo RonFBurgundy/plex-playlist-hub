@@ -864,3 +864,15 @@ def test_get_artist_image_redirect(
     assert resp.status_code in (302, 307)
     assert resp.headers["location"] == remote_img
 
+
+
+def test_album_total_discs_helper_counts_catalog_discs():
+    from plex_playlist_sync.api.routes.library import _album_total_discs
+
+    class FakeDB:
+        def list_library_tracks(self, album_id=None, limit=0):
+            return [{"disc_number": 1}, {"disc_number": 2}, {"disc_number": None}]
+
+    assert _album_total_discs(FakeDB(), "a") == 2
+    assert _album_total_discs(FakeDB(), "a", 3) == 3
+    assert _album_total_discs(FakeDB(), "a", None, "x") == 2

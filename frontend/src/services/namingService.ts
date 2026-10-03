@@ -1,0 +1,39 @@
+import { apiRequest } from './apiClient';
+import type {
+  NamingFormats,
+  NamingPreset,
+  NamingPresetCatalog,
+  NamingSyntaxHelp,
+  NamingTokenGroup,
+  NamingPreviewContext,
+  NamingPreviewResponse,
+} from '@/types/naming';
+
+interface MediaManagementEnvelope {
+  presets?: Record<string, NamingPreset>;
+  preset_descriptions?: Record<string, string>;
+  token_help?: NamingTokenGroup[];
+  syntax_help?: NamingSyntaxHelp[];
+}
+
+/** Loads the built-in naming presets (Trackseerr, TRaSH Guides, Plex, ...) and token help from the server. */
+export async function getNamingPresets(): Promise<NamingPresetCatalog> {
+  const res = await apiRequest<MediaManagementEnvelope>('/api/settings/media-management');
+  return {
+    presets: res?.presets ?? {},
+    descriptions: res?.preset_descriptions ?? {},
+    tokenHelp: res?.token_help ?? [],
+    syntaxHelp: res?.syntax_help ?? [],
+  };
+}
+
+/** Renders the given (unsaved) formats against every sample input; nothing is persisted. */
+export async function previewNamingFormats(
+  formats: NamingFormats,
+  context: NamingPreviewContext = {}
+): Promise<NamingPreviewResponse> {
+  return apiRequest<NamingPreviewResponse>('/api/settings/media-management/preview', {
+    method: 'POST',
+    body: { ...context, ...formats },
+  });
+}

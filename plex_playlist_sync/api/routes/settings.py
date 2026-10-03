@@ -8,7 +8,16 @@ from pydantic import BaseModel, Field
 
 from plex_playlist_sync.api.dependencies import get_db, require_admin
 from plex_playlist_sync.clients.lidarr import LidarrClient
-from plex_playlist_sync.naming import PRESETS, build_track_path
+from plex_playlist_sync.naming import (
+    PRESET_DESCRIPTIONS,
+    PRESETS,
+    SYNTAX_HELP,
+    TOKEN_HELP,
+    build_path_parts,
+    build_track_path,
+    resolve_track_formats,
+    validate_format,
+)
 from plex_playlist_sync.security import is_safe_service_url, mask_secret
 from plex_playlist_sync.storage import Database
 
@@ -83,6 +92,29 @@ SAMPLE_PREVIEW_ITEMS: list[dict[str, Any]] = [
             "quality_full": "MP3 320kbps",
         },
     },
+    {
+        "id": "typed_release",
+        "name": "Typed Release (EP)",
+        "description": "Release with an album type and disambiguation, to exercise optional {Album Type} blocks",
+        "metadata": {
+            "artist": "Boards of Canada",
+            "album": "Twoism",
+            "title": "Basefree",
+            "album_type": "EP",
+            "album_disambiguation": "Remastered",
+            "release_year": 1995,
+            "year": 1995,
+            "track_number": 3,
+            "disc_number": 1,
+            "total_discs": 1,
+            "codec": "FLAC",
+            "bit_depth": 16,
+            "bits_per_sample": 16,
+            "sample_rate": 44100,
+            "extension": ".flac",
+            "quality_full": "FLAC 16bit 44.1kHz",
+        },
+    },
 ]
 
 
@@ -97,10 +129,15 @@ class GeneralSettingsUpdateModel(BaseModel):
 
 class MediaManagementSettingsModel(BaseModel):
     artist_folder_format: str = Field(..., description="Format for artist directory")
-    album_folder_format: str = Field(..., description="Format for album directory")
-    standard_track_format: str = Field(..., description="Format for standard track filenames")
+    album_folder_format: str = Field(..., description="Legacy album directory format (superseded by the track formats)")
+    standard_track_format: str = Field(
+        ..., description="Standard track format: '/'-separated path below the artist folder (album folder(s)/file name)"
+    )
+    multi_disc_track_format: str = Field(
+        "", description="Multi-disc track format: same as the standard format but for releases with more than one disc"
+    )
     compilation_track_format: str = Field(..., description="Format for compilation track filenames")
-    multi_disc_folder_format: str = Field(..., description="Format for multi-disc subdirectories")
+    multi_disc_folder_format: str = Field(..., description="Legacy multi-disc subdirectory format (superseded)")
     root_folder_path: str = Field("/data/media/music", description="Base music library folder")
     colon_replacement_format: str = Field(" - ", description="String to replace colons with")
     clean_artist_names: bool = Field(True, description="Whether to strip leading articles from artist names")
@@ -127,6 +164,7 @@ class MediaManagementUpdateModel(BaseModel):
     standard_track_format: str | None = None
     compilation_track_format: str | None = None
     multi_disc_folder_format: str | None = None
+    multi_disc_track_format: str | None = None
     root_folder_path: str | None = None
     colon_replacement_format: str | None = None
     clean_artist_names: bool | None = None
@@ -152,6 +190,7 @@ class PreviewRequestModel(BaseModel):
     standard_track_format: str | None = None
     compilation_track_format: str | None = None
     multi_disc_folder_format: str | None = None
+    multi_disc_track_format: str | None = None
     root_folder_path: str | None = None
     colon_replacement_format: str | None = None
     clean_artist_names: bool | None = None
@@ -170,8 +209,23 @@ class PreviewItemModel(BaseModel):
     output_path: str
 
 
+class FormatSamplePreviewModel(BaseModel):
+    sample_id: str
+    sample_name: str
+    output: str
+
+
+class FormatPreviewModel(BaseModel):
+    """How a single format string renders for every sample input, plus lint warnings."""
+
+    format: str
+    warnings: list[str] = Field(default_factory=list)
+    samples: list[FormatSamplePreviewModel] = Field(default_factory=list)
+
+
 class PreviewResponseModel(BaseModel):
     previews: list[PreviewItemModel]
+    format_previews: dict[str, FormatPreviewModel] = Field(default_factory=dict)
 
 
 class LidarrSettingsModel(BaseModel):
@@ -215,6 +269,9 @@ class LidarrTestConnectionResponse(BaseModel):
 class MediaManagementGetResponse(BaseModel):
     settings: MediaManagementSettingsModel
     presets: dict[str, dict[str, Any]]
+    preset_descriptions: dict[str, str] = Field(default_factory=dict)
+    token_help: list[dict[str, Any]] = Field(default_factory=list)
+    syntax_help: list[dict[str, str]] = Field(default_factory=list)
 
 
 def _render_previews_for_settings(settings: dict[str, Any]) -> list[PreviewItemModel]:
@@ -234,6 +291,30 @@ def _render_previews_for_settings(settings: dict[str, Any]) -> list[PreviewItemM
     return items
 
 
+def _render_format_previews(settings: dict[str, Any]) -> dict[str, FormatPreviewModel]:
+    """Renders each of the three formats against every sample input (in-memory, no filesystem access)."""
+    standard_fmt, multi_fmt = resolve_track_formats(settings)
+    artist_fmt = str(settings.get("artist_folder_format") or "")
+    specs: list[tuple[str, str, str]] = [
+        ("artist_folder_format", artist_fmt, "artist"),
+        ("standard_track_format", standard_fmt, "track"),
+        ("multi_disc_track_format", multi_fmt, "track"),
+    ]
+    result: dict[str, FormatPreviewModel] = {}
+    for key, fmt, kind in specs:
+        samples: list[FormatSamplePreviewModel] = []
+        for sample in SAMPLE_PREVIEW_ITEMS:
+            if key == "artist_folder_format":
+                parts = build_path_parts(sample["metadata"], settings)
+                output = parts["artist"]
+            else:
+                parts = build_path_parts(sample["metadata"], settings, multi_disc=(key == "multi_disc_track_format"))
+                output = "/".join([*parts["folders"], parts["file"]])
+            samples.append(FormatSamplePreviewModel(sample_id=sample["id"], sample_name=sample["name"], output=output))
+        result[key] = FormatPreviewModel(format=fmt, warnings=validate_format(fmt, kind), samples=samples)
+    return result
+
+
 @router.get(
     "/media-management",
     response_model=MediaManagementGetResponse,
@@ -248,6 +329,15 @@ def get_media_management_settings(
     return MediaManagementGetResponse(
         settings=MediaManagementSettingsModel(**settings_dict),
         presets=PRESETS,
+        preset_descriptions=PRESET_DESCRIPTIONS,
+        token_help=[
+            {
+                "group": g["group"],
+                "tokens": [{"token": t, "description": d, "example": e} for t, d, e in g["tokens"]],
+            }
+            for g in TOKEN_HELP
+        ],
+        syntax_help=[{"syntax": a, "description": b, "example": c} for a, b, c in SYNTAX_HELP],
     )
 
 
@@ -297,7 +387,10 @@ def preview_media_management_templates(
         effective_settings.update(overrides)
 
     previews = _render_previews_for_settings(effective_settings)
-    return PreviewResponseModel(previews=previews)
+    return PreviewResponseModel(
+        previews=previews,
+        format_previews=_render_format_previews(effective_settings),
+    )
 
 
 # -----------------------------------------------------------------------------

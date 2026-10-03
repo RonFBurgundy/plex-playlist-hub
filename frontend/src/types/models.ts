@@ -287,6 +287,8 @@ export interface MediaManagementSettings {
   standard_track_format: string;
   compilation_track_format?: string;
   multi_disc_folder_format?: string;
+  /** Lidarr-style: path below the artist folder for multi-disc releases (album folder(s)/file name). */
+  multi_disc_track_format?: string;
   root_folder_path: string;
   staging_folder_path: string;
   import_mode: 'move' | 'hardlink' | 'copy';

@@ -806,6 +806,11 @@ class AcquisitionWorker:
                                 if art_cand:
                                     metadata["artist"] = art_cand["name"]
 
+                    # Disc 1 of a multi-disc release must use the multi-disc format too.
+                    known_discs = [int(metadata.get("total_discs") or 1)]
+                    known_discs += [int(t.get("disc_number") or 1) for t in expected_tracks]
+                    metadata["total_discs"] = max(known_discs)
+
                     last_metadata = metadata
 
                     target_str = build_track_path(metadata, media_settings)
