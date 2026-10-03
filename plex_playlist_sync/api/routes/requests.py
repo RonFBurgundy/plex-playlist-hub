@@ -31,6 +31,7 @@ from plex_playlist_sync.models import (
     UserPermission,
 )
 from plex_playlist_sync.notifications import notification_dispatcher
+from plex_playlist_sync.request_submission import RequestRejected, submit_track_request, user_request_lock
 from plex_playlist_sync.storage import Database
 
 logger = logging.getLogger(__name__)
@@ -110,91 +111,30 @@ def create_request(
     clean_artist = body.artist.strip()
     clean_album = body.album.strip() if body.album else None
 
-    # Quota check for non-admin users
-    if not current_user.get("is_admin"):
-        rolling_days = current_user.get("request_limit_days") if current_user.get("request_limit_days") is not None else 7
-        quota_limit = current_user.get("request_limit_quota") or config.user_request_quota
-        active_count = db.get_user_active_request_count(current_user["id"], days=rolling_days)
-        if active_count >= quota_limit:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Active request quota exceeded (maximum {quota_limit} requests allowed)",
-            )
-
-        # Duplicate check for the same item
-        existing_user_reqs = db.list_requests(user_id=current_user["id"])
-        for r in existing_user_reqs:
-            if r.get("status") in ("pending", "processing", "approved"):
-                if (
-                    r.get("artist", "").lower() == clean_artist.lower()
-                    and r.get("title", "").lower() == clean_title.lower()
-                ):
-                    raise HTTPException(
-                        status_code=status.HTTP_409_CONFLICT,
-                        detail="You have already submitted an active request for this item",
-                    )
-
-    # Determine status & auto-approval
-    is_auto_approved = bool(
-        current_user.get("is_admin")
-        or has_permission(current_user, UserPermission.AUTO_APPROVE)
-        or (body.item_type == "album" and has_permission(current_user, UserPermission.AUTO_APPROVE_ALBUM))
-        or config.auto_approve_requests
-    )
-    initial_status = RequestStatus.PROCESSING if is_auto_approved else RequestStatus.PENDING
-
-    req_id = f"req-{uuid.uuid4().hex[:12]}"
-    new_request = MusicRequest(
-        id=req_id,
-        user_id=current_user["id"],
-        item_type=body.item_type,
-        title=clean_title,
-        artist=clean_artist,
-        album=clean_album,
-        cover_url=body.cover_url,
-        status=initial_status,
-        release_date=body.release_date,
-        foreign_id=body.foreign_id,
-        preview_url=body.preview_url,
-    )
-
-    created = db.create_request(new_request)
-
-    # Dispatch notification events
-    notification_data = dict(created)
-    if not notification_data.get("username"):
-        notification_data["username"] = current_user.get("username")
-    notification_dispatcher.dispatch(NotificationEvent.REQUEST_CREATED, data=notification_data, db=db)
-    if initial_status == RequestStatus.PROCESSING:
-        notification_dispatcher.dispatch(NotificationEvent.REQUEST_APPROVED, data=notification_data, db=db)
-
-    # Dispatch to native acquisition coordinator if processing, otherwise fall back to Lidarr
-    if initial_status == RequestStatus.PROCESSING:
-        grabbed = False
-        has_native_clients = any(
-            c.get("enabled") for c in db.list_download_clients() if c.get("driver_type") != "lidarr"
+    try:
+        submission = submit_track_request(
+            db,
+            config,
+            current_user,
+            clean_title,
+            clean_artist,
+            clean_album,
+            source="api",
+            item_type=body.item_type,
+            cover_url=body.cover_url,
+            release_date=body.release_date,
+            foreign_id=body.foreign_id,
+            preview_url=body.preview_url,
         )
-        has_indexers = any(i.get("enabled") for i in db.list_indexers()) or any(
-            c.get("driver_type") == "slskd" and c.get("enabled") for c in db.list_download_clients()
-        )
+    except RequestRejected as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
 
-        if has_native_clients and has_indexers:
-            try:
-                grab_res = acquisition_coordinator.search_and_grab(
-                    artist=clean_artist,
-                    title=clean_title,
-                    album=clean_album,
-                    item_type=body.item_type,
-                    request_id=req_id,
-                    db=db,
-                )
-                if grab_res.get("success"):
-                    grabbed = True
-                    logger.info("Native acquisition grabbed request %s (%s - %s)", req_id, clean_artist, clean_title)
-                else:
-                    logger.info("Native acquisition found no match for request %s: %s", req_id, grab_res.get("message"))
-            except Exception as e:
-                logger.error("Error in native acquisition for request %s: %s", req_id, e)
+    created = submission.request
+    req_id = created["id"]
+
+    # Native grab already attempted by the shared submission; otherwise fall back to Lidarr
+    if submission.status == RequestStatus.PROCESSING:
+        grabbed = submission.grabbed
 
         if not grabbed and lidarr_client is not None:
             try:
@@ -261,92 +201,96 @@ def create_batch_requests(
                 detail="Unable to communicate with TrackSeerr Core engine",
             ) from exc
 
-    if not current_user.get("is_admin"):
-        rolling_days = current_user.get("request_limit_days") if current_user.get("request_limit_days") is not None else 7
-        quota_limit = current_user.get("request_limit_quota") or config.user_request_quota
-        active_count = db.get_user_active_request_count(current_user["id"], days=rolling_days)
-        remaining_quota = max(0, quota_limit - active_count)
-        if len(body.requests) > remaining_quota:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Active request quota exceeded: batch size ({len(body.requests)}) exceeds remaining allowance ({remaining_quota} remaining of {quota_limit} allowed)",
-            )
-        existing_user_reqs = db.list_requests(user_id=current_user["id"])
-        existing_active_keys = {
-            ((r.get("artist") or "").lower().strip(), (r.get("title") or "").lower().strip())
-            for r in existing_user_reqs
-            if r.get("status") in ("pending", "processing", "approved")
-        }
-        existing_active_foreign_ids = {
-            r.get("foreign_id")
-            for r in existing_user_reqs
-            if r.get("foreign_id") and r.get("status") in ("pending", "processing", "approved")
-        }
-    else:
-        existing_active_keys = set()
-        existing_active_foreign_ids = set()
-
-    seen_keys: set[tuple[str, str]] = set()
-    seen_fids: set[str] = set()
-
-    is_auto_approved = bool(
-        current_user.get("is_admin")
-        or has_permission(current_user, UserPermission.AUTO_APPROVE)
-        or config.auto_approve_requests
-    )
-
-    created_items: list[dict[str, Any]] = []
-
-    for req_item in body.requests:
-        clean_title = req_item.title.strip()
-        clean_artist = req_item.artist.strip()
-        clean_album = req_item.album.strip() if req_item.album else None
-        item_key = (clean_artist.lower(), clean_title.lower())
-        fid = req_item.foreign_id.strip() if req_item.foreign_id else None
-
-        # Idempotent deduplication against existing active user requests
+    # Hold the per-user lock across quota count + every insert so concurrent batches cannot exceed quota.
+    # Network follow-ups (notifications, grabs) run after release.
+    with user_request_lock(current_user["id"]):
         if not current_user.get("is_admin"):
-            if item_key in existing_active_keys or (fid and fid in existing_active_foreign_ids):
+            rolling_days = current_user.get("request_limit_days") if current_user.get("request_limit_days") is not None else 7
+            quota_limit = current_user.get("request_limit_quota") or config.user_request_quota
+            active_count = db.get_user_active_request_count(current_user["id"], days=rolling_days)
+            remaining_quota = max(0, quota_limit - active_count)
+            if len(body.requests) > remaining_quota:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Active request quota exceeded: batch size ({len(body.requests)}) exceeds remaining allowance ({remaining_quota} remaining of {quota_limit} allowed)",
+                )
+            existing_user_reqs = db.list_requests(user_id=current_user["id"])
+            existing_active_keys = {
+                ((r.get("artist") or "").lower().strip(), (r.get("title") or "").lower().strip())
+                for r in existing_user_reqs
+                if r.get("status") in ("pending", "processing", "approved")
+            }
+            existing_active_foreign_ids = {
+                r.get("foreign_id")
+                for r in existing_user_reqs
+                if r.get("foreign_id") and r.get("status") in ("pending", "processing", "approved")
+            }
+        else:
+            existing_active_keys = set()
+            existing_active_foreign_ids = set()
+
+        seen_keys: set[tuple[str, str]] = set()
+        seen_fids: set[str] = set()
+
+        is_auto_approved = bool(
+            current_user.get("is_admin")
+            or has_permission(current_user, UserPermission.AUTO_APPROVE)
+            or config.auto_approve_requests
+        )
+
+        created_items: list[dict[str, Any]] = []
+
+        for req_item in body.requests:
+            clean_title = req_item.title.strip()
+            clean_artist = req_item.artist.strip()
+            clean_album = req_item.album.strip() if req_item.album else None
+            item_key = (clean_artist.lower(), clean_title.lower())
+            fid = req_item.foreign_id.strip() if req_item.foreign_id else None
+
+            # Idempotent deduplication against existing active user requests
+            if not current_user.get("is_admin"):
+                if item_key in existing_active_keys or (fid and fid in existing_active_foreign_ids):
+                    continue
+
+            # Idempotent deduplication within the batch
+            if item_key in seen_keys or (fid and fid in seen_fids):
                 continue
 
-        # Idempotent deduplication within the batch
-        if item_key in seen_keys or (fid and fid in seen_fids):
-            continue
+            seen_keys.add(item_key)
+            if fid:
+                seen_fids.add(fid)
 
-        seen_keys.add(item_key)
-        if fid:
-            seen_fids.add(fid)
+            item_auto_approved = is_auto_approved or (
+                req_item.item_type == "album"
+                and has_permission(current_user, UserPermission.AUTO_APPROVE_ALBUM)
+            )
+            item_status = RequestStatus.PROCESSING if item_auto_approved else RequestStatus.PENDING
 
-        item_auto_approved = is_auto_approved or (
-            req_item.item_type == "album"
-            and has_permission(current_user, UserPermission.AUTO_APPROVE_ALBUM)
-        )
-        item_status = RequestStatus.PROCESSING if item_auto_approved else RequestStatus.PENDING
+            req_id = f"req-{uuid.uuid4().hex[:12]}"
+            new_request = MusicRequest(
+                id=req_id,
+                user_id=current_user["id"],
+                item_type=req_item.item_type,
+                title=clean_title,
+                artist=clean_artist,
+                album=clean_album,
+                cover_url=req_item.cover_url,
+                status=item_status,
+                release_date=req_item.release_date,
+                foreign_id=fid,
+                preview_url=req_item.preview_url,
+            )
 
-        req_id = f"req-{uuid.uuid4().hex[:12]}"
-        new_request = MusicRequest(
-            id=req_id,
-            user_id=current_user["id"],
-            item_type=req_item.item_type,
-            title=clean_title,
-            artist=clean_artist,
-            album=clean_album,
-            cover_url=req_item.cover_url,
-            status=item_status,
-            release_date=req_item.release_date,
-            foreign_id=fid,
-            preview_url=req_item.preview_url,
-        )
+            created = db.create_request(new_request)
+            created_items.append(created)
 
-        created = db.create_request(new_request)
-        created_items.append(created)
-
+    for created in created_items:
         # Dispatch notification events
         notification_data = dict(created)
         if not notification_data.get("username"):
             notification_data["username"] = current_user.get("username")
         notification_dispatcher.dispatch(NotificationEvent.REQUEST_CREATED, data=notification_data, db=db)
-        if item_status == RequestStatus.PROCESSING:
+        if created.get("status") in (RequestStatus.PROCESSING.value, "processing"):
             notification_dispatcher.dispatch(NotificationEvent.REQUEST_APPROVED, data=notification_data, db=db)
 
     # Dispatch to native acquisition coordinator if processing, otherwise fall back to Lidarr
@@ -526,7 +470,7 @@ def delete_request(
             secret=config.internal_core_secret,
         )
         try:
-            ok = core_client.forward_delete_request(request_id)
+            ok = core_client.forward_delete_request(request_id, user_info=current_user)
             if not ok:
                 raise HTTPException(
                     status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -550,10 +494,8 @@ def delete_request(
     is_owner = str(req["user_id"]) == str(current_user["id"])
 
     if not is_admin and not is_owner:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="You are not authorized to delete this request",
-        )
+        # 404, not 403: do not reveal that another user's request exists.
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Request not found")
 
     if not is_admin and req["status"] != "pending":
         raise HTTPException(
@@ -576,21 +518,13 @@ def retry_request(
     request_id: str,
     db: Database = Depends(get_db),
     config: Config = Depends(get_config),
-    current_user: dict[str, Any] = Depends(require_user),
+    _admin: dict[str, Any] = Depends(require_admin),
     lidarr_client: Optional[LidarrClient] = Depends(get_lidarr_client),
 ) -> dict[str, Any]:
-    """Forces re-search and grab for an existing request."""
+    """Admin-only: forces re-search and grab for an existing request."""
     req = db.get_request(request_id)
     if not req:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Request not found")
-
-    is_admin = bool(current_user.get("is_admin"))
-    is_owner = str(req.get("user_id")) == str(current_user.get("id"))
-    if not is_admin and not is_owner:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="You are not authorized to retry this request",
-        )
 
     if req.get("status") == "available":
         raise HTTPException(

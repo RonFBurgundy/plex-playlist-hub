@@ -424,7 +424,9 @@ def test_record_and_list_system_events(test_db):
 def test_get_system_events_api(app_and_client, seeded_users, secret_key, test_db):
     """Tests GET /api/system/events with pagination, severity filtering, and text search."""
     _, client = app_and_client
-    cookies = create_auth_cookies(test_db, seeded_users["alice"], secret_key)
+    cookies = create_auth_cookies(test_db, seeded_users["admin"], secret_key)
+    alice_cookies = create_auth_cookies(test_db, seeded_users["alice"], secret_key)
+    assert client.get("/api/system/events", cookies=alice_cookies).status_code == 403
 
     # Seed 3 events: one info, one warn, one error
     test_db.record_event(
@@ -516,15 +518,21 @@ def test_system_logs_api_and_stream(app_and_client, seeded_users, secret_key, te
     logger.warning("Warning message for logs test")
     logger.error("Error needle message in log buffer")
 
+    # 0. Logs and the live stream are admin-only
+    assert client.get("/api/system/logs", cookies=alice_cookies).status_code == 403
+    alice_token = alice_cookies["session_token"]
+    assert client.get(f"/api/system/logs/stream?token={alice_token}").status_code == 403
+    assert client.get("/api/system/logs/stream", cookies=alice_cookies).status_code == 403
+
     # 1. GET /api/system/logs returns recent logs list
-    resp = client.get("/api/system/logs", cookies=alice_cookies)
+    resp = client.get("/api/system/logs", cookies=admin_cookies)
     assert resp.status_code == 200
     logs = resp.json()
     assert len(logs) >= 3
     assert any("Informational system status message" in l["message"] for l in logs)
 
     # 2. GET /api/system/logs?level=ERROR filters by level
-    resp_err = client.get("/api/system/logs?level=ERROR", cookies=alice_cookies)
+    resp_err = client.get("/api/system/logs?level=ERROR", cookies=admin_cookies)
     assert resp_err.status_code == 200
     err_logs = resp_err.json()
     assert len(err_logs) >= 1

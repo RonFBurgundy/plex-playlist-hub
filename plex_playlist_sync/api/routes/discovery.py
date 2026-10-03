@@ -2,18 +2,23 @@
 
 import concurrent.futures
 import logging
+import os
 from typing import Any, Optional
 
+import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 
 from plex_playlist_sync.api.dependencies import (
+    get_config,
     get_db,
     get_discovery_client,
     get_plex_client,
     require_user,
 )
+from plex_playlist_sync.clients.core_client import CoreClient
 from plex_playlist_sync.clients.discovery import DiscoveryClient
 from plex_playlist_sync.clients.plex import PlexClient
+from plex_playlist_sync.config import Config
 from plex_playlist_sync.library_availability import get_item_availability
 from plex_playlist_sync.storage import Database
 
@@ -22,12 +27,62 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
+_CORE_AVAILABILITY_WORKERS = 8
+
+
+def _gateway_core_client(config: Optional[Config]) -> Optional[CoreClient]:
+    """Returns a CoreClient when running as a gateway with a configured core, else None."""
+    if config is None:
+        return None
+    role = (config.role or os.getenv("ROLE", "all-in-one")).lower().strip()
+    if role == "gateway" and config.trackseerr_core_url:
+        return CoreClient(core_url=config.trackseerr_core_url, secret=config.internal_core_secret)
+    return None
+
+
+def _core_availability(
+    client: CoreClient,
+    items: list[dict[str, Any]],
+    user: Optional[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Resolves library availability for each item on core (signed as ``user``); failures read as not in library."""
+
+    def _one(it: dict[str, Any]) -> dict[str, Any]:
+        is_album = (it.get("type") == "album") or (it.get("item_type") == "album")
+        try:
+            return client.get_availability(
+                artist_name=it.get("artist"),
+                album_title=it.get("title") if is_album else None,
+                track_title=it.get("title") if not is_album else None,
+                foreign_id=it.get("id"),
+                user_info=user,
+            )
+        except (httpx.HTTPError, ValueError) as exc:
+            logger.warning("Core availability lookup failed for '%s': %s", it.get("title"), exc)
+            return {"in_library": False}
+
+    if not items:
+        return []
+    with concurrent.futures.ThreadPoolExecutor(max_workers=min(_CORE_AVAILABILITY_WORKERS, len(items))) as pool:
+        return list(pool.map(_one, items))
+
+
 def annotate_item_statuses(
     items: list[dict[str, Any]],
     db: Database,
     plex_client: Optional[PlexClient] = None,
+    config: Optional[Config] = None,
+    user: Optional[dict[str, Any]] = None,
 ) -> list[dict[str, Any]]:
-    """Cross-references discovery items with music_requests and native library or Plex."""
+    """Cross-references discovery items with music_requests and native library or Plex.
+
+    On a gateway the local database holds no library, so availability is resolved on core
+    through the signed ``CoreClient.get_availability`` call (as ``user``).
+    """
+    core_client = _gateway_core_client(config)
+    core_avail: Optional[list[dict[str, Any]]] = (
+        _core_availability(core_client, items, user) if core_client is not None else None
+    )
     try:
         media_settings = db.get_media_management_settings()
         library_mode = media_settings.get("library_mode", "native")
@@ -48,7 +103,7 @@ def annotate_item_statuses(
         req_by_artist_title = {}
 
     annotated: list[dict[str, Any]] = []
-    for item in items:
+    for index, item in enumerate(items):
         it = dict(item)
         foreign_id = it.get("id")
         artist = (it.get("artist") or "").lower().strip()
@@ -56,15 +111,18 @@ def annotate_item_statuses(
 
         matched_req = req_by_foreign_id.get(foreign_id) or req_by_artist_title.get((artist, title))
 
-        if library_mode == "native":
-            is_album = (it.get("type") == "album") or (it.get("item_type") == "album")
-            avail = get_item_availability(
-                db,
-                artist_name=it.get("artist"),
-                album_title=it.get("title") if is_album else None,
-                track_title=it.get("title") if not is_album else None,
-                foreign_id=foreign_id,
-            )
+        if core_avail is not None or library_mode == "native":
+            if core_avail is not None:
+                avail = core_avail[index]
+            else:
+                is_album = (it.get("type") == "album") or (it.get("item_type") == "album")
+                avail = get_item_availability(
+                    db,
+                    artist_name=it.get("artist"),
+                    album_title=it.get("title") if is_album else None,
+                    track_title=it.get("title") if not is_album else None,
+                    foreign_id=foreign_id,
+                )
             if avail.get("in_library"):
                 it["status"] = avail["status"]
                 it["quality"] = avail.get("quality")
@@ -133,11 +191,12 @@ def get_trending(
     discovery: DiscoveryClient = Depends(get_discovery_client),
     db: Database = Depends(get_db),
     plex_client: Optional[PlexClient] = Depends(get_plex_client),
+    config: Config = Depends(get_config),
     _user: dict[str, Any] = Depends(require_user),
 ) -> dict[str, Any]:
     """Retrieves trending music tracks and albums annotated with library & request status."""
     raw_items = discovery.get_trending(limit=limit)
-    annotated = annotate_item_statuses(raw_items, db=db, plex_client=plex_client)
+    annotated = annotate_item_statuses(raw_items, db=db, plex_client=plex_client, config=config, user=_user)
     return {"items": annotated, "count": len(annotated)}
 
 
@@ -147,11 +206,12 @@ def get_new_releases(
     discovery: DiscoveryClient = Depends(get_discovery_client),
     db: Database = Depends(get_db),
     plex_client: Optional[PlexClient] = Depends(get_plex_client),
+    config: Config = Depends(get_config),
     _user: dict[str, Any] = Depends(require_user),
 ) -> dict[str, Any]:
     """Retrieves latest album releases annotated with library & request status."""
     raw_items = discovery.get_new_releases(limit=limit)
-    annotated = annotate_item_statuses(raw_items, db=db, plex_client=plex_client)
+    annotated = annotate_item_statuses(raw_items, db=db, plex_client=plex_client, config=config, user=_user)
     return {"items": annotated, "count": len(annotated)}
 
 
@@ -163,11 +223,12 @@ def search_discovery(
     discovery: DiscoveryClient = Depends(get_discovery_client),
     db: Database = Depends(get_db),
     plex_client: Optional[PlexClient] = Depends(get_plex_client),
+    config: Config = Depends(get_config),
     _user: dict[str, Any] = Depends(require_user),
 ) -> dict[str, Any]:
     """Performs unified multi-source search across iTunes and Deezer public APIs."""
     raw_items = discovery.search(query=q, item_type=type, limit=limit)
-    annotated = annotate_item_statuses(raw_items, db=db, plex_client=plex_client)
+    annotated = annotate_item_statuses(raw_items, db=db, plex_client=plex_client, config=config, user=_user)
     return {"items": annotated, "query": q, "type": type, "count": len(annotated)}
 
 
@@ -177,6 +238,7 @@ def get_album(
     discovery: DiscoveryClient = Depends(get_discovery_client),
     db: Database = Depends(get_db),
     plex_client: Optional[PlexClient] = Depends(get_plex_client),
+    config: Config = Depends(get_config),
     _user: dict[str, Any] = Depends(require_user),
 ) -> dict[str, Any]:
     """Retrieves deep album details including tracklist and previews annotated with status."""
@@ -194,8 +256,8 @@ def get_album(
     for t in raw_tracks:
         t.setdefault("item_type", "track")
 
-    annotated_tracks = annotate_item_statuses(raw_tracks, db=db, plex_client=plex_client)
-    annotated_album = annotate_item_statuses([album_dict], db=db, plex_client=plex_client)[0]
+    annotated_tracks = annotate_item_statuses(raw_tracks, db=db, plex_client=plex_client, config=config, user=_user)
+    annotated_album = annotate_item_statuses([album_dict], db=db, plex_client=plex_client, config=config, user=_user)[0]
     annotated_album["tracks"] = annotated_tracks
     return annotated_album
 
@@ -206,6 +268,7 @@ def get_artist(
     discovery: DiscoveryClient = Depends(get_discovery_client),
     db: Database = Depends(get_db),
     plex_client: Optional[PlexClient] = Depends(get_plex_client),
+    config: Config = Depends(get_config),
     _user: dict[str, Any] = Depends(require_user),
 ) -> dict[str, Any]:
     """Retrieves artist details and discography grouped into albums, singles_eps, and compilations."""
@@ -221,6 +284,6 @@ def get_artist(
         items = artist_dict.get(group_key, [])
         for it in items:
             it.setdefault("item_type", "album")
-        artist_dict[group_key] = annotate_item_statuses(items, db=db, plex_client=plex_client)
+        artist_dict[group_key] = annotate_item_statuses(items, db=db, plex_client=plex_client, config=config, user=_user)
 
     return artist_dict

@@ -6,7 +6,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
 
-from plex_playlist_sync.api.dependencies import get_db, require_admin, require_user
+from plex_playlist_sync.api.dependencies import get_db, require_admin
 from plex_playlist_sync.clients.lidarr import LidarrClient
 from plex_playlist_sync.naming import PRESETS, build_track_path
 from plex_playlist_sync.security import is_safe_service_url, mask_secret
@@ -286,7 +286,7 @@ def update_media_management_settings(
 def preview_media_management_templates(
     payload: PreviewRequestModel | None = None,
     db: Database = Depends(get_db),
-    current_user: dict[str, Any] = Depends(require_user),
+    current_user: dict[str, Any] = Depends(require_admin),
 ) -> PreviewResponseModel:
     """Renders real-time example paths purely in-memory using provided or stored settings."""
     stored_settings = db.get_media_management_settings()

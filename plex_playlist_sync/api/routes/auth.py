@@ -8,6 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from pydantic import BaseModel, Field
 
 from plex_playlist_sync.api.dependencies import (
+    tier_of,
     get_config,
     get_current_user,
     get_db,
@@ -226,6 +227,9 @@ def logout(
 
 
 @router.get("/me")
-def get_me(current_user: dict[str, Any] = Depends(get_current_user)) -> dict[str, Any]:
-    """Returns current user info and role."""
-    return {"user": current_user}
+def get_me(
+    current_user: dict[str, Any] = Depends(get_current_user),
+    config: Config = Depends(get_config),
+) -> dict[str, Any]:
+    """Returns current user info, role and the deployment tier."""
+    return {"user": current_user, "tier": tier_of(config)}

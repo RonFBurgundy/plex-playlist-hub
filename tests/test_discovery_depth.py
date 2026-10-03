@@ -866,3 +866,37 @@ class TestBatchRequestsAPI:
         }
         resp = client.post("/api/requests/batch", json=payload, headers=headers)
         assert resp.status_code == 422
+
+
+def test_concurrent_batches_cannot_exceed_quota(app_and_client, test_db, test_config, seeded_users):
+    """Count+insert must be atomic per user: two simultaneous 2-item batches against quota 3 cannot both land."""
+    import threading
+    import time
+
+    _, client = app_and_client
+    test_config.user_request_quota = 3
+    headers = _auth_headers(seeded_users["alice"], test_db, test_config)
+    real_create = test_db.create_request
+
+    def slow_create(req):
+        time.sleep(0.05)  # widen the check-then-insert race window
+        return real_create(req)
+
+    codes = []
+
+    def post(tag):
+        payload = {"requests": [
+            {"item_type": "track", "title": f"{tag}-1", "artist": f"Art{tag}"},
+            {"item_type": "track", "title": f"{tag}-2", "artist": f"Art{tag}"},
+        ]}
+        codes.append(client.post("/api/requests/batch", json=payload, headers=headers).status_code)
+
+    with patch.object(test_db, "create_request", side_effect=slow_create):
+        threads = [threading.Thread(target=post, args=(t,)) for t in ("a", "b")]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+    assert sorted(codes) == [201, 400]
+    assert len(test_db.list_requests(user_id=seeded_users["alice"]["id"])) == 2

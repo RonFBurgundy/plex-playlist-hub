@@ -9,6 +9,7 @@ import {
   TactileSwitch,
 } from '@/components/ui';
 import { PlexPlaylistsSection } from '@/components/plex';
+import { TailoredMixesSection } from '@/components/mixes';
 
 export interface PlaylistsViewProps {
   playlists: Playlist[];
@@ -42,6 +43,9 @@ const SyncPlaylistsPanel: React.FC<PlaylistsViewProps> = ({
   const [playlistUrl, setPlaylistUrl] = useState<string>('');
   const [pastedTracks, setPastedTracks] = useState<string>('');
   const [isSubmittingImport, setIsSubmittingImport] = useState<boolean>(false);
+
+  // Non-admins may only target themselves (the server rejects other users with 403).
+  const targetUsers = isAdmin ? users : users.filter((u) => u.id === currentUserId);
 
   const handleSyncClick = async () => {
     setIsSyncing(true);
@@ -98,6 +102,7 @@ const SyncPlaylistsPanel: React.FC<PlaylistsViewProps> = ({
       {/* Action Header */}
       <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-4">
         <TapeTransportBay className="flex items-center gap-2">
+          {isAdmin && (
           <TapeDeckButton
             size="sm"
             variant="amber"
@@ -113,6 +118,7 @@ const SyncPlaylistsPanel: React.FC<PlaylistsViewProps> = ({
           >
             {isSyncing ? 'Syncing...' : 'Sync Playlists'}
           </TapeDeckButton>
+          )}
 
           <TapeDeckButton
             size="sm"
@@ -186,7 +192,7 @@ const SyncPlaylistsPanel: React.FC<PlaylistsViewProps> = ({
                   Sync Targets
                 </span>
                 <div className="flex flex-wrap gap-1.5">
-                  {users.map((u) => {
+                  {targetUsers.map((u) => {
                     const uIdStr = String(u.id);
                     const isTarget = pl.target_user_ids.map(String).includes(uIdStr);
                     const canEdit = isAdmin || u.id === currentUserId;
@@ -369,7 +375,7 @@ const SyncPlaylistsPanel: React.FC<PlaylistsViewProps> = ({
   );
 };
 
-type PlaylistsSection = 'sync' | 'plex';
+type PlaylistsSection = 'sync' | 'plex' | 'mixes';
 
 export const PlaylistsView: React.FC<PlaylistsViewProps> = (props) => {
   const [section, setSection] = useState<PlaylistsSection>('sync');
@@ -383,13 +389,14 @@ export const PlaylistsView: React.FC<PlaylistsViewProps> = (props) => {
         <TapeDeckButton size="sm" active={section === 'plex'} onClick={() => setSection('plex')}>
           Plex
         </TapeDeckButton>
+        <TapeDeckButton size="sm" active={section === 'mixes'} onClick={() => setSection('mixes')}>
+          Mixes
+        </TapeDeckButton>
       </TapeTransportBay>
 
-      {section === 'sync' ? (
-        <SyncPlaylistsPanel {...props} />
-      ) : (
-        <PlexPlaylistsSection isAdmin={props.isAdmin ?? false} />
-      )}
+      {section === 'sync' && <SyncPlaylistsPanel {...props} />}
+      {section === 'plex' && <PlexPlaylistsSection isAdmin={props.isAdmin ?? false} />}
+      {section === 'mixes' && <TailoredMixesSection isAdmin={props.isAdmin ?? false} />}
     </div>
   );
 };

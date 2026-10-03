@@ -19,21 +19,39 @@ from plex_playlist_sync.api.routes import (
     issues,
     library,
     missing,
+    mixes,
     notifications,
     plex_playlists,
     playlists,
     quality_profiles,
     queue,
     requests,
+    scrobbles,
     settings,
     sync,
     system,
     users,
 )
+from plex_playlist_sync.api.tier_middleware import GatewayGuardMiddleware, SignedBodyMiddleware
 from plex_playlist_sync.config import Config
+from plex_playlist_sync.internal_auth import MIN_SECRET_LENGTH, validate_secret_strength
 from plex_playlist_sync.storage import Database
 
 logger = logging.getLogger(__name__)
+
+
+def _enforce_internal_secret(config: Optional[Config]) -> None:
+    """Refuses to build a gateway/core app without a strong INTERNAL_CORE_SECRET."""
+    if config is not None:
+        role = (config.role or os.getenv("ROLE", "all-in-one")).lower().strip()
+        secret = config.internal_core_secret
+    else:
+        role = os.getenv("ROLE", "all-in-one").lower().strip()
+        secret = os.getenv("INTERNAL_CORE_SECRET", "").strip() or None
+    if role in ("gateway", "core") and not validate_secret_strength(secret):
+        raise RuntimeError(
+            f"ROLE={role} requires INTERNAL_CORE_SECRET of at least {MIN_SECRET_LENGTH} characters"
+        )
 
 
 def create_app(
@@ -41,12 +59,14 @@ def create_app(
     config: Optional[Config] = None,
 ) -> FastAPI:
     """Creates and configures a FastAPI application instance."""
+    _enforce_internal_secret(config)
+    docs_enabled = os.getenv("ENABLE_API_DOCS", "").strip() == "1"
     app = FastAPI(
         title="TrackSeerr API",
         version="1.0.0",
-        docs_url="/api/docs",
-        redoc_url="/api/redoc",
-        openapi_url="/api/openapi.json",
+        docs_url="/api/docs" if docs_enabled else None,
+        redoc_url="/api/redoc" if docs_enabled else None,
+        openapi_url="/api/openapi.json" if docs_enabled else None,
     )
 
     # Attach instances to app state if provided
@@ -59,6 +79,11 @@ def create_app(
             setup_logging(config.log_level, config=config)
         except Exception:
             pass
+
+    # 0. Two-tier security: hash signed bodies (all roles); deny-by-default guard (gateway role only, checked per request)
+    # Added last = outermost: forged X-TS-* headers are refused on a gateway before the guard forwards anything.
+    app.add_middleware(GatewayGuardMiddleware)
+    app.add_middleware(SignedBodyMiddleware)
 
     # 1. Security Headers Middleware
     @app.middleware("http")
@@ -127,6 +152,8 @@ def create_app(
     )
     api_router.include_router(queue.router, prefix="/queue", tags=["queue"])
     api_router.include_router(acquisition.router, prefix="/acquisition", tags=["acquisition"])
+    api_router.include_router(scrobbles.router, prefix="/scrobbles", tags=["scrobbles"])
+    api_router.include_router(mixes.router, prefix="/mixes", tags=["mixes"])
     api_router.include_router(system.router, prefix="/system", tags=["system"])
 
     @api_router.api_route("/health", methods=["GET", "HEAD"], tags=["health"])

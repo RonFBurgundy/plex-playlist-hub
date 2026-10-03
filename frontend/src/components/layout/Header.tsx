@@ -42,18 +42,18 @@ export const Header: React.FC<HeaderProps> = ({
   const navItems: Array<{ id: MainTab; label: string; icon: React.ReactNode; adminOnly?: boolean }> = [
     { id: 'discover', label: 'Discover', icon: <Compass className="h-4 w-4" /> },
     { id: 'requests', label: 'Requests', icon: <Inbox className="h-4 w-4" /> },
-    { id: 'library', label: 'Library', icon: <Library className="h-4 w-4" /> },
+    { id: 'library', label: 'Library', icon: <Library className="h-4 w-4" />, adminOnly: true },
     { id: 'playlists', label: 'Playlists', icon: <ListMusic className="h-4 w-4" /> },
-    { id: 'activity', label: 'Activity', icon: <Activity className="h-4 w-4" /> },
-    { id: 'settings', label: 'Settings', icon: <Settings className="h-4 w-4" />, adminOnly: true },
+    { id: 'activity', label: 'Activity', icon: <Activity className="h-4 w-4" />, adminOnly: true },
+    { id: 'settings', label: 'Settings', icon: <Settings className="h-4 w-4" /> },
   ];
 
-  const mobileNavItems: Array<{ id: MainTab; label: string; icon: React.ReactNode }> = [
+  const mobileNavItems: Array<{ id: MainTab; label: string; icon: React.ReactNode; adminOnly?: boolean }> = [
     { id: 'discover', label: 'Discover', icon: <Compass className="h-4 w-4" /> },
     { id: 'requests', label: 'Requests', icon: <Inbox className="h-4 w-4" /> },
-    { id: 'library', label: 'Library', icon: <Library className="h-4 w-4" /> },
+    { id: 'library', label: 'Library', icon: <Library className="h-4 w-4" />, adminOnly: true },
     { id: 'playlists', label: 'Playlists', icon: <ListMusic className="h-4 w-4" /> },
-    { id: 'activity', label: 'Activity', icon: <Activity className="h-4 w-4" /> },
+    { id: 'activity', label: 'Activity', icon: <Activity className="h-4 w-4" />, adminOnly: true },
   ];
 
   return (
@@ -141,7 +141,7 @@ export const Header: React.FC<HeaderProps> = ({
           <div className="md:hidden flex items-center justify-center flex-1 mx-1">
             <TapeTransportBay className="p-[2px]">
               <div className="flex items-center gap-1">
-                {mobileNavItems.map((item) => {
+                {mobileNavItems.filter((item) => !item.adminOnly || isAdmin).map((item) => {
                   const isActive = activeTab === item.id;
                   return (
                     <TapeDeckButton

@@ -39,10 +39,18 @@ export const App: React.FC = () => {
   const audioPlayer = useAudioPlayer();
   const discovery = useDiscovery();
   const requestsHook = useRequests();
-  const libraryHook = useLibrary();
-  const queueHook = useQueue();
+  const libraryHook = useLibrary(auth.canUseAdminUi);
+  const queueHook = useQueue(auth.canUseAdminUi);
 
-  const [activeTab, setActiveTab] = useState<MainTab>('discover');
+  const [requestedTab, setActiveTab] = useState<MainTab>(() => {
+    const q = new URLSearchParams(window.location.search);
+    return q.has('connected') || q.has('scrobble_error') ? 'settings' : 'discover';
+  });
+  // Library and Activity are admin-only: any other source of those tabs falls back to Discover.
+  const activeTab: MainTab =
+    !auth.canUseAdminUi && (requestedTab === 'library' || requestedTab === 'activity')
+      ? 'discover'
+      : requestedTab;
   const [isAuthModalOpen, setIsAuthModalOpen] = useState<boolean>(false);
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState<boolean>(false);
   const mainRef = useRef<HTMLElement | null>(null);
@@ -58,16 +66,19 @@ export const App: React.FC = () => {
   const loadPlaylistsAndUsers = useCallback(async () => {
     setIsPlaylistsLoading(true);
     try {
+      // /api/users (list) is admin-only; non-admins only ever see themselves as a target.
       const [plData, usrData] = await Promise.all([
         getPlaylists().catch(() => []),
-        apiRequest<User[]>('/api/users').catch(() => []),
+        auth.canUseAdminUi
+          ? apiRequest<User[]>('/api/users').catch(() => [] as User[])
+          : Promise.resolve(auth.user ? [auth.user] : ([] as User[])),
       ]);
       setPlaylists(plData);
       setUsers(usrData);
     } finally {
       setIsPlaylistsLoading(false);
     }
-  }, []);
+  }, [auth.canUseAdminUi, auth.user]);
 
   useEffect(() => {
     if (auth.isAuthenticated) {
@@ -140,7 +151,7 @@ export const App: React.FC = () => {
         quota={requestsHook.quota}
         activeTab={activeTab}
         onTabChange={handleTabChange}
-        isAdmin={auth.isAdmin}
+        isAdmin={auth.canUseAdminUi}
         onLogin={() => setIsAuthModalOpen(true)}
         onLogout={auth.logout}
         isMobileMenuOpen={isMobileMenuOpen}
@@ -155,7 +166,7 @@ export const App: React.FC = () => {
         onTabChange={handleTabChange}
         user={auth.user}
         quota={requestsHook.quota}
-        isAdmin={auth.isAdmin}
+        isAdmin={auth.canUseAdminUi}
         onLogout={auth.logout}
       />
 
@@ -249,14 +260,14 @@ export const App: React.FC = () => {
             {activeTab === 'requests' && (
               <RequestsView
                 requestsHook={requestsHook}
-                isAdmin={auth.isAdmin}
+                isAdmin={auth.canUseAdminUi}
               />
             )}
 
-            {activeTab === 'library' && (
+            {activeTab === 'library' && auth.canUseAdminUi && (
               <LibraryView
                 libraryHook={libraryHook}
-                isAdmin={auth.isAdmin}
+                isAdmin={auth.canUseAdminUi}
               />
             )}
 
@@ -271,19 +282,21 @@ export const App: React.FC = () => {
                 onToggleActive={handleTogglePlaylistActive}
                 onDelete={handleDeletePlaylist}
                 isLoading={isPlaylistsLoading}
-                isAdmin={auth.isAdmin}
+                isAdmin={auth.canUseAdminUi}
               />
             )}
 
-            {activeTab === 'activity' && (
+            {activeTab === 'activity' && auth.canUseAdminUi && (
               <ActivityView
                 queueHook={queueHook}
-                isAdmin={auth.isAdmin}
               />
             )}
 
-            {activeTab === 'settings' && auth.isAdmin && (
-              <SettingsView />
+            {activeTab === 'settings' && (
+              <SettingsView
+                isAdmin={auth.canUseAdminUi}
+                showGatewayNote={auth.isAdmin && auth.tier === 'gateway'}
+              />
             )}
           </div>
         )}

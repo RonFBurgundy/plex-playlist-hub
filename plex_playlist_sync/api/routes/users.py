@@ -8,8 +8,8 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 
 from plex_playlist_sync.api.dependencies import (
+    tier_of,
     get_config,
-    get_current_user,
     get_db,
     get_plex_client,
     require_admin,
@@ -53,7 +53,7 @@ def get_current_user_profile(
         "id": user["id"],
         "username": user["username"],
         "email": user.get("email"),
-        "is_admin": bool(user.get("is_admin")),
+        "is_admin": bool(user.get("is_admin")) and not current_user.get("forwarded"),
         "permissions": permissions,
         "request_limit_quota": user.get("request_limit_quota"),
         "quota_limit": quota_limit,
@@ -64,18 +64,17 @@ def get_current_user_profile(
         "remaining_quota": remaining_quota,
         "created_at": user.get("created_at"),
         "updated_at": user.get("updated_at"),
+        "tier": tier_of(config),
     }
 
 
 @router.get("")
 def list_users(
-    current_user: dict[str, Any] = Depends(get_current_user),
+    _admin: dict[str, Any] = Depends(require_admin),
     db: Database = Depends(get_db),
 ) -> list[dict[str, Any]]:
-    """Returns discovered Plex Home users (admin sees all; regular user sees self)."""
-    if current_user.get("is_admin") or (int(current_user.get("permissions") or 0) & int(UserPermission.ADMIN)):
-        return db.list_users()
-    return [current_user]
+    """Returns discovered Plex Home users (admin only)."""
+    return db.list_users()
 
 
 @router.put("/{user_id}")

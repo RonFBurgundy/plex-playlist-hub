@@ -8,7 +8,7 @@ from typing import Any, Optional
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
 
-from plex_playlist_sync.api.dependencies import get_db, require_admin, require_user
+from plex_playlist_sync.api.dependencies import get_db, require_admin
 from plex_playlist_sync.clients.acquisition import get_acquisition_driver
 from plex_playlist_sync.models import DownloadClientConfig, DownloadDriverType
 from plex_playlist_sync.security import is_safe_service_url, mask_secret
@@ -197,7 +197,7 @@ def create_or_update_download_client(
 def test_download_client_connection(
     payload: TestConnectionPayload,
     db: Database = Depends(get_db),
-    current_user: dict[str, Any] = Depends(require_user),
+    current_user: dict[str, Any] = Depends(require_admin),
 ) -> TestConnectionResponse:
     """Tests connectivity to a download client before saving."""
     clean_host = payload.host_url.strip()

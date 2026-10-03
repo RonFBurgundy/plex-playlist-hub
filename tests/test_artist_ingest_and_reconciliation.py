@@ -667,6 +667,7 @@ def test_gateway_mode_blocks_ingestion_and_refresh(
         plex_token="test-token",
         data_dir=str(tmp_path),
         role="gateway",
+        internal_core_secret="g" * 40,
     )
     app = create_app(db=test_db, config=gateway_config)
     app.dependency_overrides[get_db] = lambda: test_db
@@ -676,22 +677,20 @@ def test_gateway_mode_blocks_ingestion_and_refresh(
     client = TestClient(app)
     admin_headers = _auth_headers(seeded_users["admin"], test_db, gateway_config)
 
-    # 1. Ingest on gateway returns 403 Forbidden
+    # 1. Ingest on gateway is hidden (404, deny-by-default gateway middleware)
     resp_ingest = client.post(
         "/api/library/artists/ingest",
         json={"foreign_artist_id": "deezer:artist:1", "artist_name": "Gateway Artist"},
         headers=admin_headers,
     )
-    assert resp_ingest.status_code == 403
-    assert "restricted to TrackSeerr Core tier" in resp_ingest.text
+    assert resp_ingest.status_code == 404
 
-    # 2. Refresh on gateway returns 403 Forbidden
+    # 2. Refresh on gateway is hidden (404)
     resp_refresh = client.post(
         "/api/library/artists/some-artist-id/refresh",
         headers=admin_headers,
     )
-    assert resp_refresh.status_code == 403
-    assert "restricted to TrackSeerr Core tier" in resp_refresh.text
+    assert resp_refresh.status_code == 404
 
 
 # =========================================================================

@@ -471,9 +471,9 @@ class TestMusicRequestsAPI:
         )
         req_id = res.json()["id"]
 
-        # Bob cannot delete Alice's request
+        # Bob cannot delete Alice's request (404: existence is not revealed)
         bob_del = client.delete(f"/api/requests/{req_id}", headers=bob_headers)
-        assert bob_del.status_code == 403
+        assert bob_del.status_code == 404
 
         # Alice can delete her pending request
         alice_del = client.delete(f"/api/requests/{req_id}", headers=alice_headers)

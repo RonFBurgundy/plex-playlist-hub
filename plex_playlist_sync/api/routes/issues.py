@@ -10,6 +10,7 @@ from pydantic import BaseModel
 from plex_playlist_sync.api.dependencies import (
     get_db,
     has_permission,
+    require_admin,
     require_permission,
     require_user,
 )
@@ -20,6 +21,13 @@ from plex_playlist_sync.storage import Database
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+
+def _is_admin(user: dict[str, Any]) -> bool:
+    """True only for a real admin session or API key; gateway-forwarded principals never qualify."""
+    if user.get("forwarded"):
+        return False
+    return bool(user.get("is_admin") or has_permission(user, UserPermission.ADMIN))
 
 
 class CreateIssueBody(BaseModel):
@@ -56,12 +64,8 @@ def list_issues(
     db: Database = Depends(get_db),
     current_user: dict[str, Any] = Depends(require_user),
 ) -> list[dict[str, Any]]:
-    """Lists issues. Filterable by status. Admin or MANAGE_REQUESTS see all; regular users see only their own."""
-    is_manager = bool(
-        current_user.get("is_admin")
-        or has_permission(current_user, UserPermission.MANAGE_REQUESTS)
-    )
-    user_id_filter = None if is_manager else current_user["id"]
+    """Lists issues. Filterable by status. Admins see all; regular users see only their own."""
+    user_id_filter = None if _is_admin(current_user) else current_user["id"]
     return db.list_issues(status=status_filter, user_id=user_id_filter)
 
 
@@ -111,21 +115,12 @@ def get_issue(
     db: Database = Depends(get_db),
     current_user: dict[str, Any] = Depends(require_user),
 ) -> dict[str, Any]:
-    """Retrieves an issue by ID. If non-admin/non-manager and not owner, raises 403 Forbidden."""
+    """Retrieves an issue by ID. Non-admins get 404 for issues they do not own."""
     issue = db.get_issue(issue_id)
-    if not issue:
+    if not issue or (not _is_admin(current_user) and str(issue["user_id"]) != str(current_user["id"])):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Media issue {issue_id} not found",
-        )
-    is_manager = bool(
-        current_user.get("is_admin")
-        or has_permission(current_user, UserPermission.MANAGE_REQUESTS)
-    )
-    if not is_manager and issue["user_id"] != current_user["id"]:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Permission denied: cannot view this issue",
         )
     return issue
 
@@ -135,12 +130,9 @@ def update_issue(
     issue_id: str,
     body: UpdateIssueBody,
     db: Database = Depends(get_db),
-    current_user: dict[str, Any] = Depends(require_user),
+    _admin: dict[str, Any] = Depends(require_admin),
 ) -> dict[str, Any]:
-    """Updates issue. Admin or MANAGE_REQUESTS can update status and problem_details.
-
-    Regular owners can only update problem_details if status is still open.
-    """
+    """Admin-only: updates issue status and problem_details."""
     issue = db.get_issue(issue_id)
     if not issue:
         raise HTTPException(
@@ -148,37 +140,11 @@ def update_issue(
             detail=f"Media issue {issue_id} not found",
         )
 
-    is_manager = bool(
-        current_user.get("is_admin")
-        or has_permission(current_user, UserPermission.MANAGE_REQUESTS)
-    )
-    is_owner = issue["user_id"] == current_user["id"]
-    if not is_manager and not is_owner:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Permission denied: cannot update this issue",
-        )
-
     updates: dict[str, Any] = {}
-    if is_manager:
-        if body.status is not None:
-            updates["status"] = body.status
-        if body.problem_details is not None:
-            updates["problem_details"] = body.problem_details
-    else:
-        # Regular owner
-        if issue["status"] != "open":
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Cannot update issue once it is no longer open",
-            )
-        if body.status is not None and body.status != "open":
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Permission denied: cannot modify issue status",
-            )
-        if body.problem_details is not None:
-            updates["problem_details"] = body.problem_details
+    if body.status is not None:
+        updates["status"] = body.status
+    if body.problem_details is not None:
+        updates["problem_details"] = body.problem_details
 
     if updates:
         return db.update_issue(issue_id, updates)
@@ -189,25 +155,14 @@ def update_issue(
 def delete_issue(
     issue_id: str,
     db: Database = Depends(get_db),
-    current_user: dict[str, Any] = Depends(require_user),
+    _admin: dict[str, Any] = Depends(require_admin),
 ) -> dict[str, Any]:
-    """Deletes an issue. Admin or owner can delete."""
+    """Admin-only: deletes an issue."""
     issue = db.get_issue(issue_id)
     if not issue:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Media issue {issue_id} not found",
-        )
-
-    is_admin = bool(
-        current_user.get("is_admin")
-        or has_permission(current_user, UserPermission.ADMIN)
-    )
-    is_owner = issue["user_id"] == current_user["id"]
-    if not (is_admin or is_owner):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Permission denied: cannot delete this issue",
         )
 
     deleted = db.delete_issue(issue_id)

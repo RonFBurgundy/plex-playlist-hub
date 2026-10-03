@@ -1,5 +1,5 @@
 import { apiRequest, setAuthToken } from './apiClient';
-import type { AuthPinResponse, AuthVerifyResponse, User } from '@/types/models';
+import type { AuthPinResponse, AuthVerifyResponse, DeploymentTier, User } from '@/types/models';
 
 export async function startPlexAuth(): Promise<AuthPinResponse> {
   return apiRequest<AuthPinResponse>('/api/auth/plex/pin', {
@@ -31,8 +31,10 @@ export async function pollPin(
 
 export async function getCurrentUser(): Promise<User | null> {
   try {
-    const res = await apiRequest<{ user: User }>('/api/auth/me');
-    return res?.user || null;
+    const res = await apiRequest<{ user: User; tier?: DeploymentTier }>('/api/auth/me');
+    if (!res?.user) return null;
+    const tier = res.user.tier ?? res.tier;
+    return tier ? { ...res.user, tier } : res.user;
   } catch {
     return null;
   }

@@ -193,6 +193,7 @@ services:
       - "5250:5250"
     environment:
       - ROLE=gateway
+      - INTERNAL_CORE_SECRET=${INTERNAL_CORE_SECRET:?set a 32+ char secret (openssl rand -hex 32)}
       - TRACKSEERR_CORE_URL=http://trackseerr-core:5251
       - APPLICATION_URL=https://trackseerr.yourdomain.com
       - PORT=5250
@@ -208,13 +209,14 @@ services:
     image: ghcr.io/ronfburgundy/trackseerr:latest
     container_name: trackseerr-core
     restart: unless-stopped
-    expose:
-      - "5251"
+    ports:
+      - "${CORE_LAN_BIND:-127.0.0.1}:5251:5251"
     volumes:
       - ./appdata:/config
       - /path/to/data:/data
     environment:
       - ROLE=core
+      - INTERNAL_CORE_SECRET=${INTERNAL_CORE_SECRET:?set a 32+ char secret (openssl rand -hex 32)}
       - PORT=5251
       - PUID=1000
       - PGID=1000
@@ -228,6 +230,7 @@ services:
       - LOG_LEVEL=INFO
     networks:
       - internal-net
+      - core-lan
 
 networks:
   proxynet:
@@ -236,7 +239,22 @@ networks:
   internal-net:
     name: trackseerr-internal-net
     internal: true
+  core-lan:
+    name: trackseerr-core-lan
+    driver: bridge
 ```
+
+#### Hardened two-tier (DMZ) deployment
+
+The split mirrors Seerr and Lidarr. The **gateway** is Seerr-style: internet-facing, stateless, no volumes, and no `PLEX_TOKEN`. The **core** is Lidarr-style: it holds your library, downloaders, and Plex token, and its admin UI is LAN-only.
+
+**Signed least-privilege model.** The gateway signs every request it sends to core with `INTERNAL_CORE_SECRET`, and core only grants it the narrow, non-admin actions of a requester (discover, request, sign in). Admin routes are never reachable through the gateway, so a compromised gateway can never act as admin.
+
+1. Generate the secret once and put it in the same `.env` for both services: `echo "INTERNAL_CORE_SECRET=$(openssl rand -hex 32)" >> .env`
+2. Set `CORE_LAN_BIND` to the host's LAN IP to reach the admin UI from your LAN or VPN (default is `127.0.0.1`). Never expose port 5251 to the internet.
+3. Admins use the core UI at `http://<CORE_LAN_BIND>:5251`; everyone else uses the gateway.
+4. **Plex webhook:** copy the URL from Core's **Settings -> Scrobbling**. It points at the core LAN address, so Plex must be able to reach core on the LAN. Webhooks require Plex Pass; without it, history polling covers scrobbling.
+5. **Last.fm keys (`LASTFM_API_KEY` / `LASTFM_API_SECRET`) go on core only.** The gateway must never receive `PLEX_TOKEN`, `LASTFM_API_SECRET`, or volumes.
 
 ---
 
@@ -264,7 +282,8 @@ TrackSeerr includes a first-class **Application URL** setting (configurable in t
 | `ROLE` | `all-in-one` | Container execution mode: `all-in-one`, `gateway`, or `core` |
 | `APPLICATION_URL` | *Optional* | Canonical external URL (e.g. `https://trackseerr.yourdomain.com`) for notifications, Plex OAuth redirects, and reverse proxies |
 | `TRACKSEERR_CORE_URL` | *None* | Core endpoint URL required when running in `gateway` mode |
-| `INTERNAL_CORE_SECRET` | *Optional* | Shared internal token protecting Core endpoints from unauthorized traffic on internal Docker networks |
+| `INTERNAL_CORE_SECRET` | *Required for gateway/core* | Shared secret (at least 32 characters, e.g. `openssl rand -hex 32`) used to sign gateway-to-core requests. Must be identical on both tiers |
+| `CORE_LAN_BIND` | `127.0.0.1` | Compose-only: host address core publishes port `5251` on. Set to the host's LAN IP; never expose to the internet |
 | `LIBRARY_MODE` | `native` | Operational mode: `native` for full TrackSeerr catalog & library management, or `lidarr` for external Lidarr delegation |
 | `PORT` | `5250` | Port for the web service |
 | `HOST` | `0.0.0.0` | Host binding interface |
@@ -305,6 +324,8 @@ TrackSeerr includes a first-class **Application URL** setting (configurable in t
 | `BACKLOG_SEARCH_INTERVAL_MINUTES` | `60` | Interval in minutes between automated backlog search sweeps |
 | `ENABLE_RSS_SYNC` | `1` | Periodically poll Torznab/Newznab indexers for new releases |
 | `RSS_SYNC_INTERVAL_MINUTES` | `15` | Interval in minutes between indexer RSS sync loops |
+| `LASTFM_API_KEY` | *Optional* | Last.fm API key enabling one-click per-user Last.fm scrobbling. When set (together with the secret) it overrides the value saved in Settings and locks those fields |
+| `LASTFM_API_SECRET` | *Optional* | Last.fm API shared secret paired with `LASTFM_API_KEY`; used only server-side to sign requests and never returned by the API |
 | `FEED_TOKEN` | *Optional* | Secret token protecting RSS feeds, plain text lists, and webhooks |
 | `LOG_LEVEL` | `INFO` | Logging verbosity (`DEBUG`, `INFO`, `WARNING`, `ERROR`) |
 

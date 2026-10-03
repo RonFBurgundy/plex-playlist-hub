@@ -305,10 +305,9 @@ def test_queue_api(app_and_client, test_db, test_config, seeded_users):
         )
     )
 
-    # 2. Regular user does NOT see unowned system download
+    # 2. The queue is admin-only: a regular user is refused (no filtered view)
     resp_alice = client.get("/api/queue", headers=alice_headers)
-    assert resp_alice.status_code == 200
-    assert resp_alice.json() == []
+    assert resp_alice.status_code == 403
 
     # Admin sees system download with sensitive filesystem paths intact
     resp_admin = client.get("/api/queue", headers=admin_headers)
@@ -319,8 +318,8 @@ def test_queue_api(app_and_client, test_db, test_config, seeded_users):
     assert admin_items[0]["source_path"] == "/downloads/staging/01.mp3"
     assert admin_items[0]["target_path"] == "/music/Daft Punk/01.mp3"
 
-    # 3. Create request and download owned by Alice
-    alice_req = test_db.create_request(
+    # 3. A download tied to Alice's own request is still not manageable by Alice
+    test_db.create_request(
         MusicRequest(
             id="req-alice-1",
             user_id="user-alice",
@@ -342,67 +341,19 @@ def test_queue_api(app_and_client, test_db, test_config, seeded_users):
             target_path="/music/Alice Artist/alice.flac",
         )
     )
-
-    # Alice now sees her download with source_path/target_path stripped (None)
-    resp_alice_updated = client.get("/api/queue", headers=alice_headers)
-    assert resp_alice_updated.status_code == 200
-    alice_items = resp_alice_updated.json()
-    assert len(alice_items) == 1
-    assert alice_items[0]["id"] == "dl-alice-1"
-    assert alice_items[0]["source_path"] is None
-    assert alice_items[0]["target_path"] is None
+    assert client.get("/api/queue", headers=alice_headers).status_code == 403
 
     # Admin sees both downloads
     resp_admin_all = client.get("/api/queue", headers=admin_headers)
     assert len(resp_admin_all.json()) == 2
 
-    # 4. Cancellation permissions:
-    # Alice cannot cancel system download without request_id -> 403
+    # 4. Cancellation is admin-only
     resp_cancel_sys = client.delete(f"/api/queue/{download['id']}", headers=alice_headers)
     assert resp_cancel_sys.status_code == 403
-    assert "Not authorized to cancel system download" in resp_cancel_sys.json()["detail"]
+    resp_cancel_own = client.delete(f"/api/queue/{alice_dl['id']}", headers=alice_headers)
+    assert resp_cancel_own.status_code == 403
+    assert test_db.get_active_download(alice_dl["id"]) is not None
 
-    # Alice cannot cancel another user's download -> 403
-    bob = test_db.upsert_user("user-bob", "bob", "bob@example.com")
-    bob_req = test_db.create_request(
-        MusicRequest(
-            id="req-bob-1",
-            user_id="user-bob",
-            item_type="track",
-            title="Bob Track",
-            artist="Bob",
-        )
-    )
-    bob_dl = test_db.create_active_download(
-        ActiveDownload(
-            id="dl-bob-1",
-            title="Bob Track",
-            artist="Bob",
-            client_id="client-slskd-1",
-            request_id="req-bob-1",
-        )
-    )
-    resp_cancel_bob = client.delete(f"/api/queue/{bob_dl['id']}", headers=alice_headers)
-    assert resp_cancel_bob.status_code == 403
-    assert "Not authorized to cancel this download" in resp_cancel_bob.json()["detail"]
-
-    # Alice cannot cancel orphaned download where req is None -> 403
-    with patch.object(test_db, "get_request", return_value=None):
-        resp_cancel_orphan = client.delete(f"/api/queue/{bob_dl['id']}", headers=alice_headers)
-        assert resp_cancel_orphan.status_code == 403
-        assert "Not authorized to cancel this download" in resp_cancel_orphan.json()["detail"]
-
-    # Alice CAN cancel her own download
-    with patch("plex_playlist_sync.api.routes.queue.get_acquisition_driver") as mock_factory:
-        mock_driver = MagicMock()
-        mock_driver.cancel.return_value = True
-        mock_factory.return_value = mock_driver
-
-        resp_alice_cancel = client.delete(f"/api/queue/{alice_dl['id']}", headers=alice_headers)
-        assert resp_alice_cancel.status_code == 200
-        assert resp_alice_cancel.json()["status"] == "cancelled"
-
-    # Admin can cancel system download
     with patch("plex_playlist_sync.api.routes.queue.get_acquisition_driver") as mock_factory:
         mock_driver = MagicMock()
         mock_driver.cancel.return_value = True
@@ -411,3 +362,6 @@ def test_queue_api(app_and_client, test_db, test_config, seeded_users):
         resp_admin_cancel = client.delete(f"/api/queue/{download['id']}", headers=admin_headers)
         assert resp_admin_cancel.status_code == 200
         assert resp_admin_cancel.json()["status"] == "cancelled"
+
+        resp_admin_cancel_alice = client.delete(f"/api/queue/{alice_dl['id']}", headers=admin_headers)
+        assert resp_admin_cancel_alice.status_code == 200

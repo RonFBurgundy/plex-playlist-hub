@@ -379,11 +379,11 @@ def test_update_or_create_raises_protected_for_plexamp_row(db):
 # ---------------------------------------------------------------------------
 
 
-def test_non_admin_targeting_other_user_is_403(env, db, config, users):
+def test_non_admin_targeting_other_user_is_404(env, db, config, users):
     h = headers(users["alice"], db, config)
-    assert env.tc.get("/api/plex-playlists?user=admin", headers=h).status_code == 403
-    assert env.tc.get("/api/plex-playlists/10/items?user=bob", headers=h).status_code == 403
-    assert env.tc.delete("/api/plex-playlists/10?user=admin", headers=h).status_code == 403
+    assert env.tc.get("/api/plex-playlists?user=admin", headers=h).status_code == 404
+    assert env.tc.get("/api/plex-playlists/10/items?user=bob", headers=h).status_code == 404
+    assert env.tc.delete("/api/plex-playlists/10?user=admin", headers=h).status_code == 404
     r = env.tc.post("/api/plex-playlists/20/copy", json={"target_users": ["admin"]}, headers=h)
     assert r.status_code == 403
 
@@ -592,6 +592,24 @@ def test_adopt_creates_plex_playlist_row(env, db, config, users):
     assert row["owner"] == "user"  # owner unchanged: the source is a source, not a target
 
 
+def test_adopt_cannot_overwrite_row_owned_by_someone_else(env, db, config, users):
+    """An admin adopts alice's playlist; alice re-adopting must 404 and leave the row untouched."""
+    admin_h = headers(users["admin"], db, config)
+    assert env.tc.post("/api/plex-playlists/20/adopt?user=alice", headers=admin_h).status_code == 201
+    before = db.get_playlist("plex_alice_20")
+    assert before["creator_id"] == "u-admin"
+
+    env.alice.pls[0].title = "Hijacked"
+    env.alice.pls[0].items.return_value = [make_track(9, "Evil")]
+    resp = env.tc.post("/api/plex-playlists/20/adopt", headers=headers(users["alice"], db, config))
+    assert resp.status_code == 404
+
+    after = db.get_playlist("plex_alice_20")
+    assert after["name"] == before["name"] == "Mine"
+    assert after["tracks_json"] == before["tracks_json"]
+    assert after["creator_id"] == "u-admin"
+
+
 def test_sync_refreshes_adopted_playlist_and_skips_source(env, db, config, users):
     h = headers(users["admin"], db, config)
     env.tc.post("/api/plex-playlists/10/adopt", headers=h)
@@ -744,7 +762,7 @@ def test_snapshot_ownership_enforced(db, config, users):
         json={"auto_refresh": False},
         headers=headers(users["alice"], db, config),
     )
-    assert resp.status_code == 403
+    assert resp.status_code == 404
     assert tc.delete("/api/plex-playlists/mixes/snapshots/nope", headers=headers(users["admin"], db, config)).status_code == 404
 
 

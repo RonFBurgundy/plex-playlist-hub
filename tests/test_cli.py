@@ -130,6 +130,7 @@ def test_cli_gateway_role_starts_without_plex_vars(
 
     env = {
         "ROLE": "gateway",
+        "INTERNAL_CORE_SECRET": "g" * 40,
         "PORT": "5250",
         "DATA_DIR": str(tmp_path),
         "SECONDS_TO_WAIT": "0",
@@ -164,6 +165,7 @@ def test_cli_gateway_role_fallback_to_ephemeral_db(
 
     env = {
         "ROLE": "gateway",
+        "INTERNAL_CORE_SECRET": "g" * 40,
         "PORT": "5250",
         "DATA_DIR": "/data",
         "SECONDS_TO_WAIT": "0",

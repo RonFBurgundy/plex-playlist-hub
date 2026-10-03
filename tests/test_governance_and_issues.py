@@ -765,13 +765,13 @@ class TestMediaIssuesAPI:
         assert resp_admin.status_code == 200
         assert len(resp_admin.json()) == 3
 
-        # 4. Manager (with MANAGE_REQUESTS) sees all 3 issues
+        # 4. A non-admin holding MANAGE_REQUESTS is still a regular user: sees only their own (none)
         resp_manager = client.get("/api/issues", headers=manager_headers)
         assert resp_manager.status_code == 200
-        assert len(resp_manager.json()) == 3
+        assert resp_manager.json() == []
 
     def test_get_issue_by_id_boundaries(self, app_and_client, test_db, test_config, seeded_users):
-        """Owner, admin, and manager can retrieve issue; unauthorized users receive 403."""
+        """Owner and admin can retrieve an issue; every other non-admin gets 404."""
         _, client = app_and_client
         alice = seeded_users["alice"]
         bob = seeded_users["bob"]
@@ -796,18 +796,18 @@ class TestMediaIssuesAPI:
         # Admin gets issue
         assert client.get(f"/api/issues/{issue_id}", headers=admin_headers).status_code == 200
 
-        # Manager gets issue
-        assert client.get(f"/api/issues/{issue_id}", headers=manager_headers).status_code == 200
+        # MANAGE_REQUESTS does not grant visibility of other users' issues: 404
+        assert client.get(f"/api/issues/{issue_id}", headers=manager_headers).status_code == 404
 
-        # Bob (other user) gets 403 Forbidden
+        # Bob (other user) gets 404, not 403
         resp_bob = client.get(f"/api/issues/{issue_id}", headers=bob_headers)
-        assert resp_bob.status_code == 403
+        assert resp_bob.status_code == 404
 
         # Non-existent issue returns 404
         assert client.get("/api/issues/issue-nonexistent", headers=admin_headers).status_code == 404
 
     def test_update_issue_workflows(self, app_and_client, test_db, test_config, seeded_users):
-        """Admin/managers can update status & details; owners can update details only while open."""
+        """Only admins can update issues; owners, managers and third parties are refused."""
         _, client = app_and_client
         alice = seeded_users["alice"]
         bob = seeded_users["bob"]
@@ -826,62 +826,33 @@ class TestMediaIssuesAPI:
         ).json()
         issue_id = created["id"]
 
-        # 1. Owner updates problem_details while open -> 200
-        up1 = client.put(
-            f"/api/issues/{issue_id}",
-            json={"problem_details": "v2 by alice"},
-            headers=alice_headers,
-        )
-        assert up1.status_code == 200
-        assert up1.json()["problem_details"] == "v2 by alice"
+        # 1-3. Owner, manager (MANAGE_REQUESTS) and third party are all forbidden
+        for headers in (alice_headers, manager_headers, bob_headers):
+            denied = client.put(
+                f"/api/issues/{issue_id}",
+                json={"status": "in_progress", "problem_details": "tampered"},
+                headers=headers,
+            )
+            assert denied.status_code == 403
+        unchanged = test_db.get_issue(issue_id)
+        assert unchanged["status"] == "open"
+        assert unchanged["problem_details"] == "v1"
 
-        # 2. Owner tries to update status -> 403 Forbidden
-        up_status_owner = client.put(
-            f"/api/issues/{issue_id}",
-            json={"status": "in_progress"},
-            headers=alice_headers,
-        )
-        assert up_status_owner.status_code == 403
-
-        # 3. Manager updates status to in_progress -> 200
-        up_mgr = client.put(
-            f"/api/issues/{issue_id}",
-            json={"status": "in_progress", "problem_details": "Work in progress"},
-            headers=manager_headers,
-        )
-        assert up_mgr.status_code == 200
-        assert up_mgr.json()["status"] == "in_progress"
-
-        # 4. Owner tries to update details after status is no longer open -> 400 Bad Request
-        up_after_open = client.put(
-            f"/api/issues/{issue_id}",
-            json={"problem_details": "Too late"},
-            headers=alice_headers,
-        )
-        assert up_after_open.status_code == 400
-
-        # 5. Admin updates status to resolved -> 200
+        # 4. Admin updates status and details -> 200
         up_admin = client.put(
             f"/api/issues/{issue_id}",
-            json={"status": "resolved"},
+            json={"status": "resolved", "problem_details": "fixed"},
             headers=admin_headers,
         )
         assert up_admin.status_code == 200
         assert up_admin.json()["status"] == "resolved"
+        assert up_admin.json()["problem_details"] == "fixed"
 
-        # 6. Bob (unauthorized third-party) gets 403
-        up_bob = client.put(
-            f"/api/issues/{issue_id}",
-            json={"problem_details": "intruder"},
-            headers=bob_headers,
-        )
-        assert up_bob.status_code == 403
-
-        # 7. Non-existent returns 404
+        # 5. Non-existent returns 404
         assert client.put("/api/issues/issue-unknown", json={"status": "closed"}, headers=admin_headers).status_code == 404
 
     def test_delete_issue_boundaries(self, app_and_client, test_db, test_config, seeded_users):
-        """Owner and admin can delete; third-party regular users receive 403."""
+        """Only admins can delete issues; the owner and third parties receive 403."""
         _, client = app_and_client
         alice = seeded_users["alice"]
         bob = seeded_users["bob"]
@@ -891,34 +862,22 @@ class TestMediaIssuesAPI:
         bob_headers = _auth_headers(bob, test_db, test_config)
         admin_headers = _auth_headers(admin, test_db, test_config)
 
-        # Issue 1 for Alice delete test
         iss1 = client.post(
             "/api/issues",
             json={"media_title": "Del 1", "artist": "Art", "issue_type": "other", "problem_details": "d1"},
             headers=alice_headers,
         ).json()["id"]
 
-        # Bob tries to delete Alice's issue -> 403
+        # Bob and the owner are both refused
         assert client.delete(f"/api/issues/{iss1}", headers=bob_headers).status_code == 403
-
-        # Alice (owner) deletes her issue -> 200
-        del_alice = client.delete(f"/api/issues/{iss1}", headers=alice_headers)
-        assert del_alice.status_code == 200
-        assert del_alice.json()["status"] == "deleted"
-        assert test_db.get_issue(iss1) is None
-
-        # Issue 2 for Admin delete test
-        iss2 = client.post(
-            "/api/issues",
-            json={"media_title": "Del 2", "artist": "Art", "issue_type": "other", "problem_details": "d2"},
-            headers=alice_headers,
-        ).json()["id"]
+        assert client.delete(f"/api/issues/{iss1}", headers=alice_headers).status_code == 403
+        assert test_db.get_issue(iss1) is not None
 
         # Admin deletes Alice's issue -> 200
-        del_admin = client.delete(f"/api/issues/{iss2}", headers=admin_headers)
+        del_admin = client.delete(f"/api/issues/{iss1}", headers=admin_headers)
         assert del_admin.status_code == 200
         assert del_admin.json()["status"] == "deleted"
-        assert test_db.get_issue(iss2) is None
+        assert test_db.get_issue(iss1) is None
 
         # Non-existent delete returns 404
         assert client.delete("/api/issues/issue-none", headers=admin_headers).status_code == 404

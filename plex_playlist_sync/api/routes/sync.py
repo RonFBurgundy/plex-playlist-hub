@@ -4,7 +4,6 @@ import asyncio
 from datetime import datetime, timezone
 import json
 import logging
-import secrets
 import threading
 from typing import Any, Optional
 
@@ -15,14 +14,13 @@ import requests
 
 from plex_playlist_sync.api.dependencies import (
     get_config,
-    get_current_user,
     get_db,
     get_deezer_client,
     get_plex_client,
     get_spotify_client,
     require_admin,
+    verify_feed_access,
 )
-from plex_playlist_sync.auth import get_or_create_secret_key, verify_session_token
 from plex_playlist_sync.clients.deezer import DeezerClient
 from plex_playlist_sync.clients.plex import PlexClient
 from plex_playlist_sync.clients.spotify import SpotifyClient
@@ -279,7 +277,7 @@ sync_state = SyncState()
 @router.post("")
 def trigger_sync(
     background_tasks: BackgroundTasks,
-    _current_user: dict[str, Any] = Depends(get_current_user),
+    _admin: dict[str, Any] = Depends(require_admin),
     db: Database = Depends(get_db),
     config: Config = Depends(get_config),
     plex_client: Optional[PlexClient] = Depends(get_plex_client),
@@ -310,7 +308,7 @@ def trigger_sync(
 
 @router.get("/status")
 def get_sync_status(
-    _current_user: dict[str, Any] = Depends(get_current_user),
+    _admin: dict[str, Any] = Depends(require_admin),
 ) -> dict[str, Any]:
     """Returns current sync status and last run stats."""
     return {
@@ -367,7 +365,7 @@ async def stream_sync_logs(
 async def handle_sync_webhook(
     background_tasks: BackgroundTasks,
     request: Request,
-    token: Optional[str] = None,
+    _auth: dict[str, Any] = Depends(verify_feed_access),
     db: Database = Depends(get_db),
     config: Config = Depends(get_config),
     plex_client: Optional[PlexClient] = Depends(get_plex_client),
@@ -378,38 +376,8 @@ async def handle_sync_webhook(
 
     When Lidarr completes a track download/import or Plex completes a library scan,
     they can ping this endpoint to trigger immediate playlist sync and re-evaluation.
-    Requires FEED_TOKEN if configured, or a valid admin session.
+    Requires the FEED_TOKEN, an API key or an admin session; never a plain user.
     """
-    provided = (
-        token
-        or request.headers.get("X-Api-Key")
-        or request.headers.get("Authorization", "").replace("Bearer ", "").strip()
-    )
-    if config.feed_token:
-        if not provided or not secrets.compare_digest(str(provided), str(config.feed_token)):
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Invalid webhook token",
-            )
-    else:
-        # FEED_TOKEN is not set; require an explicit admin session token
-        cookie_token = request.cookies.get("session_token")
-        sess_token = cookie_token or (provided if provided else None)
-        is_admin_session = False
-        if sess_token:
-            try:
-                secret_key = get_or_create_secret_key(data_dir=config.data_dir)
-                payload = verify_session_token(sess_token, secret_key)
-                if payload and payload.get("is_admin") and db.get_session(sess_token):
-                    is_admin_session = True
-            except Exception:
-                pass
-        if not is_admin_session:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="FEED_TOKEN must be configured or admin authentication provided to trigger webhooks",
-            )
-
     body_preview = ""
     fulfilled_count = 0
     try:

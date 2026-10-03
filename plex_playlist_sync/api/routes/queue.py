@@ -6,7 +6,7 @@ from typing import Any, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel
 
-from plex_playlist_sync.api.dependencies import get_db, require_admin, require_user
+from plex_playlist_sync.api.dependencies import get_db, require_admin
 from plex_playlist_sync.clients.acquisition import get_acquisition_driver
 from plex_playlist_sync.models import DownloadStatus
 from plex_playlist_sync.storage import Database
@@ -43,9 +43,9 @@ class QueueItemResponse(BaseModel):
 def get_queue(
     include_history: bool = Query(False, description="Include completed and failed downloads"),
     db: Database = Depends(get_db),
-    current_user: dict[str, Any] = Depends(require_user),
+    _admin: dict[str, Any] = Depends(require_admin),
 ) -> list[dict[str, Any]]:
-    """Returns active downloads in the activity queue with progress and client badges."""
+    """Admin-only: returns active downloads in the activity queue with progress and client badges."""
     if include_history:
         items = db.list_active_downloads()
     else:
@@ -57,20 +57,6 @@ def get_queue(
                 DownloadStatus.IMPORTING.value,
             ]
         )
-    if not current_user.get("is_admin"):
-        user_id = str(current_user.get("id"))
-        user_requests = db.list_requests(user_id=user_id)
-        user_req_ids = {r["id"] for r in user_requests}
-        filtered: list[dict[str, Any]] = []
-        for it in items:
-            req_id = it.get("request_id")
-            if req_id and req_id in user_req_ids:
-                cleaned = dict(it)
-                cleaned["source_path"] = None
-                cleaned["target_path"] = None
-                filtered.append(cleaned)
-        return filtered
-
     return items
 
 
@@ -78,30 +64,15 @@ def get_queue(
 def cancel_download(
     download_id: str,
     db: Database = Depends(get_db),
-    current_user: dict[str, Any] = Depends(require_user),
+    _admin: dict[str, Any] = Depends(require_admin),
 ) -> dict[str, Any]:
-    """Cancels a download with the underlying download client and removes it from the queue."""
+    """Admin-only: cancels a download with the underlying download client and removes it from the queue."""
     item = db.get_active_download(download_id)
     if not item:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Download '{download_id}' not found",
         )
-
-    # If non-admin, ensure user owns the associated request
-    if not current_user.get("is_admin"):
-        req_id = item.get("request_id")
-        if not req_id:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Not authorized to cancel system download",
-            )
-        req = db.get_request(req_id)
-        if req is None or str(req.get("user_id")) != str(current_user.get("id")):
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Not authorized to cancel this download",
-            )
 
     # Cancel in download client if possible
     client_id = item.get("client_id")

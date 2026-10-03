@@ -7,7 +7,7 @@ from typing import Any, Optional
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
 
-from plex_playlist_sync.api.dependencies import get_db, require_admin, require_user
+from plex_playlist_sync.api.dependencies import get_db, require_admin
 from plex_playlist_sync.clients.acquisition import get_indexer_driver
 from plex_playlist_sync.models import IndexerConfig
 from plex_playlist_sync.security import is_safe_service_url, mask_secret
@@ -116,7 +116,7 @@ def create_or_update_indexer(
 def test_indexer_connection(
     payload: TestIndexerPayload,
     db: Database = Depends(get_db),
-    current_user: dict[str, Any] = Depends(require_user),
+    current_user: dict[str, Any] = Depends(require_admin),
 ) -> TestIndexerResponse:
     """Tests capabilities and connection against a Torznab/Newznab indexer."""
     clean_host = payload.host_url.strip()

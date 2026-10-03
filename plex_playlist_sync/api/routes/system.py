@@ -46,7 +46,7 @@ from plex_playlist_sync.clients.spotify import SpotifyClient
 from plex_playlist_sync.config import Config
 from plex_playlist_sync.library_scanner import library_scanner
 from plex_playlist_sync.lidarr_queue import lidarr_worker
-from plex_playlist_sync.models import DownloadClientConfig, IndexerConfig
+from plex_playlist_sync.models import DownloadClientConfig, IndexerConfig, UserPermission
 from plex_playlist_sync.security import is_safe_service_url
 from plex_playlist_sync.storage import Database
 
@@ -724,7 +724,7 @@ def get_system_events(
     severity: Optional[str] = None,
     search: Optional[str] = None,
     db: Database = Depends(get_db),
-    _user: dict[str, Any] = Depends(get_current_user),
+    _admin: dict[str, Any] = Depends(require_admin),
 ) -> dict[str, Any]:
     """Returns paginated and filtered system lifecycle events."""
     limit = page_size
@@ -759,7 +759,7 @@ def get_system_logs(
     level: Optional[str] = None,
     search: Optional[str] = None,
     limit: int = Query(default=200, ge=1, le=1000),
-    _user: dict[str, Any] = Depends(get_current_user),
+    _admin: dict[str, Any] = Depends(require_admin),
 ) -> list[dict[str, Any]]:
     """Returns filtered entries from the circular in-memory log buffer."""
     return log_ring_buffer.get_logs(level=level, search=search, limit=limit)
@@ -804,6 +804,13 @@ async def stream_system_logs(
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="User not found",
+        )
+
+    user_perms = int(user.get("permissions") if user.get("permissions") is not None else 0)
+    if not (user.get("is_admin") or (user_perms & int(UserPermission.ADMIN))):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Administrator access required",
         )
 
     loop = asyncio.get_running_loop()

@@ -19,6 +19,9 @@ services:
       - "5250:5250"
     environment:
       - ROLE=gateway
+      - INTERNAL_CORE_SECRET=${INTERNAL_CORE_SECRET:?set a 32+ char secret (openssl rand -hex 32)}
+      # SECURITY: never add PLEX_TOKEN, LASTFM_API_SECRET, or any volume to the gateway.
+      # It only holds the signing secret, so a compromised gateway can never act as admin.
       - TRACKSEERR_CORE_URL=http://trackseerr-core:5251
       - APPLICATION_URL=https://trackseerr.yourdomain.com
       - PORT=5250
@@ -34,7 +37,7 @@ services:
 
   # ---------------------------------------------------------------------------
   # Tier 2: Core Engine & Downloader Coordinator (Internal Isolated Network)
-  # No public port mappings. Exclusively accessible via internal network.
+  # Published only on the LAN/loopback address (CORE_LAN_BIND); never internet-facing.
   # Holds persistent database (/config) and unified TRaSH Guides data share (/data).
   # Peered directly with slskd, SABnzbd, qBittorrent, and Plex Media Server.
   # ---------------------------------------------------------------------------
@@ -42,8 +45,10 @@ services:
     image: ghcr.io/ronfburgundy/trackseerr:latest
     container_name: trackseerr-core
     restart: unless-stopped
-    expose:
-      - "5251"
+    # Admin UI + Plex webhook, LAN-only. Set CORE_LAN_BIND to the host's LAN IP
+    # (default loopback). Never expose 5251 to the internet.
+    ports:
+      - "${CORE_LAN_BIND:-127.0.0.1}:5251:5251"
     volumes:
       # AppData storage for persistent SQLite database, auth sessions, and logs
       - ./appdata:/config
@@ -53,6 +58,7 @@ services:
       - /path/to/data:/data
     environment:
       - ROLE=core
+      - INTERNAL_CORE_SECRET=${INTERNAL_CORE_SECRET:?set a 32+ char secret (openssl rand -hex 32)}
       - APPLICATION_URL=https://trackseerr.yourdomain.com
       - PORT=5251
       - PUID=1000
@@ -66,8 +72,12 @@ services:
       - SECONDS_TO_WAIT=14400
       - SEARCH_SIMILARITY_THRESHOLD=0.9
       - LOG_LEVEL=INFO
+      # Optional Last.fm scrobbling. Core ONLY, never the gateway.
+      # - LASTFM_API_KEY=your_lastfm_api_key
+      # - LASTFM_API_SECRET=your_lastfm_api_secret
     networks:
       - internal-net
+      - core-lan
 
 networks:
   proxynet:
@@ -76,3 +86,7 @@ networks:
   internal-net:
     name: trackseerr-internal-net
     internal: true
+  # Non-internal bridge so core can publish its admin port and reach Plex on the LAN.
+  core-lan:
+    name: trackseerr-core-lan
+    driver: bridge

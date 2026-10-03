@@ -33,14 +33,12 @@ import {
 
 export interface ActivityViewProps {
   queueHook: UseQueueReturn;
-  isAdmin?: boolean;
 }
 
 type ActivitySubTab = 'queue' | 'events' | 'logs';
 
 export const ActivityView: React.FC<ActivityViewProps> = ({
   queueHook,
-  isAdmin = false,
 }) => {
   const {
     queueItems,
@@ -255,9 +253,7 @@ export const ActivityView: React.FC<ActivityViewProps> = ({
   const handleClearLogs = async () => {
     setClearingLogs(true);
     try {
-      if (isAdmin) {
-        await clearSystemLogs();
-      }
+      await clearSystemLogs();
       setLogs([]);
     } catch (err: unknown) {
       console.warn('Failed to clear logs on server, clearing locally:', err);
@@ -400,7 +396,6 @@ export const ActivityView: React.FC<ActivityViewProps> = ({
                 Refresh Queue
               </TapeDeckButton>
 
-              {isAdmin && (
                 <TapeDeckButton
                   size="sm"
                   variant="amber"
@@ -416,7 +411,6 @@ export const ActivityView: React.FC<ActivityViewProps> = ({
                 >
                   {backlogStatus?.is_running ? 'Backlog Running...' : 'Trigger Backlog Search'}
                 </TapeDeckButton>
-              )}
             </TapeTransportBay>
           )}
 
@@ -431,7 +425,6 @@ export const ActivityView: React.FC<ActivityViewProps> = ({
                 Refresh
               </TapeDeckButton>
 
-              {isAdmin && (
                 <TapeDeckButton
                   size="sm"
                   variant="danger"
@@ -441,7 +434,6 @@ export const ActivityView: React.FC<ActivityViewProps> = ({
                 >
                   Clear Events
                 </TapeDeckButton>
-              )}
             </TapeTransportBay>
           )}
 

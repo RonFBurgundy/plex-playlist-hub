@@ -1,6 +1,7 @@
 import logging
 from logging.handlers import RotatingFileHandler
 import os
+import re
 import signal
 import sqlite3
 import sys
@@ -24,6 +25,31 @@ from .sync import SyncCoordinator
 
 logger = logging.getLogger("plex_playlist_sync")
 _shutdown_requested = False
+
+
+_SENSITIVE_QUERY_RE = re.compile(r"(?i)([?&](?:token|apikey|api_key|state)=)[^&#\s\"]*")
+
+
+def redact_sensitive_query(text: str) -> str:
+    """Replace the values of token/apikey/api_key/state query parameters with ``REDACTED``."""
+    return _SENSITIVE_QUERY_RE.sub(r"\1REDACTED", text)
+
+
+class RedactAccessLogFilter(logging.Filter):
+    """Strips secrets (webhook token, API keys, OAuth state) from uvicorn access-log request paths."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        if isinstance(record.args, tuple):
+            record.args = tuple(redact_sensitive_query(a) if isinstance(a, str) else a for a in record.args)
+        if isinstance(record.msg, str):
+            record.msg = redact_sensitive_query(record.msg)
+        return True
+
+
+def install_access_log_redaction() -> None:
+    access_logger = logging.getLogger("uvicorn.access")
+    if not any(isinstance(f, RedactAccessLogFilter) for f in access_logger.filters):
+        access_logger.addFilter(RedactAccessLogFilter())
 
 
 def _signal_handler(signum, frame):
@@ -84,6 +110,17 @@ def main() -> int:
     logger.info("Initializing TrackSeerr v1.0.0")
 
     role = os.getenv("ROLE", "all-in-one").lower().strip()
+
+    if role in ("gateway", "core"):
+        from plex_playlist_sync.internal_auth import MIN_SECRET_LENGTH, validate_secret_strength
+
+        if not validate_secret_strength(config.internal_core_secret):
+            logger.error(
+                "ROLE=%s requires INTERNAL_CORE_SECRET of at least %d characters (generate one with: openssl rand -hex 32).",
+                role,
+                MIN_SECRET_LENGTH,
+            )
+            return 1
 
     if role != "gateway" and (not config.plex_url or not config.plex_token):
         logger.error("Missing mandatory environment variables: PLEX_URL and PLEX_TOKEN must be specified.")
@@ -366,8 +403,19 @@ def main() -> int:
         logger.info("Starting ArtistRefreshWorker (interval: 24h, pace: 1.5s)")
         artist_refresh_worker.start(db=db, interval_seconds=86400, pace_delay=1.5)
 
+        from .scrobble_worker import scrobble_worker
+
+        logger.info("Starting ScrobbleWorker (history poll + forward retry)")
+        scrobble_worker.start(db=db, config=config)
+
+        from .mix_worker import mix_worker
+
+        logger.info("Starting MixWorker (hourly tailored mix regeneration)")
+        mix_worker.start(db=db, config=config)
+
     app = create_app(db=db, config=config)
 
+    install_access_log_redaction()
     uvicorn_config = uvicorn.Config(
         app=app,
         host=config.host,
@@ -402,6 +450,18 @@ def main() -> int:
                 artist_refresh_worker.stop()
             except Exception:
                 pass
+            try:
+                from .scrobble_worker import scrobble_worker
+
+                scrobble_worker.stop()
+            except Exception as e:
+                logger.warning("Failed to stop ScrobbleWorker cleanly: %s", e)
+            try:
+                from .mix_worker import mix_worker
+
+                mix_worker.stop()
+            except Exception as e:
+                logger.warning("Failed to stop MixWorker cleanly: %s", e)
         db.close()
 
     logger.info("TrackSeerr server terminated cleanly.")

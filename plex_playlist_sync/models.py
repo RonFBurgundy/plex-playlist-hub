@@ -779,3 +779,144 @@ class MediaManagementSettings:
             "created_at": self.created_at,
             "updated_at": self.updated_at,
         }
+
+
+@dataclass
+class UserScrobbleConfig:
+    """Per-user scrobbling configuration. Secrets are held internally and never serialized."""
+
+    user_id: str
+    username: Optional[str] = None
+    scrobbling_enabled: bool = True
+    lastfm_username: Optional[str] = None
+    lastfm_session_key: Optional[str] = field(default=None, repr=False)
+    listenbrainz_token: Optional[str] = field(default=None, repr=False)
+    listenbrainz_username: Optional[str] = None
+    updated_at: Optional[str] = None
+
+    @classmethod
+    def from_row(cls, row: dict[str, Any], username: Optional[str] = None) -> "UserScrobbleConfig":
+        return cls(
+            user_id=str(row["user_id"]),
+            username=username if username is not None else row.get("username"),
+            scrobbling_enabled=bool(row.get("scrobbling_enabled", True)),
+            lastfm_username=row.get("lastfm_username"),
+            lastfm_session_key=row.get("lastfm_session_key"),
+            listenbrainz_token=row.get("listenbrainz_token"),
+            listenbrainz_username=row.get("listenbrainz_username"),
+            updated_at=row.get("updated_at"),
+        )
+
+    @property
+    def lastfm_connected(self) -> bool:
+        return bool(self.lastfm_session_key)
+
+    @property
+    def listenbrainz_connected(self) -> bool:
+        return bool(self.listenbrainz_token)
+
+    def to_dict(self) -> dict[str, Any]:
+        """ScrobbleConfig API shape: only ``*_connected`` booleans, never session keys or tokens."""
+        return {
+            "user_id": self.user_id,
+            "username": self.username,
+            "scrobbling_enabled": self.scrobbling_enabled,
+            "lastfm_connected": self.lastfm_connected,
+            "lastfm_username": self.lastfm_username,
+            "listenbrainz_connected": self.listenbrainz_connected,
+            "listenbrainz_username": self.listenbrainz_username,
+            "updated_at": self.updated_at,
+        }
+
+
+@dataclass
+class UserListen:
+    id: int
+    artist: str
+    title: str
+    played_at: str
+    source: str
+    album: Optional[str] = None
+    lastfm_status: str = "skipped"
+    listenbrainz_status: str = "skipped"
+
+    @classmethod
+    def from_row(cls, row: dict[str, Any]) -> "UserListen":
+        return cls(
+            id=int(row["id"]),
+            artist=row["artist"],
+            title=row["title"],
+            album=row.get("album"),
+            played_at=row["played_at"],
+            source=row["source"],
+            lastfm_status=row.get("lastfm_status", "skipped"),
+            listenbrainz_status=row.get("listenbrainz_status", "skipped"),
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "id": self.id,
+            "artist": self.artist,
+            "title": self.title,
+            "album": self.album,
+            "played_at": self.played_at,
+            "source": self.source,
+            "lastfm_status": self.lastfm_status,
+            "listenbrainz_status": self.listenbrainz_status,
+        }
+
+
+@dataclass
+class TailoredMixConfig:
+    id: str
+    user_id: str
+    mix_type: str
+    name: str
+    seed_artist: Optional[str] = None
+    track_count: int = 30
+    discovery_ratio: float = 0.7
+    seed_window_days: int = 14
+    excluded_genres: List[str] = field(default_factory=list)
+    auto_acquire_missing: bool = False
+    max_weekly_acquisitions: int = 10
+    quality_profile_id: Optional[str] = None
+    enabled: bool = True
+    last_generated_at: Optional[str] = None
+
+    @classmethod
+    def from_row(cls, row: dict[str, Any]) -> "TailoredMixConfig":
+        return cls(
+            id=row["id"],
+            user_id=row["user_id"],
+            mix_type=row["mix_type"],
+            name=row["name"],
+            seed_artist=row.get("seed_artist"),
+            track_count=int(row.get("track_count", 30)),
+            discovery_ratio=float(row.get("discovery_ratio", 0.7)),
+            seed_window_days=int(row.get("seed_window_days", 14)),
+            excluded_genres=list(row.get("excluded_genres") or []),
+            auto_acquire_missing=bool(row.get("auto_acquire_missing", False)),
+            max_weekly_acquisitions=int(row.get("max_weekly_acquisitions", 10)),
+            quality_profile_id=row.get("quality_profile_id"),
+            enabled=bool(row.get("enabled", True)),
+            last_generated_at=row.get("last_generated_at"),
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        """MixConfig API shape."""
+        return {
+            "id": self.id,
+            "user_id": self.user_id,
+            "mix_type": self.mix_type,
+            "name": self.name,
+            "seed_artist": self.seed_artist,
+            "track_count": self.track_count,
+            "discovery_ratio": self.discovery_ratio,
+            "seed_window_days": self.seed_window_days,
+            "excluded_genres": list(self.excluded_genres),
+            "auto_acquire_missing": self.auto_acquire_missing,
+            "max_weekly_acquisitions": self.max_weekly_acquisitions,
+            "quality_profile_id": self.quality_profile_id,
+            "enabled": self.enabled,
+            "last_generated_at": self.last_generated_at,
+        }

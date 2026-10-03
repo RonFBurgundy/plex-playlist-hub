@@ -340,9 +340,9 @@ def verify_session_token(token: str, secret_key: bytes) -> Optional[dict[str, An
 
     payload_b64, sig_b64 = parts
 
-    computed_sig = hmac.new(secret_key, payload_b64.encode("ascii"), hashlib.sha256).digest()
+    computed_sig = hmac.new(secret_key, payload_b64.encode("utf-8"), hashlib.sha256).digest()
     computed_sig_b64 = base64.urlsafe_b64encode(computed_sig).decode("ascii").rstrip("=")
-    if not hmac.compare_digest(sig_b64, computed_sig_b64):
+    if not hmac.compare_digest(sig_b64.encode("utf-8"), computed_sig_b64.encode("utf-8")):
         return None
 
     try:

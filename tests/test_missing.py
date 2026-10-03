@@ -10,6 +10,7 @@ from plex_playlist_sync.api.app import create_app
 from plex_playlist_sync.api.dependencies import (
     get_config,
     get_current_user,
+    get_current_user_or_api_key,
     get_db,
     get_lidarr_client,
     get_plex_client,
@@ -52,6 +53,7 @@ def client(test_db, test_config):
     app.dependency_overrides[get_db] = lambda: test_db
     app.dependency_overrides[get_config] = lambda: test_config
     app.dependency_overrides[get_current_user] = lambda: admin_user
+    app.dependency_overrides[get_current_user_or_api_key] = lambda: admin_user
 
     with TestClient(app) as test_client:
         yield test_client

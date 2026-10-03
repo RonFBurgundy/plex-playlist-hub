@@ -87,6 +87,8 @@ class Config:
     role: str = "all-in-one"
     trackseerr_core_url: Optional[str] = None
     internal_core_secret: Optional[str] = None
+    lastfm_api_key: Optional[str] = None
+    lastfm_api_secret: Optional[str] = None
 
     @classmethod
     def from_env(cls) -> "Config":
@@ -179,6 +181,8 @@ class Config:
             role=os.getenv("ROLE", "all-in-one").lower().strip() or "all-in-one",
             trackseerr_core_url=os.getenv("TRACKSEERR_CORE_URL", "").rstrip("/") or None,
             internal_core_secret=os.getenv("INTERNAL_CORE_SECRET", "").strip() or None,
+            lastfm_api_key=os.getenv("LASTFM_API_KEY", "").strip() or None,
+            lastfm_api_secret=os.getenv("LASTFM_API_SECRET", "").strip() or None,
         )
 
     @property

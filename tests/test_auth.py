@@ -388,6 +388,11 @@ class TestSessionTokens:
 
         assert verify_session_token(tampered_token, secret) is None
 
+    def test_verify_session_token_non_ascii_is_rejected_not_raised(self):
+        secret = b"12345678901234567890123456789012"
+        assert verify_session_token("p\u00e9yload.sig\u00e9", secret) is None
+        assert verify_session_token("payload.sig\u00e9", secret) is None
+
     def test_verify_session_token_tampered_signature(self):
         secret = b"12345678901234567890123456789012"
         token = create_session_token(

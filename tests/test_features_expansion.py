@@ -16,6 +16,7 @@ from plex_playlist_sync.api.app import create_app
 from plex_playlist_sync.api.dependencies import (
     get_config,
     get_current_user,
+    get_current_user_or_api_key,
     get_db,
     get_plex_client,
 )
@@ -317,6 +318,7 @@ def api_test_env(tmp_path):
     app.dependency_overrides[get_db] = lambda: db
     app.dependency_overrides[get_config] = lambda: config
     app.dependency_overrides[get_current_user] = lambda: admin_user
+    app.dependency_overrides[get_current_user_or_api_key] = lambda: admin_user
     app.dependency_overrides[get_plex_client] = lambda: mock_plex
 
     with TestClient(app) as client:

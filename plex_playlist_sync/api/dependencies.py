@@ -1,8 +1,8 @@
 """FastAPI dependencies for plex-playlist-sync."""
 
 import logging
+import hmac
 import os
-import secrets
 import threading
 from pathlib import Path
 from typing import Any, Optional, Union
@@ -18,6 +18,11 @@ from plex_playlist_sync.clients.plex import PlexClient
 from plex_playlist_sync.clients.spotify import SpotifyClient
 from plex_playlist_sync.clients.spotify_scraper import SpotifyWebScraper
 from plex_playlist_sync.config import Config
+from plex_playlist_sync.internal_auth import (
+    HEADER_SIGNATURE,
+    InvalidAssertion,
+    verify_assertion,
+)
 from plex_playlist_sync.models import UserPermission
 from plex_playlist_sync.security import safe_data_path
 from plex_playlist_sync.storage import Database
@@ -124,6 +129,91 @@ def get_mbid_enricher() -> MbidEnricherClient:
         return _mbid_enricher_instance
 
 
+GATEWAY_SERVICE_ID = "gateway_service"
+
+
+def tier_of(config: Config) -> str:
+    """Deployment tier reported to the UI: "gateway", "core" or "all-in-one"."""
+    role = (config.role or os.getenv("ROLE", "all-in-one")).lower().strip()
+    return role if role in ("gateway", "core") else "all-in-one"
+
+
+def _forwarded_principal(user: dict[str, Any]) -> dict[str, Any]:
+    """Returns a copy of ``user`` that can never be admin: flag forced off, ADMIN bit stripped."""
+    principal = dict(user)
+    perms = principal.get("permissions")
+    perms = int(UserPermission.DEFAULT) if perms is None else int(perms)
+    principal["permissions"] = perms & ~int(UserPermission.ADMIN)
+    principal["is_admin"] = False
+    principal["forwarded"] = True
+    return principal
+
+
+def resolve_signed_principal(
+    request: Request,
+    db: Database,
+    config: Config,
+) -> dict[str, Any]:
+    """Authenticates a gateway-signed call (X-TS-* headers) and returns its non-admin principal.
+
+    Raises 401 on any verification failure. Unknown asserted users are created as
+    non-admin; an existing row (admin or not) is never modified.
+    """
+    unauthorized = HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Invalid gateway assertion",
+    )
+    role = (config.role or os.getenv("ROLE", "all-in-one")).lower().strip()
+    if role == "gateway":
+        # A gateway is never a verification endpoint.
+        raise unauthorized
+    body_hash = getattr(request.state, "ts_body_sha256", None)
+    if not isinstance(body_hash, str):
+        # Body hash is computed by SignedBodyMiddleware; without it nothing can be verified.
+        logger.warning("Gateway assertion rejected: request body hash unavailable")
+        raise unauthorized
+    raw_path = request.scope.get("raw_path")
+    path = raw_path.decode("latin-1") if raw_path else request.url.path
+    query = request.scope.get("query_string", b"").decode("latin-1")
+    target = f"{path}?{query}" if query else path
+    try:
+        asserted = verify_assertion(
+            config.internal_core_secret,
+            request.method,
+            target,
+            request.headers,
+            body_hash,
+            nonce_store=db,
+        )
+    except InvalidAssertion as exc:
+        logger.warning("Gateway assertion rejected: %s", exc)
+        raise unauthorized from exc
+
+    if not asserted.user_id:
+        return {
+            "id": GATEWAY_SERVICE_ID,
+            "username": GATEWAY_SERVICE_ID,
+            "is_admin": False,
+            "permissions": 0,
+            "forwarded": True,
+        }
+    # Admins never act through the gateway, even at user level.
+    known = db.get_user(asserted.user_id)
+    if known is not None and (
+        known.get("is_admin") or int(known.get("permissions") or 0) & int(UserPermission.ADMIN)
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Admin accounts must use the TrackSeerr Core admin interface",
+        )
+    try:
+        # ensure_user returns the stored row, so the asserted name never renames an existing user.
+        user = db.ensure_user(asserted.user_id, asserted.user_name)
+    except PermissionError as exc:
+        logger.warning("Gateway assertion rejected: %s", exc)
+        raise unauthorized from exc
+    return _forwarded_principal(user)
+
 
 def get_current_user(
     request: Request,
@@ -134,6 +224,9 @@ def get_current_user(
 
     validates signature and expiration, retrieves user from DB. Raises 401 if invalid or expired.
     """
+    if request.headers.get(HEADER_SIGNATURE) is not None:
+        return resolve_signed_principal(request, db, config)
+
     token: Optional[str] = None
 
     # 1. Read from HttpOnly cookie
@@ -191,7 +284,11 @@ def get_current_user_or_api_key(
     db: Database = Depends(get_db),
     config: Config = Depends(get_config),
 ) -> dict[str, Any]:
-    """Authenticates request via X-Api-Key / query param, X-Internal-Token / bearer internal secret, or user session."""
+    """Authenticates via a gateway-signed assertion, X-Api-Key / query param, or a user session."""
+    # 0. Gateway-signed assertion: forced non-admin, never falls through to other methods
+    if request.headers.get(HEADER_SIGNATURE) is not None:
+        return resolve_signed_principal(request, db, config)
+
     # 1. Check X-Api-Key header or query parameter apikey / api_key
     api_key = (
         request.headers.get("X-Api-Key")
@@ -211,37 +308,7 @@ def get_current_user_or_api_key(
             detail="Invalid API key",
         )
 
-    # 2. Check X-Internal-Token header or Authorization: Bearer <token> matching internal_core_secret
-    internal_token = request.headers.get("X-Internal-Token")
-    if internal_token is not None:
-        if config.internal_core_secret and secrets.compare_digest(
-            internal_token.strip(), config.internal_core_secret.strip()
-        ):
-            return {
-                "id": "internal_gateway",
-                "username": "internal_gateway",
-                "is_admin": True,
-                "permissions": int(UserPermission.ADMIN),
-            }
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid internal token",
-        )
-
-    auth_header = request.headers.get("Authorization")
-    if auth_header and auth_header.startswith("Bearer "):
-        bearer_token = auth_header[7:].strip()
-        if config.internal_core_secret and secrets.compare_digest(
-            bearer_token, config.internal_core_secret.strip()
-        ):
-            return {
-                "id": "internal_gateway",
-                "username": "internal_gateway",
-                "is_admin": True,
-                "permissions": int(UserPermission.ADMIN),
-            }
-
-    # 3. Fall back to standard session token validation
+    # 2. Fall back to standard session token validation
     return get_current_user(request=request, db=db, config=config)
 
 
@@ -255,6 +322,11 @@ def has_permission(user: dict[str, Any], permission: UserPermission) -> bool:
 
     Admins (is_admin=True or UserPermission.ADMIN) hold all permissions.
     """
+    if user.get("forwarded"):
+        # Gateway-asserted principals never hold admin, nor any permission implied by it.
+        user_perms = user.get("permissions")
+        user_perms = 0 if user_perms is None else int(user_perms)
+        return bool(user_perms & ~int(UserPermission.ADMIN) & int(permission))
     if user.get("is_admin"):
         return True
     user_perms = user.get("permissions")
@@ -281,6 +353,11 @@ def require_permission(permission: UserPermission):
 
 def require_admin(current_user: dict[str, Any] = Depends(get_current_user_or_api_key)) -> dict[str, Any]:
     """Enforces is_admin=True or UserPermission.ADMIN, raises 403 otherwise."""
+    if current_user.get("forwarded"):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Administrator access required",
+        )
     user_perms = int(current_user.get("permissions") if current_user.get("permissions") is not None else 0)
     if not (current_user.get("is_admin") or (user_perms & int(UserPermission.ADMIN))):
         raise HTTPException(
@@ -362,39 +439,26 @@ def verify_feed_access(
     token: Optional[str] = None,
     db: Database = Depends(get_db),
     config: Config = Depends(get_config),
-) -> Optional[dict[str, Any]]:
-    """Validates access for RSS / Lidarr feeds.
+) -> dict[str, Any]:
+    """Validates access for the missing-track RSS / text feeds (Lidarr and RSS clients).
 
-    If FEED_TOKEN is configured in environment, token or header is enforced.
-    Otherwise, if session cookie / bearer token exists, uses user context.
-    If no FEED_TOKEN is configured and no session is provided, allows read-only feed.
+    Accepted credentials, all of which are administrative:
+    * the configured ``FEED_TOKEN`` (query ``token``, ``X-Api-Key`` or Bearer),
+    * a valid API key,
+    * an admin session.
+
+    A plain (non-admin) user, a gateway-forwarded principal and anonymous callers are refused.
     """
-    if config.feed_token:
+    if request.headers.get(HEADER_SIGNATURE) is None and config.feed_token:
         provided = (
             token
             or request.headers.get("X-Api-Key")
             or request.headers.get("Authorization", "").replace("Bearer ", "").strip()
         )
-        if not provided or not secrets.compare_digest(str(provided), str(config.feed_token)):
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Invalid feed token",
-            )
-        return {"id": "feed_token_user", "username": "feed_subscriber", "is_admin": True}
+        if provided and hmac.compare_digest(
+            str(provided).encode("utf-8"), str(config.feed_token).encode("utf-8")
+        ):
+            return {"id": "feed_token_user", "username": "feed_subscriber", "is_admin": True}
 
-    cookie_token = request.cookies.get("session_token")
-    auth_header = request.headers.get("Authorization", "")
-    sess_token = cookie_token or (auth_header[7:].strip() if auth_header.startswith("Bearer ") else None) or token
-
-    if sess_token:
-        try:
-            secret_key = get_or_create_secret_key(data_dir=config.data_dir)
-            payload = verify_session_token(sess_token, secret_key)
-            if payload and db.get_session(sess_token):
-                user = db.get_user(payload["user_id"])
-                if user:
-                    return user
-        except Exception:
-            pass
-
-    return {"id": "lan_reader", "username": "lan_reader", "is_admin": False}
+    principal = get_current_user_or_api_key(request=request, db=db, config=config)
+    return require_admin(principal)

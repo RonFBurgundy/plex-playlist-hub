@@ -80,6 +80,7 @@ export const MobileDrawer: React.FC<MobileDrawerProps> = ({
       label: 'Library',
       description: 'Synced Plex audio collection',
       icon: <Library className="h-5 w-5" />,
+      adminOnly: true,
     },
     {
       id: 'playlists',
@@ -92,13 +93,13 @@ export const MobileDrawer: React.FC<MobileDrawerProps> = ({
       label: 'Activity',
       description: 'Lidarr & download deck status',
       icon: <Activity className="h-5 w-5" />,
+      adminOnly: true,
     },
     {
       id: 'settings',
       label: 'Settings',
       description: 'System & server configuration',
       icon: <Settings className="h-5 w-5 text-[#e5a00d]" />,
-      adminOnly: true,
     },
   ];
 

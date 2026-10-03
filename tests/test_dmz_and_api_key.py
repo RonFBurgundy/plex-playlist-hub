@@ -5,11 +5,11 @@ Verifies:
 2. Database validate_api_key, get_api_key, and regenerate_api_key behavior.
 3. GET /api/settings/api-key and POST /api/settings/api-key/regenerate endpoints.
 4. X-Api-Key and query parameter machine authentication across protected endpoints.
-5. In ROLE=gateway mode, library mutation endpoints return HTTP 403 Forbidden.
+5. In ROLE=gateway mode, library mutation endpoints are hidden (HTTP 404).
 6. In ROLE=gateway mode, GET /api/library/availability forwards to Core via CoreClient.
-7. In ROLE=gateway mode, request creation forwards to Core with X-Internal-Token.
+7. In ROLE=gateway mode, request creation forwards to Core with a signed user assertion.
 8. Error handling when Core is unreachable (HTTP 502 Bad Gateway).
-9. Internal token authentication (X-Internal-Token and Bearer internal secret).
+9. Legacy internal token paths no longer authenticate.
 10. Single-container mode (ROLE=all-in-one) backward compatibility.
 11. Config environment variable parsing for DMZ settings.
 """
@@ -17,6 +17,7 @@ Verifies:
 import os
 from pathlib import Path
 from typing import Any
+import json
 from unittest.mock import MagicMock, patch
 
 import httpx
@@ -26,7 +27,7 @@ from fastapi.testclient import TestClient
 from plex_playlist_sync.api.app import create_app
 from plex_playlist_sync.api.dependencies import get_config, get_db
 from plex_playlist_sync.auth import create_session_token, get_or_create_secret_key
-from plex_playlist_sync.clients.core_client import CoreClient
+from plex_playlist_sync.clients.core_client import CoreClient, ProxyResponse
 from plex_playlist_sync.config import Config
 from plex_playlist_sync.storage import Database
 
@@ -206,21 +207,15 @@ def test_machine_auth_via_x_api_key(app_and_client, test_db: Database, test_conf
     assert "Invalid API key" in res.json()["detail"]
 
 
-def test_internal_token_auth(app_and_client, test_config: Config):
-    """Tests machine authentication via X-Internal-Token and Authorization Bearer internal secret."""
-    test_config.internal_core_secret = "super_internal_token_secret_12345"
+def test_legacy_internal_token_no_longer_authenticates(app_and_client, test_config: Config):
+    """The raw X-Internal-Token / Bearer secret path (formerly admin) is removed; both give 401."""
+    test_config.internal_core_secret = "super_internal_token_secret_12345_padding_xx"
     _, client = app_and_client
 
-    # Access via X-Internal-Token
-    res = client.get("/api/queue", headers={"X-Internal-Token": "super_internal_token_secret_12345"})
-    assert res.status_code == 200
+    res = client.get("/api/queue", headers={"X-Internal-Token": "super_internal_token_secret_12345_padding_xx"})
+    assert res.status_code == 401
 
-    # Access via Authorization Bearer
     res = client.get("/api/queue", headers={"Authorization": "Bearer super_internal_token_secret_12345"})
-    assert res.status_code == 200
-
-    # Invalid internal token rejected with 401
-    res = client.get("/api/queue", headers={"X-Internal-Token": "wrong_secret"})
     assert res.status_code == 401
 
 
@@ -230,66 +225,64 @@ def test_internal_token_auth(app_and_client, test_config: Config):
 
 
 def test_gateway_blocks_library_mutations(app_and_client, test_db: Database, test_config: Config, seeded_users):
-    """Test 5: In ROLE=gateway, library mutation endpoints return HTTP 403 Forbidden."""
+    """Test 5: In ROLE=gateway, library mutation endpoints are hidden with HTTP 404 (deny-by-default gateway; require_core_tier remains as defense in depth)."""
     test_config.role = "gateway"
     _, client = app_and_client
     admin_headers = _auth_headers(seeded_users["admin"], test_db, test_config)
 
-    expected_detail = "Library management is restricted to TrackSeerr Core tier. Gateway tier cannot execute library mutations."
-
     # 1. POST /api/library/scan
     res = client.post("/api/library/scan", json={}, headers=admin_headers)
-    assert res.status_code == 403
-    assert res.json()["detail"] == expected_detail
+    assert res.status_code == 404
+    assert res.json()["detail"] == "Not Found"
 
     # 2. POST /api/library/scan/cancel
     res = client.post("/api/library/scan/cancel", headers=admin_headers)
-    assert res.status_code == 403
+    assert res.status_code == 404
 
     # 3. POST /api/library/migrate-lidarr
     res = client.post("/api/library/migrate-lidarr", json={}, headers=admin_headers)
-    assert res.status_code == 403
+    assert res.status_code == 404
 
     # 4. POST /api/library/manual-import/scan
     res = client.post("/api/library/manual-import/scan", json={}, headers=admin_headers)
-    assert res.status_code == 403
-    assert res.json()["detail"] == expected_detail
+    assert res.status_code == 404
+    assert res.json()["detail"] == "Not Found"
 
     # 5. POST /api/library/manual-import/commit
     res = client.post("/api/library/manual-import/commit", json={"items": []}, headers=admin_headers)
-    assert res.status_code == 403
+    assert res.status_code == 404
 
     # 6. POST /api/library/rename/preview
     res = client.post("/api/library/rename/preview", json={}, headers=admin_headers)
-    assert res.status_code == 403
+    assert res.status_code == 404
 
     # 7. POST /api/library/rename/apply
     res = client.post("/api/library/rename/apply", json={"file_ids": []}, headers=admin_headers)
-    assert res.status_code == 403
+    assert res.status_code == 404
 
     # 8. DELETE endpoints
     res = client.delete("/api/library/artists/artist-123", headers=admin_headers)
-    assert res.status_code == 403
-    assert res.json()["detail"] == expected_detail
+    assert res.status_code == 404
+    assert res.json()["detail"] == "Not Found"
 
     res = client.delete("/api/library/albums/album-123", headers=admin_headers)
-    assert res.status_code == 403
+    assert res.status_code == 404
 
     res = client.delete("/api/library/tracks/track-123", headers=admin_headers)
-    assert res.status_code == 403
+    assert res.status_code == 404
 
     res = client.delete("/api/library/files/file-123", headers=admin_headers)
-    assert res.status_code == 403
+    assert res.status_code == 404
 
     # 9. PUT monitoring endpoints
     res = client.put("/api/library/artists/artist-123/monitored", json={"monitored": False}, headers=admin_headers)
-    assert res.status_code == 403
+    assert res.status_code == 404
 
     res = client.put("/api/library/albums/album-123/monitored", json={"monitored": False}, headers=admin_headers)
-    assert res.status_code == 403
+    assert res.status_code == 404
 
     res = client.put("/api/library/tracks/track-123/monitored", json={"monitored": False}, headers=admin_headers)
-    assert res.status_code == 403
+    assert res.status_code == 404
 
 
 def test_all_in_one_allows_library_mutations(app_and_client, test_db: Database, test_config: Config, seeded_users):
@@ -312,7 +305,7 @@ def test_gateway_forwards_availability_to_core(app_and_client, test_db: Database
     """Test 6: In ROLE=gateway, GET /api/library/availability forwards query to Core using CoreClient."""
     test_config.role = "gateway"
     test_config.trackseerr_core_url = "http://mock-core:5250"
-    test_config.internal_core_secret = "secret-gateway-token"
+    test_config.internal_core_secret = "secret-gateway-token-0123456789abcdef"
 
     _, client = app_and_client
     user_headers = _auth_headers(seeded_users["alice"], test_db, test_config)
@@ -333,7 +326,7 @@ def test_gateway_forwards_availability_to_core(app_and_client, test_db: Database
         mock_resp = MagicMock()
         mock_resp.json.return_value = mock_core_response
         mock_resp.status_code = 200
-        mock_instance.get.return_value = mock_resp
+        mock_instance.request.return_value = mock_resp
 
         res = client.get(
             "/api/library/availability?artist_name=Radiohead&album_title=OK+Computer",
@@ -344,18 +337,21 @@ def test_gateway_forwards_availability_to_core(app_and_client, test_db: Database
         assert res.json() == mock_core_response
 
         # Verify CoreClient called Core with expected URL, parameters, and secret header
-        mock_instance.get.assert_called_once()
-        call_args, call_kwargs = mock_instance.get.call_args
-        assert call_args[0] == "http://mock-core:5250/api/library/availability"
-        assert call_kwargs["params"] == {"artist_name": "Radiohead", "album_title": "OK Computer"}
-        assert call_kwargs["headers"]["X-Internal-Token"] == "secret-gateway-token"
+        mock_instance.request.assert_called_once()
+        call_args, call_kwargs = mock_instance.request.call_args
+        assert call_args[0] == "GET"
+        assert call_args[1] == "http://mock-core:5250/api/library/availability?artist_name=Radiohead&album_title=OK+Computer"
+        assert "X-Internal-Token" not in call_kwargs["headers"]
+        assert "X-Api-Key" not in call_kwargs["headers"]
+        assert call_kwargs["headers"]["X-TS-User-Id"] == "user-alice"
+        assert call_kwargs["headers"]["X-TS-Signature"]
 
 
 def test_gateway_forwards_request_creation_to_core(app_and_client, test_db: Database, test_config: Config, seeded_users):
     """Test 7: In ROLE=gateway, request creation forwards to mock Core server with X-Internal-Token."""
     test_config.role = "gateway"
     test_config.trackseerr_core_url = "http://mock-core:5250"
-    test_config.internal_core_secret = "secret-gateway-token"
+    test_config.internal_core_secret = "secret-gateway-token-0123456789abcdef"
 
     _, client = app_and_client
     user_headers = _auth_headers(seeded_users["alice"], test_db, test_config)
@@ -374,7 +370,7 @@ def test_gateway_forwards_request_creation_to_core(app_and_client, test_db: Data
         mock_resp = MagicMock()
         mock_resp.json.return_value = mock_created_response
         mock_resp.status_code = 201
-        mock_instance.post.return_value = mock_resp
+        mock_instance.request.return_value = mock_resp
 
         payload = {
             "title": "Time",
@@ -386,19 +382,20 @@ def test_gateway_forwards_request_creation_to_core(app_and_client, test_db: Data
         assert res.status_code == 201
         assert res.json() == mock_created_response
 
-        mock_instance.post.assert_called_once()
-        call_args, call_kwargs = mock_instance.post.call_args
-        assert call_args[0] == "http://mock-core:5250/api/requests"
-        assert call_kwargs["json"]["title"] == "Time"
-        assert call_kwargs["headers"]["X-Internal-Token"] == "secret-gateway-token"
-        assert call_kwargs["headers"]["X-User-Id"] == "user-alice"
+        mock_instance.request.assert_called_once()
+        call_args, call_kwargs = mock_instance.request.call_args
+        assert call_args[0] == "POST"
+        assert call_args[1] == "http://mock-core:5250/api/requests"
+        assert json.loads(call_kwargs["content"])["title"] == "Time"
+        assert "X-Internal-Token" not in call_kwargs["headers"]
+        assert call_kwargs["headers"]["X-TS-User-Id"] == "user-alice"
 
 
 def test_gateway_forwards_batch_requests_and_deletion(app_and_client, test_db: Database, test_config: Config, seeded_users):
     """Tests forwarding of batch requests and request cancellation in gateway mode."""
     test_config.role = "gateway"
     test_config.trackseerr_core_url = "http://mock-core:5250"
-    test_config.internal_core_secret = "secret-gateway-token"
+    test_config.internal_core_secret = "secret-gateway-token-0123456789abcdef"
 
     _, client = app_and_client
     user_headers = _auth_headers(seeded_users["alice"], test_db, test_config)
@@ -411,7 +408,7 @@ def test_gateway_forwards_batch_requests_and_deletion(app_and_client, test_db: D
         mock_batch_resp = MagicMock()
         mock_batch_resp.json.return_value = {"created": [{"id": "req-1"}], "total": 1}
         mock_batch_resp.status_code = 201
-        mock_instance.post.return_value = mock_batch_resp
+        mock_instance.request.return_value = mock_batch_resp
 
         res = client.post(
             "/api/requests/batch",
@@ -420,22 +417,21 @@ def test_gateway_forwards_batch_requests_and_deletion(app_and_client, test_db: D
         )
         assert res.status_code == 201
 
-        # Test delete forwarding
-        mock_del_resp = MagicMock()
-        mock_del_resp.is_success = True
-        mock_del_resp.status_code = 200
-        mock_instance.delete.return_value = mock_del_resp
-
+    # Delete is relayed by the gateway middleware (state lives on core) as the signed user
+    fake = ProxyResponse(200, b'{"status": "deleted", "id": "req-core-123"}', {"Content-Type": "application/json"})
+    with patch.object(CoreClient, "proxy", return_value=fake) as proxy:
         res = client.delete("/api/requests/req-core-123", headers=user_headers)
-        assert res.status_code == 200
-        assert res.json() == {"status": "deleted", "id": "req-core-123"}
+    assert res.status_code == 200
+    assert res.json() == {"status": "deleted", "id": "req-core-123"}
+    assert proxy.call_args.args[0] == "DELETE"
+    assert proxy.call_args.args[1] == "/api/requests/req-core-123"
 
 
 def test_gateway_unreachable_core_returns_502(app_and_client, test_db: Database, test_config: Config, seeded_users):
     """Tests that connection failure to Core returns HTTP 502 Bad Gateway with standard detail."""
     test_config.role = "gateway"
     test_config.trackseerr_core_url = "http://offline-core:5250"
-    test_config.internal_core_secret = "secret-gateway-token"
+    test_config.internal_core_secret = "secret-gateway-token-0123456789abcdef"
 
     _, client = app_and_client
     user_headers = _auth_headers(seeded_users["alice"], test_db, test_config)
@@ -443,8 +439,7 @@ def test_gateway_unreachable_core_returns_502(app_and_client, test_db: Database,
     with patch("httpx.Client") as mock_client_cls:
         mock_instance = MagicMock()
         mock_client_cls.return_value.__enter__.return_value = mock_instance
-        mock_instance.post.side_effect = httpx.ConnectError("Connection refused")
-        mock_instance.get.side_effect = httpx.ConnectError("Connection refused")
+        mock_instance.request.side_effect = httpx.ConnectError("Connection refused")
 
         # 1. Requests endpoint returns 502
         res = client.post(
@@ -468,14 +463,16 @@ def test_gateway_unreachable_core_returns_502(app_and_client, test_db: Database,
 
 def test_core_client_direct_unit():
     """Unit test for CoreClient request crafting, parameters, and headers."""
-    client = CoreClient("http://localhost:5250/", secret="my-secret-123")
+    client = CoreClient("http://localhost:5250/", secret="my-secret-123-0123456789abcdefghijklmnop")
     assert client.core_url == "http://localhost:5250"
 
-    headers = client._headers(user_info={"id": "usr-1", "username": "bob"})
-    assert headers["X-Internal-Token"] == "my-secret-123"
-    assert headers["X-Api-Key"] == "my-secret-123"
-    assert headers["X-User-Id"] == "usr-1"
-    assert headers["X-User-Name"] == "bob"
+    headers = client._headers("GET", "/api/x", user_info={"id": "usr-1", "username": "bob"})
+    assert "X-Internal-Token" not in headers
+    assert "X-Api-Key" not in headers
+    assert "my-secret-123-0123456789abcdefghijklmnop" not in headers.values()
+    assert headers["X-TS-User-Id"] == "usr-1"
+    assert headers["X-TS-User-Name"] == "bob"
+    assert headers["X-TS-Signature"]
 
 
 def test_config_dmz_from_env(monkeypatch: pytest.MonkeyPatch):

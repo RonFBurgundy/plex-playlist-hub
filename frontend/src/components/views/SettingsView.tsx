@@ -53,6 +53,7 @@ import {
   updateLidarrSettings,
   testLidarrConnection,
 } from '@/services/settingsService';
+import { ScrobblingSettings } from '@/components/scrobbling';
 import {
   getScheduledTasks,
   triggerScheduledTask,
@@ -67,10 +68,24 @@ export type SettingsTab =
   | 'lidarr'
   | 'profiles'
   | 'tasks'
-  | 'status';
+  | 'status'
+  | 'scrobbling';
 
-export const SettingsView: React.FC = () => {
-  const [activeTab, setActiveTab] = useState<SettingsTab>('general');
+export interface SettingsViewProps {
+  isAdmin?: boolean;
+  showGatewayNote?: boolean;
+}
+
+export const SettingsView: React.FC<SettingsViewProps> = ({
+  isAdmin = false,
+  showGatewayNote = false,
+}) => {
+  const [activeTab, setActiveTab] = useState<SettingsTab>(() =>
+    !isAdmin || new URLSearchParams(window.location.search).has('connected') ||
+    new URLSearchParams(window.location.search).has('scrobble_error')
+      ? 'scrobbling'
+      : 'general'
+  );
   const [generalSettings, setGeneralSettings] = useState<GeneralSettings | null>(null);
   const [mediaSettings, setMediaSettings] = useState<MediaManagementSettings | null>(null);
   const [lidarrSettings, setLidarrSettings] = useState<LidarrSettings | null>(null);
@@ -181,8 +196,9 @@ export const SettingsView: React.FC = () => {
   };
 
   useEffect(() => {
-    loadData();
-  }, []);
+    if (isAdmin) void loadData();
+    else setIsLoading(false);
+  }, [isAdmin]);
 
   useEffect(() => {
     if (activeTab === 'tasks') {
@@ -401,6 +417,8 @@ export const SettingsView: React.FC = () => {
     { id: 'tasks', label: 'Tasks', icon: <Activity className="h-3.5 w-3.5" /> },
     { id: 'status', label: 'Status', icon: <Activity className="h-3.5 w-3.5" /> },
   ];
+  const scrobblingTab = { id: 'scrobbling' as const, label: 'Scrobbling', icon: <Radio className="h-3.5 w-3.5" /> };
+  const visibleTabs = isAdmin ? [...subTabs, scrobblingTab] : [scrobblingTab];
 
   return (
     <div className="space-y-6">
@@ -412,9 +430,15 @@ export const SettingsView: React.FC = () => {
         </div>
       )}
 
+      {showGatewayNote && (
+        <div className="bg-[#121212] border border-[#2a2a2a] rounded-[4px] px-4 py-3 text-xs font-mono text-neutral-400">
+          Admin settings are available on the TrackSeerr Core admin interface.
+        </div>
+      )}
+
       {/* Subtab Navigation Bar */}
       <TapeTransportBay className="flex items-center gap-1.5 overflow-x-auto">
-        {subTabs.map((st) => (
+        {visibleTabs.map((st) => (
           <TapeDeckButton
             key={st.id}
             size="sm"
@@ -427,8 +451,10 @@ export const SettingsView: React.FC = () => {
         ))}
       </TapeTransportBay>
 
+      {activeTab === 'scrobbling' && <ScrobblingSettings isAdmin={isAdmin} />}
+
       {/* Loading state */}
-      {isLoading && (
+      {isLoading && activeTab !== 'scrobbling' && (
         <div className="flex flex-col items-center justify-center py-16 gap-3">
           <Loader2 className="h-8 w-8 text-[#e5a00d] animate-spin" />
           <span className="text-xs uppercase tracking-widest text-neutral-400 font-mono">

@@ -206,7 +206,9 @@ class TestMediaManagementAPI:
 
     def test_live_preview_renders_valid_paths(self, app_and_client, test_db, test_config, seeded_users):
         _, client = app_and_client
-        headers = _auth_headers(seeded_users["alice"], test_db, test_config)
+        alice_headers = _auth_headers(seeded_users["alice"], test_db, test_config)
+        assert client.post("/api/settings/media-management/preview", json={}, headers=alice_headers).status_code == 403
+        headers = _auth_headers(seeded_users["admin"], test_db, test_config)
 
         resp = client.post("/api/settings/media-management/preview", json={}, headers=headers)
         assert resp.status_code == 200
@@ -233,7 +235,7 @@ class TestMediaManagementAPI:
 
     def test_live_preview_with_custom_template_overrides(self, app_and_client, test_db, test_config, seeded_users):
         _, client = app_and_client
-        headers = _auth_headers(seeded_users["alice"], test_db, test_config)
+        headers = _auth_headers(seeded_users["admin"], test_db, test_config)
 
         custom_override = {
             "root_folder_path": "/library",

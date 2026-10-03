@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
-import type { User } from '@/types/models';
+import type { DeploymentTier, User } from '@/types/models';
 import {
   getCurrentUser,
   startPlexAuth,
@@ -14,6 +14,8 @@ export interface UseAuthReturn {
   isAuthenticated: boolean;
   isLoading: boolean;
   isAdmin: boolean;
+  tier: DeploymentTier;
+  canUseAdminUi: boolean;
   isAuthenticating: boolean;
   authError: string | null;
   loginWithPlex: () => Promise<void>;
@@ -138,12 +140,17 @@ export function useAuth(): UseAuthReturn {
     }
   }, []);
 
+  const tier: DeploymentTier = user?.tier ?? 'all-in-one';
+  const isAdmin = Boolean(user?.is_admin);
+
   return {
     user,
     token,
     isAuthenticated: Boolean(user),
     isLoading,
-    isAdmin: Boolean(user?.is_admin),
+    isAdmin,
+    tier,
+    canUseAdminUi: isAdmin && tier !== 'gateway',
     isAuthenticating,
     authError,
     loginWithPlex,

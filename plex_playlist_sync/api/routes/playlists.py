@@ -158,12 +158,44 @@ SMART_MIX_PRESETS = [
 ]
 
 
+def _guard_existing_playlist(
+    db: Database, playlist_id: str, current_user: dict[str, Any]
+) -> Optional[dict[str, Any]]:
+    """Returns the existing playlist row (or None). Non-admins touching another user's row get 404."""
+    existing = db.get_playlist(playlist_id)
+    if existing is None:
+        return None
+    if current_user.get("is_admin"):
+        return existing
+    owner = existing.get("creator_id")
+    if owner is None or str(owner) != str(current_user["id"]):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Playlist not found")
+    return existing
+
+
+def _resolve_targets(
+    db: Database,
+    playlist_id: str,
+    existing: Optional[dict[str, Any]],
+    current_user: dict[str, Any],
+    requested: Optional[list[str]],
+) -> list[str]:
+    """Targets to persist. Non-admins never wipe other users' targets on an existing playlist."""
+    uid = str(current_user["id"])
+    if current_user.get("is_admin"):
+        return list(requested) if requested is not None else [uid]
+    if existing is None:
+        return [uid]
+    current = db.get_playlist_targets(playlist_id)
+    return current if uid in current else [*current, uid]
+
+
 @router.get("")
 def list_playlists(
     current_user: dict[str, Any] = Depends(get_current_user),
     db: Database = Depends(get_db),
 ) -> list[dict[str, Any]]:
-    """Lists playlists. Admins see all; regular users only see playlists targeted to them."""
+    """Lists playlists. Admins see all; regular users see only playlists they created or that target them."""
     if current_user.get("is_admin"):
         playlists = db.list_playlists()
     else:
@@ -214,6 +246,8 @@ def create_playlist(
             detail="Invalid Spotify or Deezer playlist URL or ID (SSRF validation failed)",
         )
 
+    existing = _guard_existing_playlist(db, pl_id, current_user)
+
     # Extract metadata using verified client
     title = f"{service.title()} Playlist {pl_id}"
     description = ""
@@ -252,12 +286,7 @@ def create_playlist(
         creator_id=creator_id,
     )
 
-    # Initial targets
-    if current_user.get("is_admin"):
-        initial_targets = req.targets if req.targets is not None else [creator_id]
-    else:
-        initial_targets = [creator_id]
-
+    initial_targets = _resolve_targets(db, pl_id, existing, current_user, req.targets)
     db.set_playlist_targets(pl_id, initial_targets)
     playlist["targets"] = db.get_playlist_targets(pl_id)
 
@@ -344,44 +373,29 @@ def update_playlist_targets(
     current_user: dict[str, Any] = Depends(get_current_user),
     db: Database = Depends(get_db),
 ) -> dict[str, Any]:
-    """Updates target user list for playlist. Regular users can only toggle themselves."""
+    """Updates the target user list for a playlist.
+
+    Admins may set any targets. A non-admin may act only on a playlist they created (404
+    otherwise, so existence is not revealed) and may only target themselves or nobody (403).
+    """
     playlist = db.get_playlist(playlist_id)
-    if not playlist:
+    uid = str(current_user["id"])
+    is_admin = bool(current_user.get("is_admin"))
+    if not playlist or (not is_admin and str(playlist.get("creator_id")) != uid):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Playlist not found",
         )
 
-    existing_targets = set(db.get_playlist_targets(playlist_id))
-    uid = str(current_user["id"])
-    is_admin = bool(current_user.get("is_admin"))
-    is_creator = playlist.get("creator_id") == uid
-    is_already_targeted = uid in existing_targets
-
-    # Access control:
-    # 1. Admins and the creator can always modify targets.
-    # 2. For private playlists owned by another regular user, outside regular users cannot opt in (IDOR).
-    # 3. For public/server playlists (creator is None or admin), any user can opt themselves in or out.
-    if not is_admin and not is_creator:
-        creator_id = playlist.get("creator_id")
-        if creator_id:
-            creator_user = db.get_user(creator_id)
-            is_creator_admin = bool(creator_user and creator_user.get("is_admin"))
-            if not is_creator_admin and not is_already_targeted:
-                raise HTTPException(
-                    status_code=status.HTTP_403_FORBIDDEN,
-                    detail="Forbidden: You do not have permission to access or modify targets for this private playlist",
-                )
-
     if is_admin:
         new_targets = req.user_ids
     else:
-        # Regular users can only toggle themselves
-        if uid in req.user_ids:
-            existing_targets.add(uid)
-        else:
-            existing_targets.discard(uid)
-        new_targets = list(existing_targets)
+        if any(str(target) != uid for target in req.user_ids):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Forbidden: you may only target yourself",
+            )
+        new_targets = [uid] if req.user_ids else []
 
     db.set_playlist_targets(playlist_id, new_targets)
     return {
@@ -399,18 +413,12 @@ def set_playlist_enabled(
 ) -> dict[str, Any]:
     """Toggles playlist auto-sync state between Active (enabled) and Paused (disabled)."""
     playlist = db.get_playlist(playlist_id)
-    if not playlist:
+    is_admin = bool(current_user.get("is_admin"))
+    is_creator = bool(playlist) and str(playlist.get("creator_id")) == str(current_user["id"])
+    if not playlist or not (is_admin or is_creator):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Playlist not found",
-        )
-
-    is_admin = bool(current_user.get("is_admin"))
-    is_creator = playlist.get("creator_id") == str(current_user["id"])
-    if not (is_admin or is_creator):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Forbidden: Only administrators or the creator can change the playlist sync status",
         )
 
     db.set_playlist_enabled(playlist_id, req.enabled)
@@ -427,21 +435,14 @@ def delete_playlist(
     current_user: dict[str, Any] = Depends(get_current_user),
     db: Database = Depends(get_db),
 ) -> dict[str, Any]:
-    """Deletes playlist (admin or creator only)."""
+    """Deletes a playlist (admin, or the creator; others get 404)."""
     playlist = db.get_playlist(playlist_id)
-    if not playlist:
+    is_admin = bool(current_user.get("is_admin"))
+    is_creator = bool(playlist) and str(playlist.get("creator_id")) == str(current_user["id"])
+    if not playlist or not (is_admin or is_creator):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Playlist not found",
-        )
-
-    is_admin = bool(current_user.get("is_admin"))
-    is_creator = playlist.get("creator_id") == str(current_user["id"])
-
-    if not (is_admin or is_creator):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Forbidden: Only administrators or the playlist creator can delete this playlist",
         )
 
     db.delete_playlist(playlist_id)
@@ -475,6 +476,8 @@ def import_playlist_tracks(
     ]
     tracks_json_str = json.dumps(tracks_data)
 
+    existing = _guard_existing_playlist(db, import_id, current_user)
+
     db.upsert_playlist(
         playlist_id=import_id,
         name=clean_name,
@@ -485,11 +488,11 @@ def import_playlist_tracks(
         tracks_json=tracks_json_str,
     )
 
-    # Determine targets: Admins can target anyone, regular users strictly target themselves
+    # Admins can target anyone; regular users only add themselves (never wiping others' targets)
     if current_user.get("is_admin") and req.targets is not None:
         targets = req.targets
     else:
-        targets = [str(current_user["id"])]
+        targets = _resolve_targets(db, import_id, existing, current_user, None)
 
     db.set_playlist_targets(import_id, targets)
 

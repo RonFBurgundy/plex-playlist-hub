@@ -789,7 +789,7 @@ def test_get_album_cover_local_file(
 ):
     """Serves local cover file for an album when present on disk."""
     _, client = app_and_client
-    alice_headers = _auth_headers(seeded_users["alice"], test_db, test_config)
+    alice_headers = _auth_headers(seeded_users["admin"], test_db, test_config)
 
     album_dir = tmp_path / "music" / "Local Cover Band" / "Local Album"
     album_dir.mkdir(parents=True, exist_ok=True)
@@ -819,7 +819,7 @@ def test_get_album_cover_remote_redirect(
 ):
     """Redirects to remote cover URL when no local cover exists."""
     _, client = app_and_client
-    alice_headers = _auth_headers(seeded_users["alice"], test_db, test_config)
+    alice_headers = _auth_headers(seeded_users["admin"], test_db, test_config)
 
     art = test_db.upsert_library_artist({
         "id": "art-remote-cover",
@@ -847,7 +847,7 @@ def test_get_artist_image_redirect(
 ):
     """Redirects to remote artist image URL when present."""
     _, client = app_and_client
-    alice_headers = _auth_headers(seeded_users["alice"], test_db, test_config)
+    alice_headers = _auth_headers(seeded_users["admin"], test_db, test_config)
 
     remote_img = "https://example.com/artist.jpg"
     art = test_db.upsert_library_artist({

@@ -14,7 +14,6 @@ from pydantic import BaseModel, Field
 from plex_playlist_sync.acquisition_coordinator import acquisition_coordinator
 from plex_playlist_sync.api.dependencies import (
     get_config,
-    get_current_user,
     get_db,
     get_lidarr_client,
     get_plex_client,
@@ -85,7 +84,7 @@ def _filter_missing_for_user(
 @router.get("")
 def get_missing_tracks(
     playlist_id: Optional[str] = Query(default=None, description="Optional playlist ID filter"),
-    current_user: dict[str, Any] = Depends(get_current_user),
+    current_user: dict[str, Any] = Depends(require_admin),
     db: Database = Depends(get_db),
 ) -> list[dict[str, Any]]:
     """Returns missing tracks list.
@@ -113,7 +112,7 @@ def get_missing_tracks(
 @router.get("/csv")
 def download_missing_csv(
     playlist_id: Optional[str] = Query(default=None, description="Optional playlist ID filter"),
-    current_user: dict[str, Any] = Depends(get_current_user),
+    current_user: dict[str, Any] = Depends(require_admin),
     db: Database = Depends(get_db),
 ) -> StreamingResponse:
     """Generates and streams a safe CSV download of missing tracks."""
@@ -228,7 +227,7 @@ def feed_missing_text(
 
 @router.get("/lidarr/status")
 def get_lidarr_status(
-    _current_user: dict[str, Any] = Depends(get_current_user),
+    _current_user: dict[str, Any] = Depends(require_admin),
     config: Config = Depends(get_config),
     db: Database = Depends(get_db),
     lidarr_client: Optional[LidarrClient] = Depends(get_lidarr_client),
@@ -264,7 +263,7 @@ def get_lidarr_status(
 @router.post("/lidarr/push")
 def push_missing_to_lidarr(
     req: Optional[LidarrPushRequest] = None,
-    current_user: dict[str, Any] = Depends(get_current_user),
+    current_user: dict[str, Any] = Depends(require_admin),
     config: Config = Depends(get_config),
     db: Database = Depends(get_db),
     lidarr_client: Optional[LidarrClient] = Depends(get_lidarr_client),
@@ -383,7 +382,7 @@ def push_missing_to_lidarr(
 
 @router.get("/lidarr/queue")
 def get_lidarr_queue_status(
-    _current_user: dict[str, Any] = Depends(get_current_user),
+    _current_user: dict[str, Any] = Depends(require_admin),
 ) -> dict[str, Any]:
     """Returns the live status of the Lidarr background trickle worker."""
     return lidarr_worker.get_status()
@@ -391,7 +390,7 @@ def get_lidarr_queue_status(
 
 @router.post("/lidarr/queue/pause")
 def pause_lidarr_queue(
-    _current_user: dict[str, Any] = Depends(get_current_user),
+    _current_user: dict[str, Any] = Depends(require_admin),
 ) -> dict[str, Any]:
     """Pauses the Lidarr background trickle worker."""
     res = lidarr_worker.pause()
@@ -401,7 +400,7 @@ def pause_lidarr_queue(
 
 @router.post("/lidarr/queue/resume")
 def resume_lidarr_queue(
-    _current_user: dict[str, Any] = Depends(get_current_user),
+    _current_user: dict[str, Any] = Depends(require_admin),
 ) -> dict[str, Any]:
     """Resumes the Lidarr background trickle worker."""
     res = lidarr_worker.resume()
@@ -411,7 +410,7 @@ def resume_lidarr_queue(
 
 @router.post("/lidarr/queue/cancel")
 def cancel_lidarr_queue(
-    _current_user: dict[str, Any] = Depends(get_current_user),
+    _current_user: dict[str, Any] = Depends(require_admin),
 ) -> dict[str, Any]:
     """Cancels and stops the Lidarr background trickle worker."""
     res = lidarr_worker.cancel()
@@ -423,7 +422,7 @@ def cancel_lidarr_queue(
 def search_plex_tracks(
     query: str = Query(..., min_length=1, description="Query string to search Plex library tracks"),
     limit: int = Query(default=15, ge=1, le=50),
-    current_user: dict[str, Any] = Depends(get_current_user),
+    current_user: dict[str, Any] = Depends(require_admin),
     plex_client: Optional[PlexClient] = Depends(get_plex_client),
 ) -> list[dict[str, Any]]:
     """Searches the Plex library for tracks to enable manual matching and correction."""
@@ -438,7 +437,7 @@ def search_plex_tracks(
 @router.post("/match", status_code=status.HTTP_201_CREATED)
 def create_match_override(
     req: MatchOverrideRequest,
-    current_user: dict[str, Any] = Depends(get_current_user),
+    current_user: dict[str, Any] = Depends(require_admin),
     db: Database = Depends(get_db),
 ) -> dict[str, Any]:
     """Records a manual match override (Match Memory) and removes corresponding missing tracks."""
@@ -463,7 +462,7 @@ def create_match_override(
 
 @router.get("/matches")
 def list_match_overrides(
-    current_user: dict[str, Any] = Depends(get_current_user),
+    current_user: dict[str, Any] = Depends(require_admin),
     db: Database = Depends(get_db),
 ) -> list[dict[str, Any]]:
     """Lists all stored Match Memory overrides."""
@@ -473,7 +472,7 @@ def list_match_overrides(
 @router.delete("/match/{override_id}")
 def delete_match_override(
     override_id: int,
-    current_user: dict[str, Any] = Depends(get_current_user),
+    current_user: dict[str, Any] = Depends(require_admin),
     db: Database = Depends(get_db),
 ) -> dict[str, Any]:
     """Deletes a Match Memory override."""

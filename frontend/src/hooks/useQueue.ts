@@ -19,19 +19,21 @@ export interface UseQueueReturn {
   refresh: () => Promise<void>;
 }
 
-export function useQueue(): UseQueueReturn {
+/** All queue/backlog routes are admin-only; when `canUseAdminUi` is false nothing is fetched or polled. */
+export function useQueue(canUseAdminUi: boolean = false): UseQueueReturn {
   const [queueItems, setQueueItems] = useState<QueueItem[]>([]);
   const [backlogStatus, setBacklogStatus] = useState<BacklogStatus | null>(null);
   const [isLoading, setIsLoading] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
+    if (!canUseAdminUi) return;
     setIsLoading(true);
     setError(null);
     try {
       const [items, backlog] = await Promise.all([
         getQueue(true),
-        getBacklogStatus().catch(() => null),
+        canUseAdminUi ? getBacklogStatus().catch(() => null) : Promise.resolve(null),
       ]);
       setQueueItems(items);
       if (backlog) setBacklogStatus(backlog);
@@ -41,13 +43,14 @@ export function useQueue(): UseQueueReturn {
     } finally {
       setIsLoading(false);
     }
-  }, []);
+  }, [canUseAdminUi]);
 
   useEffect(() => {
+    if (!canUseAdminUi) return undefined;
     refresh();
     const interval = window.setInterval(refresh, 5000);
     return () => window.clearInterval(interval);
-  }, [refresh]);
+  }, [canUseAdminUi, refresh]);
 
   const cancelItem = useCallback(
     async (id: string) => {

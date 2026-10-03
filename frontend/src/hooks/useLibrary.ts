@@ -48,7 +48,8 @@ export interface UseLibraryReturn {
   refresh: () => Promise<void>;
 }
 
-export function useLibrary(): UseLibraryReturn {
+/** `enabled` must be false for non-admins: every /api/library route except availability is admin-only. */
+export function useLibrary(enabled: boolean = false): UseLibraryReturn {
   const [activeTab, setActiveTab] = useState<LibraryTab>('artists');
   const [artists, setArtists] = useState<ArtistItem[]>([]);
   const [albums, setAlbums] = useState<AlbumItem[]>([]);
@@ -72,6 +73,7 @@ export function useLibrary(): UseLibraryReturn {
   }, []);
 
   const loadData = useCallback(async () => {
+    if (!enabled) return;
     setIsLoading(true);
     setError(null);
     try {
@@ -101,7 +103,7 @@ export function useLibrary(): UseLibraryReturn {
     } finally {
       setIsLoading(false);
     }
-  }, [activeTab, searchQuery]);
+  }, [enabled, activeTab, searchQuery]);
 
   const loadDataRef = useRef(loadData);
   useEffect(() => {
@@ -142,6 +144,7 @@ export function useLibrary(): UseLibraryReturn {
 
   // Check if a scan is already running on mount
   useEffect(() => {
+    if (!enabled) return undefined;
     let isCancelled = false;
     const checkInitialScan = async () => {
       try {
@@ -162,7 +165,7 @@ export function useLibrary(): UseLibraryReturn {
     return () => {
       isCancelled = true;
     };
-  }, [startScanPolling]);
+  }, [enabled, startScanPolling]);
 
   useEffect(() => {
     return () => {

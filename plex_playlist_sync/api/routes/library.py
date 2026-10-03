@@ -218,7 +218,7 @@ def validate_media_path(path_str: str, db: Optional[Database] = None) -> Path:
 @router.get("/stats")
 def get_library_stats(
     db: Database = Depends(get_db),
-    _user: dict[str, Any] = Depends(require_user),
+    _admin: dict[str, Any] = Depends(require_admin),
 ) -> dict[str, Any]:
     """Retrieves aggregate statistics for the native library."""
     return db.get_library_stats()
@@ -231,7 +231,7 @@ def list_artists(
     limit: int = Query(100, ge=1, le=1000),
     offset: int = Query(0, ge=0),
     db: Database = Depends(get_db),
-    _user: dict[str, Any] = Depends(require_user),
+    _admin: dict[str, Any] = Depends(require_admin),
 ) -> list[dict[str, Any]]:
     """Lists library artists with optional filtering, search query, and pagination, attaching album and track counts."""
     artists = db.list_library_artists(
@@ -480,7 +480,7 @@ def ingest_artist(
 def get_artist(
     artist_id: str,
     db: Database = Depends(get_db),
-    _user: dict[str, Any] = Depends(require_user),
+    _admin: dict[str, Any] = Depends(require_admin),
 ) -> dict[str, Any]:
     """Retrieves a single artist by ID, including its child albums and image_url."""
     artist = db.get_library_artist(artist_id)
@@ -525,7 +525,7 @@ def get_artist(
 def get_artist_image(
     artist_id: str,
     db: Database = Depends(get_db),
-    _user: dict[str, Any] = Depends(require_user),
+    _admin: dict[str, Any] = Depends(require_admin),
 ) -> Any:
     """Serves local artist artwork or redirects to remote image / first album cover / placeholder."""
     artist = db.get_library_artist(artist_id)
@@ -594,7 +594,7 @@ def get_artist_image(
 def get_artist_banner(
     artist_id: str,
     db: Database = Depends(get_db),
-    _user: dict[str, Any] = Depends(require_user),
+    _admin: dict[str, Any] = Depends(require_admin),
 ) -> Any:
     """Serves cached or local artist banner artwork."""
     artist = db.get_library_artist(artist_id)
@@ -1445,7 +1445,7 @@ def list_albums(
     limit: int = Query(100, ge=1, le=1000),
     offset: int = Query(0, ge=0),
     db: Database = Depends(get_db),
-    _user: dict[str, Any] = Depends(require_user),
+    _admin: dict[str, Any] = Depends(require_admin),
 ) -> list[dict[str, Any]]:
     """Lists library albums with optional artist filtering, search query, and pagination, attaching artist name and track count."""
     albums = db.list_library_albums(
@@ -1481,7 +1481,7 @@ def list_albums(
 def get_album(
     album_id: str,
     db: Database = Depends(get_db),
-    _user: dict[str, Any] = Depends(require_user),
+    _admin: dict[str, Any] = Depends(require_admin),
 ) -> dict[str, Any]:
     """Retrieves an album by ID, including its tracks and their linked library files."""
     album = db.get_library_album(album_id)
@@ -1500,7 +1500,7 @@ def get_album(
 def get_album_cover(
     album_id: str,
     db: Database = Depends(get_db),
-    _user: dict[str, Any] = Depends(require_user),
+    _admin: dict[str, Any] = Depends(require_admin),
 ) -> Any:
     """Serves local album cover artwork or redirects to remote artwork / placeholder."""
     album = db.get_library_album(album_id)
@@ -1618,7 +1618,7 @@ def list_tracks(
     limit: int = Query(200, ge=1, le=1000),
     offset: int = Query(0, ge=0),
     db: Database = Depends(get_db),
-    _user: dict[str, Any] = Depends(require_user),
+    _admin: dict[str, Any] = Depends(require_admin),
 ) -> list[dict[str, Any]]:
     """Lists library tracks with optional filtering and joins linked library file details."""
     tracks = db.list_library_tracks(
@@ -1744,6 +1744,7 @@ def get_availability(
                 album_title=album_title,
                 track_title=track_title,
                 foreign_id=foreign_id,
+                user_info=_user,
             )
         except httpx.HTTPStatusError as exc:
             try:
@@ -1794,7 +1795,7 @@ def trigger_scan(
 
 @router.get("/scan/status")
 def get_scan_status(
-    _user: dict[str, Any] = Depends(require_user),
+    _admin: dict[str, Any] = Depends(require_admin),
 ) -> dict[str, Any]:
     """Retrieves current filesystem scanner status."""
     return library_scanner.get_status()
@@ -1844,7 +1845,7 @@ def trigger_lidarr_migration(
 
 @router.get("/migrate-lidarr/status")
 def get_lidarr_migration_status(
-    _user: dict[str, Any] = Depends(require_user),
+    _admin: dict[str, Any] = Depends(require_admin),
 ) -> dict[str, Any]:
     """Retrieves current Lidarr migration job status."""
     return lidarr_migration_job.get_status()
@@ -2368,7 +2369,7 @@ def rename_apply(
 def fingerprint_file(
     body: FingerprintRequest,
     db: Database = Depends(get_db),
-    _user: dict[str, Any] = Depends(require_user),
+    _admin: dict[str, Any] = Depends(require_admin),
 ) -> dict[str, Any]:
     """Fingerprints an audio file on-demand via AcoustID without routine scanner overhead."""
     validated_file = validate_media_path(body.file_path, db=db)
@@ -2400,7 +2401,7 @@ def list_collections(
     limit: int = Query(100, ge=1, le=1000),
     offset: int = Query(0, ge=0),
     db: Database = Depends(get_db),
-    _user: dict[str, Any] = Depends(require_user),
+    _admin: dict[str, Any] = Depends(require_admin),
 ) -> list[dict[str, Any]]:
     """Returns list of library collections with album counts."""
     return db.list_library_collections(limit=limit, offset=offset, query=query)
@@ -2410,7 +2411,7 @@ def list_collections(
 def create_collection(
     body: CreateCollectionRequest,
     db: Database = Depends(get_db),
-    _user: dict[str, Any] = Depends(require_user),
+    _admin: dict[str, Any] = Depends(require_admin),
 ) -> dict[str, Any]:
     """Creates a new library collection."""
     col = LibraryCollection(
@@ -2427,7 +2428,7 @@ def create_collection(
 def get_collection(
     collection_id: str,
     db: Database = Depends(get_db),
-    _user: dict[str, Any] = Depends(require_user),
+    _admin: dict[str, Any] = Depends(require_admin),
 ) -> dict[str, Any]:
     """Returns collection detail along with its ordered albums list."""
     col = db.get_library_collection(collection_id)
@@ -2445,7 +2446,7 @@ def get_collection(
 def delete_collection(
     collection_id: str,
     db: Database = Depends(get_db),
-    _user: dict[str, Any] = Depends(require_user),
+    _admin: dict[str, Any] = Depends(require_admin),
 ) -> dict[str, Any]:
     """Deletes a library collection."""
     col = db.get_library_collection(collection_id)
@@ -2463,7 +2464,7 @@ def add_album_to_collection(
     collection_id: str,
     body: AddAlbumToCollectionRequest,
     db: Database = Depends(get_db),
-    _user: dict[str, Any] = Depends(require_user),
+    _admin: dict[str, Any] = Depends(require_admin),
 ) -> dict[str, Any]:
     """Adds an album to a collection with optional order_index."""
     col = db.get_library_collection(collection_id)
@@ -2491,7 +2492,7 @@ def remove_album_from_collection(
     collection_id: str,
     album_id: str,
     db: Database = Depends(get_db),
-    _user: dict[str, Any] = Depends(require_user),
+    _admin: dict[str, Any] = Depends(require_admin),
 ) -> dict[str, Any]:
     """Removes an album from a collection."""
     col = db.get_library_collection(collection_id)

@@ -324,17 +324,13 @@ class TestUsersEndpoints:
         assert "alice" in usernames
         assert "bob" in usernames
 
-    def test_list_users_regular_user_sees_only_self(
+    def test_list_users_regular_user_forbidden(
         self, app_and_client, seeded_users, test_db, secret_key
     ):
         _, client = app_and_client
         auth = create_auth_headers_or_cookies(test_db, seeded_users["alice"], secret_key)
         resp = client.get("/api/users", cookies=auth["cookies"])
-        assert resp.status_code == 200
-        users = resp.json()
-        assert len(users) == 1
-        assert users[0]["username"] == "alice"
-        assert users[0]["id"] == "user-alice"
+        assert resp.status_code == 403
 
     def test_refresh_users_non_admin_forbidden(
         self, app_and_client, seeded_users, test_db, secret_key
@@ -515,36 +511,38 @@ class TestPlaylistsEndpoints:
     def test_update_playlist_targets_regular_user_toggles_self_only(
         self, app_and_client, seeded_users, test_db, secret_key
     ):
-        test_db.upsert_playlist("p1", "Playlist 1")
+        test_db.upsert_playlist("p1", "Playlist 1", creator_id="user-alice")
         test_db.set_playlist_targets("p1", ["admin-1", "user-bob"])
 
         _, client = app_and_client
         alice_auth = create_auth_headers_or_cookies(test_db, seeded_users["alice"], secret_key)
 
-        # Alice opts herself in
+        # Alice (creator) may target only herself
         resp = client.put(
             "/api/playlists/p1/targets",
             json={"user_ids": ["user-alice"]},
             cookies=alice_auth["cookies"],
         )
         assert resp.status_code == 200
-        targets = resp.json()["targets"]
-        assert "user-alice" in targets
-        # Other targets retained
-        assert "admin-1" in targets
-        assert "user-bob" in targets
+        assert resp.json()["targets"] == ["user-alice"]
 
-        # Alice opts herself out
+        # Targeting anyone else is forbidden and changes nothing
+        resp_other = client.put(
+            "/api/playlists/p1/targets",
+            json={"user_ids": ["user-alice", "user-bob"]},
+            cookies=alice_auth["cookies"],
+        )
+        assert resp_other.status_code == 403
+        assert test_db.get_playlist_targets("p1") == ["user-alice"]
+
+        # Alice clears her targets
         resp_out = client.put(
             "/api/playlists/p1/targets",
             json={"user_ids": []},
             cookies=alice_auth["cookies"],
         )
         assert resp_out.status_code == 200
-        targets_out = resp_out.json()["targets"]
-        assert "user-alice" not in targets_out
-        assert "admin-1" in targets_out
-        assert "user-bob" in targets_out
+        assert resp_out.json()["targets"] == []
 
     def test_update_playlist_targets_regular_user_cannot_access_private_playlist(
         self, app_and_client, seeded_users, test_db, secret_key
@@ -556,14 +554,14 @@ class TestPlaylistsEndpoints:
         _, client = app_and_client
         alice_auth = create_auth_headers_or_cookies(test_db, seeded_users["alice"], secret_key)
 
-        # Alice attempts to add herself to Bob's private playlist (IDOR attempt)
+        # Alice attempts to add herself to Bob's private playlist (IDOR attempt): 404, not 403
         resp = client.put(
             "/api/playlists/p_bob/targets",
             json={"user_ids": ["user-alice"]},
             cookies=alice_auth["cookies"],
         )
-        assert resp.status_code == 403
-        assert "Forbidden" in resp.json()["detail"]
+        assert resp.status_code == 404
+        assert test_db.get_playlist_targets("p_bob") == ["user-bob"]
 
     def test_delete_playlist_boundaries(
         self, app_and_client, seeded_users, test_db, secret_key
@@ -578,7 +576,8 @@ class TestPlaylistsEndpoints:
 
         # Bob cannot delete p1
         resp_bob = client.delete("/api/playlists/p1", cookies=bob_auth["cookies"])
-        assert resp_bob.status_code == 403
+        assert resp_bob.status_code == 404
+        assert test_db.get_playlist("p1") is not None
 
         # Alice (creator) can delete p1
         resp_alice = client.delete("/api/playlists/p1", cookies=alice_auth["cookies"])
@@ -747,15 +746,10 @@ class TestMissingEndpoints:
         assert resp_admin.status_code == 200
         assert len(resp_admin.json()) == 3
 
-        # Alice only sees p1 tracks (2 total)
+        # Missing tracks are admin-only: a regular user is refused outright
         alice_auth = create_auth_headers_or_cookies(test_db, seeded_users["alice"], secret_key)
         resp_alice = client.get("/api/missing", cookies=alice_auth["cookies"])
-        assert resp_alice.status_code == 200
-        assert len(resp_alice.json()) == 2
-        for t in resp_alice.json():
-            assert t["playlist_id"] == "p1"
-
-        # Alice cannot request p2 directly
+        assert resp_alice.status_code == 403
         resp_alice_p2 = client.get("/api/missing?playlist_id=p2", cookies=alice_auth["cookies"])
         assert resp_alice_p2.status_code == 403
 

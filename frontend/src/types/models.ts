@@ -3,6 +3,8 @@
  * Strictly typed with zero `any` / `as any`.
  */
 
+export type DeploymentTier = 'gateway' | 'core' | 'all-in-one';
+
 export interface User {
   id: number;
   plex_username: string;
@@ -14,6 +16,7 @@ export interface User {
   quota_limit?: number;
   quota_period_days?: number;
   requests_remaining?: number;
+  tier?: DeploymentTier;
 }
 
 export interface UserQuota {
@@ -460,4 +463,135 @@ export interface PlexMixSnapshotBody {
 
 export interface PlexMixSnapshotUpdateBody {
   auto_refresh: boolean;
+}
+
+// ---------------------------------------------------------------------------
+// Scrobbling
+// ---------------------------------------------------------------------------
+
+export type ListenForwardStatus = 'skipped' | 'pending' | 'sent' | 'failed';
+export type ListenSource = 'plex_webhook' | 'plex_history';
+
+export interface ScrobbleConfig {
+  user_id: string;
+  username: string;
+  scrobbling_enabled: boolean;
+  lastfm_connected: boolean;
+  lastfm_username: string | null;
+  listenbrainz_connected: boolean;
+  listenbrainz_username: string | null;
+  updated_at: string | null;
+}
+
+export interface UserListen {
+  id: number;
+  artist: string;
+  title: string;
+  album: string | null;
+  played_at: string;
+  source: ListenSource;
+  lastfm_status: ListenForwardStatus;
+  listenbrainz_status: ListenForwardStatus;
+}
+
+export interface ScrobbleServerConfig {
+  lastfm_configured: boolean;
+  lastfm_api_key_masked: string;
+  lastfm_from_env: boolean;
+  plex_history_poll_minutes: number;
+}
+
+export interface ScrobbleServerConfigBody {
+  lastfm_api_key?: string;
+  lastfm_api_secret?: string;
+  plex_history_poll_minutes?: number;
+}
+
+export interface ScrobbleConfigBody {
+  scrobbling_enabled?: boolean;
+  listenbrainz_token?: string | null;
+  unlink_lastfm?: boolean;
+}
+
+export interface AdminScrobbleConfigBody extends ScrobbleConfigBody {
+  lastfm_username?: string;
+  lastfm_session_key?: string;
+}
+
+export interface ScrobbleUrlResponse {
+  url: string;
+}
+
+// ---------------------------------------------------------------------------
+// Tailored mixes
+// ---------------------------------------------------------------------------
+
+export type MixType = 'discover_weekly' | 'daily_blend' | 'artist_radio';
+export type MixTrackOrigin = 'familiar' | 'discovery';
+export type MixTrackStatus = 'available' | 'missing' | 'queued';
+
+export interface MixConfig {
+  id: string;
+  user_id: string;
+  mix_type: MixType;
+  name: string;
+  seed_artist: string | null;
+  track_count: number;
+  discovery_ratio: number;
+  seed_window_days: number;
+  excluded_genres: string[];
+  auto_acquire_missing: boolean;
+  max_weekly_acquisitions: number;
+  quality_profile_id: string | null;
+  enabled: boolean;
+  last_generated_at: string | null;
+}
+
+export interface MixConfigCreateBody {
+  mix_type: MixType;
+  name: string;
+  seed_artist?: string | null;
+  track_count?: number;
+  discovery_ratio?: number;
+  seed_window_days?: number;
+  excluded_genres?: string[];
+  auto_acquire_missing?: boolean;
+  max_weekly_acquisitions?: number;
+  quality_profile_id?: string | null;
+  enabled?: boolean;
+  user_id?: string;
+}
+
+export type MixConfigUpdateBody = Partial<Omit<MixConfigCreateBody, 'mix_type' | 'user_id'>>;
+
+export interface MixTrack {
+  artist: string;
+  title: string;
+  album: string | null;
+  origin: MixTrackOrigin;
+}
+
+export interface MixPreviewResult {
+  tracks: MixTrack[];
+}
+
+export interface MixResultTrack extends MixTrack {
+  status: MixTrackStatus;
+}
+
+export interface TailoredMixResult {
+  mix_id: string;
+  generated_at: string;
+  total: number;
+  available: number;
+  missing: number;
+  acquisitions_queued: number;
+  quota_remaining: number;
+  synced: boolean;
+  sync_error: string | null;
+  tracks: MixResultTrack[];
+}
+
+export interface MixGenerateResponse {
+  status: string;
 }

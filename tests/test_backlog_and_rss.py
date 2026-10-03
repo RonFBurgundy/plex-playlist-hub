@@ -566,8 +566,8 @@ class TestRetryRequestEndpoint:
             assert updated is not None
             assert updated["status"] == "processing"
 
-    def test_retry_request_owner_success(self, app_and_client, seeded_users, test_db, test_config):
-        """Owner of a request can retry their own request."""
+    def test_retry_request_owner_forbidden(self, app_and_client, seeded_users, test_db, test_config):
+        """Retry is admin-only: even the owner of a request cannot trigger it."""
         _, client = app_and_client
         alice_headers = _auth_headers(seeded_users["alice"], test_db, test_config)
 
@@ -582,8 +582,8 @@ class TestRetryRequestEndpoint:
         test_db.create_request(req)
 
         resp = client.post("/api/requests/req-alice-own/retry", headers=alice_headers)
-        assert resp.status_code == 200
-        assert resp.json()["status"] == "processing"
+        assert resp.status_code == 403
+        assert test_db.get_request("req-alice-own")["status"] == "pending"
 
     def test_retry_request_non_owner_forbidden(self, app_and_client, seeded_users, test_db, test_config):
         """Non-admin user cannot retry a request owned by someone else."""
@@ -602,7 +602,7 @@ class TestRetryRequestEndpoint:
 
         resp = client.post("/api/requests/req-alice-secret/retry", headers=bob_headers)
         assert resp.status_code == 403
-        assert "not authorized" in resp.json()["detail"]
+        assert "Administrator access required" in resp.json()["detail"]
 
     def test_retry_request_already_available_bad_request(self, app_and_client, seeded_users, test_db, test_config):
         """Retrying an already available/fulfilled request returns HTTP 400."""

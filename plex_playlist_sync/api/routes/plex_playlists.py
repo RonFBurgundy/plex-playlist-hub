@@ -18,6 +18,7 @@ from plex_playlist_sync.clients.plex import (
     classify_playlist_owner,
     is_smart_playlist,
 )
+from plex_playlist_sync.api.routes.playlists import _guard_existing_playlist
 from plex_playlist_sync.storage import Database
 
 logger = logging.getLogger(__name__)
@@ -96,16 +97,14 @@ def _known_usernames(plex: PlexClient) -> dict[str, str]:
 
 
 def _resolve_user(plex: PlexClient, current_user: dict[str, Any], user: Optional[str]) -> str:
-    """Authorize the target Plex user. Returns the canonical username (403 / 404 on failure)."""
+    """Authorize the target Plex user. Returns the canonical username (404 on failure)."""
     own = _own_username(current_user)
     target = (user or own).strip()
     if not target:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Your account has no Plex username")
     if not current_user.get("is_admin"):
         if target.lower() != own.lower():
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN, detail="You may only manage your own Plex playlists"
-            )
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Plex user not found")
         return own
     if target.lower() == own.lower() and plex.is_admin_username(target):
         return target
@@ -226,7 +225,7 @@ def _authorized_snapshot(
     if snap is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Mix snapshot not found")
     if not current_user.get("is_admin") and snap["plex_user"] != _own_username(current_user).lower():
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not your mix snapshot")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Mix snapshot not found")
     return snap
 
 
@@ -554,6 +553,7 @@ def adopt_playlist(
     ]
     title = str(getattr(pl, "title", "") or "")
     playlist_id = f"plex_{username.lower()}_{rating_key}"
+    _guard_existing_playlist(db, playlist_id, current_user)
     row = _ensure_row(client, db, username, pl)
     db.upsert_playlist(
         playlist_id,
