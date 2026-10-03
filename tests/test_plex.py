@@ -119,3 +119,16 @@ def test_sync_playlist_missing_tracks_csv(mock_server, tmp_path):
     assert csv_file.exists()
     content = csv_file.read_text()
     assert "Missing Song" in content
+
+
+@patch("plex_playlist_sync.clients.plex.PlexServer")
+def test_get_user_server_admin_vs_switch_user(mock_server):
+    client = PlexClient("http://localhost:32400", "token")
+    client.server.myPlexAccount.return_value.username = "Boss"
+    assert client.is_admin_username("boss") is True
+    assert client.get_user_server("BOSS") is client.server
+    client.server.switchUser.assert_not_called()
+
+    other = client.get_user_server("alice")
+    client.server.switchUser.assert_called_once_with("alice")
+    assert other is client.server.switchUser.return_value

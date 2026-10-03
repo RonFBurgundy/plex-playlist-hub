@@ -531,6 +531,7 @@ def import_playlist_tracks(
                     write_missing_as_csv=config.write_missing_as_csv,
                     data_dir=config.data_dir,
                     threshold=config.search_similarity_threshold,
+                    db=db,
                 )
                 matched, missing = plex_client.match_playlist_tracks(
                     model_tracks, threshold=config.search_similarity_threshold

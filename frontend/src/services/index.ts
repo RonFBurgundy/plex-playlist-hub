@@ -7,3 +7,4 @@ export * from './queueService';
 export * from './playlistService';
 export * from './settingsService';
 export * from './systemService';
+export * from './plexPlaylistService';

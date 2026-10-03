@@ -177,6 +177,7 @@ class Database:
                 (21, self._migration_v21),
                 (22, self._migration_v22),
                 (23, self._migration_v23),
+                (24, self._migration_v24),
             ]
 
             for version, migration_fn in migrations:
@@ -998,6 +999,42 @@ class Database:
             cur.execute("ALTER TABLE library_artists ADD COLUMN monitor_option TEXT NOT NULL DEFAULT 'all';")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_lib_artists_monitored ON library_artists(monitored);")
 
+    def _migration_v24(self, cur: sqlite3.Cursor) -> None:
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS plex_playlist_registry (
+                plex_user TEXT NOT NULL,
+                rating_key TEXT NOT NULL,
+                title TEXT NOT NULL,
+                kind TEXT NOT NULL,
+                owner TEXT NOT NULL,
+                ignored INTEGER NOT NULL DEFAULT 0,
+                trackseerr_playlist_id TEXT REFERENCES playlists(id) ON DELETE SET NULL,
+                last_seen_at TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP),
+                PRIMARY KEY (plex_user, rating_key)
+            )
+            """
+        )
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS plex_mix_snapshots (
+                id TEXT PRIMARY KEY,
+                plex_user TEXT NOT NULL,
+                mix_key TEXT NOT NULL,
+                mix_title TEXT NOT NULL,
+                playlist_title TEXT NOT NULL,
+                rating_key TEXT,
+                auto_refresh INTEGER NOT NULL DEFAULT 0,
+                last_refreshed_at TEXT,
+                created_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+                UNIQUE (plex_user, mix_key)
+            )
+            """
+        )
+        cur.execute(
+            "CREATE INDEX IF NOT EXISTS idx_plex_registry_adopted ON plex_playlist_registry(trackseerr_playlist_id);"
+        )
+
     # -------------------------------------------------------------------------
     # Users CRUD
     # -------------------------------------------------------------------------
@@ -1331,6 +1368,239 @@ class Database:
                 (str(playlist_id),),
             )
             return [row["user_id"] for row in cur.fetchall()]
+
+    # -------------------------------------------------------------------------
+    # Plex Playlist Control: registry + mix snapshots
+    # -------------------------------------------------------------------------
+
+    def get_plex_registry_row(self, plex_user: str, rating_key: str) -> Optional[dict[str, Any]]:
+        with self._lock:
+            row = self.conn.execute(
+                "SELECT * FROM plex_playlist_registry WHERE plex_user = ? AND rating_key = ?",
+                (str(plex_user).lower(), str(rating_key)),
+            ).fetchone()
+        return self._registry_to_dict(row) if row else None
+
+    def list_plex_registry(self, plex_user: str) -> list[dict[str, Any]]:
+        with self._lock:
+            rows = self.conn.execute(
+                "SELECT * FROM plex_playlist_registry WHERE plex_user = ? ORDER BY title COLLATE NOCASE ASC",
+                (str(plex_user).lower(),),
+            ).fetchall()
+        return [self._registry_to_dict(r) for r in rows]
+
+    def get_plex_registry_by_adopted(self, playlist_id: str) -> Optional[dict[str, Any]]:
+        with self._lock:
+            row = self.conn.execute(
+                "SELECT * FROM plex_playlist_registry WHERE trackseerr_playlist_id = ? LIMIT 1",
+                (str(playlist_id),),
+            ).fetchone()
+        return self._registry_to_dict(row) if row else None
+
+    @staticmethod
+    def _registry_to_dict(row: sqlite3.Row) -> dict[str, Any]:
+        d = dict(row)
+        d["ignored"] = bool(d["ignored"])
+        return d
+
+    def upsert_plex_registry(
+        self,
+        plex_user: str,
+        rating_key: str,
+        title: str,
+        kind: str,
+        owner: str,
+        ignored: Optional[bool] = None,
+        trackseerr_playlist_id: Optional[str] = None,
+        update_owner: bool = True,
+    ) -> dict[str, Any]:
+        """Insert or update a registry row.
+
+        On conflict the title, kind and last_seen_at are refreshed. ``owner`` is only overwritten when
+        ``update_owner`` is True; ``ignored`` and ``trackseerr_playlist_id`` only when provided.
+        """
+        user = str(plex_user).lower()
+        key = str(rating_key)
+        ignored_val = None if ignored is None else (1 if ignored else 0)
+        with self._lock:
+            self.conn.execute(
+                """
+                INSERT INTO plex_playlist_registry
+                    (plex_user, rating_key, title, kind, owner, ignored, trackseerr_playlist_id, last_seen_at)
+                VALUES (?, ?, ?, ?, ?, COALESCE(?, 0), ?, CURRENT_TIMESTAMP)
+                ON CONFLICT(plex_user, rating_key) DO UPDATE SET
+                    title = excluded.title,
+                    kind = excluded.kind,
+                    owner = CASE WHEN ? = 1 THEN excluded.owner ELSE plex_playlist_registry.owner END,
+                    ignored = COALESCE(?, plex_playlist_registry.ignored),
+                    trackseerr_playlist_id = COALESCE(?, plex_playlist_registry.trackseerr_playlist_id),
+                    last_seen_at = CURRENT_TIMESTAMP
+                """,
+                (
+                    user,
+                    key,
+                    title,
+                    kind,
+                    owner,
+                    ignored_val,
+                    trackseerr_playlist_id,
+                    1 if update_owner else 0,
+                    ignored_val,
+                    trackseerr_playlist_id,
+                ),
+            )
+            self.conn.commit()
+        row = self.get_plex_registry_row(user, key)
+        if row is None:
+            raise RuntimeError(f"Failed to upsert plex registry row {user}/{key}")
+        return row
+
+    def delete_plex_registry(self, plex_user: str, rating_key: str) -> bool:
+        with self._lock:
+            cur = self.conn.execute(
+                "DELETE FROM plex_playlist_registry WHERE plex_user = ? AND rating_key = ?",
+                (str(plex_user).lower(), str(rating_key)),
+            )
+            self.conn.commit()
+            return cur.rowcount > 0
+
+    def prune_plex_registry(self, plex_user: str, keep_rating_keys: list[str]) -> int:
+        """Delete registry rows for playlists that no longer exist on Plex for this user."""
+        keep = {str(k) for k in keep_rating_keys}
+        removed = 0
+        for row in self.list_plex_registry(plex_user):
+            if row["rating_key"] not in keep:
+                if self.delete_plex_registry(plex_user, row["rating_key"]):
+                    removed += 1
+        return removed
+
+    def find_playlist_by_name_for_username(self, name: str, username: str) -> Optional[dict[str, Any]]:
+        """Find a TrackSeerr playlist with this exact name that targets the given Plex username."""
+        with self._lock:
+            row = self.conn.execute(
+                """
+                SELECT p.id, p.name, p.service, p.last_synced_at, p.created_at
+                FROM playlists p
+                JOIN playlist_targets pt ON pt.playlist_id = p.id
+                JOIN users u ON u.id = pt.user_id
+                WHERE p.name = ? AND LOWER(u.username) = LOWER(?)
+                LIMIT 1
+                """,
+                (name, username),
+            ).fetchone()
+        return dict(row) if row else None
+
+    def set_playlist_tracks_json(self, playlist_id: str, tracks_json: str) -> bool:
+        with self._lock:
+            cur = self.conn.execute(
+                "UPDATE playlists SET tracks_json = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                (tracks_json, str(playlist_id)),
+            )
+            self.conn.commit()
+            return cur.rowcount > 0
+
+    @staticmethod
+    def _snapshot_to_dict(row: sqlite3.Row) -> dict[str, Any]:
+        d = dict(row)
+        d["auto_refresh"] = bool(d["auto_refresh"])
+        return d
+
+    def upsert_mix_snapshot(
+        self,
+        plex_user: str,
+        mix_key: str,
+        mix_title: str,
+        playlist_title: str,
+        rating_key: Optional[str],
+        auto_refresh: bool,
+        created_by: Optional[str] = None,
+    ) -> dict[str, Any]:
+        user = str(plex_user).lower()
+        with self._lock:
+            existing = self.conn.execute(
+                "SELECT id FROM plex_mix_snapshots WHERE plex_user = ? AND mix_key = ?",
+                (user, mix_key),
+            ).fetchone()
+            if existing:
+                snap_id = existing["id"]
+                self.conn.execute(
+                    """
+                    UPDATE plex_mix_snapshots
+                    SET mix_title = ?, playlist_title = ?, rating_key = ?, auto_refresh = ?,
+                        last_refreshed_at = CURRENT_TIMESTAMP
+                    WHERE id = ?
+                    """,
+                    (mix_title, playlist_title, rating_key, 1 if auto_refresh else 0, snap_id),
+                )
+            else:
+                snap_id = uuid.uuid4().hex
+                self.conn.execute(
+                    """
+                    INSERT INTO plex_mix_snapshots
+                        (id, plex_user, mix_key, mix_title, playlist_title, rating_key, auto_refresh,
+                         last_refreshed_at, created_by)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, ?)
+                    """,
+                    (snap_id, user, mix_key, mix_title, playlist_title, rating_key,
+                     1 if auto_refresh else 0, created_by),
+                )
+            self.conn.commit()
+        snap = self.get_mix_snapshot(snap_id)
+        if snap is None:
+            raise RuntimeError("Failed to upsert mix snapshot")
+        return snap
+
+    def get_mix_snapshot(self, snapshot_id: str) -> Optional[dict[str, Any]]:
+        with self._lock:
+            row = self.conn.execute(
+                "SELECT * FROM plex_mix_snapshots WHERE id = ?", (str(snapshot_id),)
+            ).fetchone()
+        return self._snapshot_to_dict(row) if row else None
+
+    def list_mix_snapshots(
+        self, plex_user: Optional[str] = None, auto_refresh_only: bool = False
+    ) -> list[dict[str, Any]]:
+        sql = "SELECT * FROM plex_mix_snapshots"
+        clauses: list[str] = []
+        params: list[Any] = []
+        if plex_user is not None:
+            clauses.append("plex_user = ?")
+            params.append(str(plex_user).lower())
+        if auto_refresh_only:
+            clauses.append("auto_refresh = 1")
+        if clauses:
+            sql += " WHERE " + " AND ".join(clauses)
+        sql += " ORDER BY mix_title COLLATE NOCASE ASC"
+        with self._lock:
+            rows = self.conn.execute(sql, params).fetchall()
+        return [self._snapshot_to_dict(r) for r in rows]
+
+    def set_mix_snapshot_auto_refresh(self, snapshot_id: str, auto_refresh: bool) -> bool:
+        with self._lock:
+            cur = self.conn.execute(
+                "UPDATE plex_mix_snapshots SET auto_refresh = ? WHERE id = ?",
+                (1 if auto_refresh else 0, str(snapshot_id)),
+            )
+            self.conn.commit()
+            return cur.rowcount > 0
+
+    def mark_mix_snapshot_refreshed(self, snapshot_id: str, rating_key: Optional[str] = None) -> None:
+        with self._lock:
+            self.conn.execute(
+                """
+                UPDATE plex_mix_snapshots
+                SET last_refreshed_at = CURRENT_TIMESTAMP, rating_key = COALESCE(?, rating_key)
+                WHERE id = ?
+                """,
+                (rating_key, str(snapshot_id)),
+            )
+            self.conn.commit()
+
+    def delete_mix_snapshot(self, snapshot_id: str) -> bool:
+        with self._lock:
+            cur = self.conn.execute("DELETE FROM plex_mix_snapshots WHERE id = ?", (str(snapshot_id),))
+            self.conn.commit()
+            return cur.rowcount > 0
 
     # -------------------------------------------------------------------------
     # Sync Results & Missing Tracks

@@ -20,6 +20,7 @@ from plex_playlist_sync.api.routes import (
     library,
     missing,
     notifications,
+    plex_playlists,
     playlists,
     quality_profiles,
     queue,
@@ -106,6 +107,7 @@ def create_app(
     api_router.include_router(auth.router, prefix="/auth", tags=["auth"])
     api_router.include_router(users.router, prefix="/users", tags=["users"])
     api_router.include_router(playlists.router, prefix="/playlists", tags=["playlists"])
+    api_router.include_router(plex_playlists.router, prefix="/plex-playlists", tags=["plex_playlists"])
     api_router.include_router(sync.router, prefix="/sync", tags=["sync"])
     api_router.include_router(missing.router, prefix="/missing", tags=["missing"])
     api_router.include_router(discovery.router, prefix="/discovery", tags=["discovery"])

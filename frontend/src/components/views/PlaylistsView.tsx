@@ -8,6 +8,7 @@ import {
   ObsidianModal,
   TactileSwitch,
 } from '@/components/ui';
+import { PlexPlaylistsSection } from '@/components/plex';
 
 export interface PlaylistsViewProps {
   playlists: Playlist[];
@@ -22,7 +23,7 @@ export interface PlaylistsViewProps {
   isAdmin?: boolean;
 }
 
-export const PlaylistsView: React.FC<PlaylistsViewProps> = ({
+const SyncPlaylistsPanel: React.FC<PlaylistsViewProps> = ({
   playlists,
   users,
   currentUserId,
@@ -364,6 +365,31 @@ export const PlaylistsView: React.FC<PlaylistsViewProps> = ({
           </form>
         </div>
       </ObsidianModal>
+    </div>
+  );
+};
+
+type PlaylistsSection = 'sync' | 'plex';
+
+export const PlaylistsView: React.FC<PlaylistsViewProps> = (props) => {
+  const [section, setSection] = useState<PlaylistsSection>('sync');
+
+  return (
+    <div className="space-y-6">
+      <TapeTransportBay className="inline-flex items-center gap-1">
+        <TapeDeckButton size="sm" active={section === 'sync'} onClick={() => setSection('sync')}>
+          Sync
+        </TapeDeckButton>
+        <TapeDeckButton size="sm" active={section === 'plex'} onClick={() => setSection('plex')}>
+          Plex
+        </TapeDeckButton>
+      </TapeTransportBay>
+
+      {section === 'sync' ? (
+        <SyncPlaylistsPanel {...props} />
+      ) : (
+        <PlexPlaylistsSection isAdmin={props.isAdmin ?? false} />
+      )}
     </div>
   );
 };

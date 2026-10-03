@@ -351,3 +351,113 @@ export interface ScheduledTaskItem {
   can_cancel: boolean;
 }
 
+
+// ---------------------------------------------------------------------------
+// Plex Playlist Control
+// ---------------------------------------------------------------------------
+
+export type PlexPlaylistKind = 'regular' | 'smart';
+export type PlexPlaylistOwner = 'trackseerr' | 'user' | 'plexamp';
+
+export interface PlexUserOption {
+  username: string;
+  is_admin_account: boolean;
+  is_self: boolean;
+}
+
+export interface PlexPlaylistSummary {
+  rating_key: string;
+  title: string;
+  kind: PlexPlaylistKind;
+  owner: PlexPlaylistOwner;
+  ignored: boolean;
+  track_count: number;
+  duration_ms: number;
+  thumb_url: string | null;
+  updated_at: string | null;
+  trackseerr_playlist_id: string | null;
+  plex_user: string;
+}
+
+export interface PlexPlaylistItem {
+  playlist_item_id: number;
+  rating_key: string;
+  title: string;
+  artist: string;
+  album: string;
+  duration_ms: number;
+}
+
+export interface PlexMix {
+  mix_key: string;
+  title: string;
+  hub_title: string;
+  track_count: number | null;
+  thumb_url: string | null;
+  snapshot_id: string | null;
+}
+
+export interface PlexMixSnapshot {
+  id: string;
+  plex_user: string;
+  mix_key: string;
+  mix_title: string;
+  playlist_title: string;
+  rating_key: string | null;
+  auto_refresh: boolean;
+  last_refreshed_at: string | null;
+}
+
+export interface PlexRenameBody {
+  title: string;
+}
+
+export interface PlexAddItemsBody {
+  track_rating_keys: string[];
+}
+
+export interface PlexMoveItemBody {
+  after_playlist_item_id: number | null;
+}
+
+export interface PlexCopyBody {
+  target_users: string[];
+  title?: string;
+}
+
+export interface PlexCopyResult {
+  username: string;
+  success: boolean;
+  rating_key?: string | null;
+  error?: string | null;
+  copied_tracks: number;
+  omitted_tracks: number;
+}
+
+/** TrackSeerr playlist row returned by POST /plex/playlists/{key}/adopt. */
+export interface AdoptedPlexPlaylist {
+  id: string;
+  name: string;
+  service: 'plex';
+  targets: string[];
+  description?: string;
+  poster_url?: string;
+  enabled?: boolean;
+  tracks_json?: string | null;
+  creator_id?: string | null;
+}
+
+export interface PlexFlagsBody {
+  ignored?: boolean;
+  owner?: 'user' | 'trackseerr';
+}
+
+export interface PlexMixSnapshotBody {
+  mix_key: string;
+  title?: string;
+  auto_refresh: boolean;
+}
+
+export interface PlexMixSnapshotUpdateBody {
+  auto_refresh: boolean;
+}

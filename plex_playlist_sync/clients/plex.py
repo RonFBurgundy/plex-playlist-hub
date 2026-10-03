@@ -1,6 +1,8 @@
 import csv
 import logging
 import re
+import sqlite3
+from datetime import datetime, timezone
 from difflib import SequenceMatcher
 from pathlib import Path
 from typing import Any, List, Optional, Tuple
@@ -8,7 +10,7 @@ from typing import Any, List, Optional, Tuple
 import requests
 import urllib.parse
 import urllib3
-from plexapi.exceptions import BadRequest, NotFound
+from plexapi.exceptions import BadRequest, NotFound, Unauthorized
 from plexapi.server import PlexServer
 
 from ..models import Playlist, SyncResult, Track
@@ -36,6 +38,67 @@ def clean_title(title: str) -> str:
     # If title has parentheses without tags, also strip for clean fallback
     cleaned = re.sub(r"[\(\[].*?[\)\]]", "", cleaned)
     return cleaned.strip()
+
+
+PLEX_ERRORS = (NotFound, BadRequest, Unauthorized, requests.exceptions.RequestException)
+
+
+class PlaylistProtectedError(Exception):
+    """Raised when a sync/copy would overwrite a playlist TrackSeerr must not touch."""
+
+
+class MixNotFoundError(Exception):
+    """Raised when a Plexamp mix cannot be resolved (or has no tracks)."""
+
+
+def is_smart_playlist(playlist: Any) -> bool:
+    """True only when Plex explicitly reports the playlist as smart."""
+    return getattr(playlist, "smart", False) is True
+
+
+def _as_utc(value: datetime) -> datetime:
+    """Normalise to an aware UTC datetime. Naive values: Plex's are local time, so treat naive as local."""
+    if value.tzinfo is None:
+        value = value.astimezone()
+    return value.astimezone(timezone.utc)
+
+
+def _parse_sqlite_utc(value: Any) -> Optional[datetime]:
+    """Parse a SQLite CURRENT_TIMESTAMP string (UTC) into an aware datetime, or None when unparseable."""
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def classify_playlist_owner(
+    db: Any, plex_user: str, title: str, smart: bool, added_at: Optional[datetime] = None
+) -> str:
+    """Classify a first-seen playlist.
+
+    smart -> plexamp. A title match against a TrackSeerr playlist targeting this user counts only when that row
+    was actually synced before (``last_synced_at`` set) and the Plex playlist (when ``added_at`` is known) was not
+    created before the row. Otherwise -> user.
+    """
+    if smart:
+        return "plexamp"
+    try:
+        match = db.find_playlist_by_name_for_username(title, plex_user) if db is not None else None
+    except sqlite3.Error as e:
+        logger.warning("Could not check legacy TrackSeerr playlists for '%s': %s", title, e)
+        return "user"
+    if not match or not match.get("last_synced_at"):
+        return "user"
+    if isinstance(added_at, datetime):
+        created = _parse_sqlite_utc(match.get("created_at"))
+        if created is not None and _as_utc(added_at) < created:
+            return "user"
+    return "trackseerr"
 
 
 class PlexClient:
@@ -233,22 +296,81 @@ class PlexClient:
         add_poster: bool = True,
         server: Optional[object] = None,
         admin_server: Optional[object] = None,
+        db: Optional[Any] = None,
+        username: Optional[str] = None,
+        skip_rating_keys: Optional[set] = None,
     ) -> object:
-        """Create or update a playlist on Plex with given tracks and metadata."""
+        """Create or update a playlist on Plex with given tracks and metadata.
+
+        Overwrite protection: smart playlists are never touched; when ``db`` and ``username`` are given,
+        playlists registered as owned by the user or Plexamp are never touched either. Unregistered,
+        collisions without a registry row are classified first and only claimed when legacy-TrackSeerr.
+        Raises PlaylistProtectedError when the existing playlist must not be modified.
+        """
         srv = server if server is not None else self.server
         admin = admin_server if admin_server is not None else self.server
+        who = (username or "").lower()
+        if db is not None and not who:
+            raise ValueError("username is required when db is provided")
 
         try:
             plex_playlist = srv.playlist(name)
+        except NotFound:
+            plex_playlist = None
+
+        if plex_playlist is not None:
+            rating_key = str(getattr(plex_playlist, "ratingKey", "") or "")
+            if skip_rating_keys and rating_key in {str(k) for k in skip_rating_keys}:
+                raise PlaylistProtectedError(
+                    f"Skipped: '{name}' is the adopted source playlist in {username}'s profile"
+                )
+            if is_smart_playlist(plex_playlist):
+                logger.warning("Refusing to overwrite smart playlist '%s' in %s's profile", name, username)
+                raise PlaylistProtectedError(
+                    f"Protected: '{name}' is owned by plexamp in {username}'s profile"
+                )
+            if db is not None:
+                row = db.get_plex_registry_row(who, rating_key)
+                if row and row["owner"] in ("user", "plexamp"):
+                    logger.warning(
+                        "Refusing to overwrite '%s' (owner=%s) in %s's profile", name, row["owner"], username
+                    )
+                    raise PlaylistProtectedError(
+                        f"Protected: '{name}' is owned by {row['owner']} in {username}'s profile"
+                    )
+                if not row:
+                    owner = classify_playlist_owner(
+                        db, who, name, False, added_at=getattr(plex_playlist, "addedAt", None)
+                    )
+                    if owner != "trackseerr":
+                        logger.warning(
+                            "Refusing to overwrite unregistered '%s' (owner=%s) in %s's profile", name, owner, username
+                        )
+                        raise PlaylistProtectedError(
+                            f"Protected: '{name}' is owned by {owner} in {username}'s profile"
+                        )
+                    logger.info("Claiming legacy playlist '%s' for TrackSeerr in %s's profile", name, username)
             logger.info("Found existing Plex playlist '%s'", name)
             if not append:
                 plex_playlist.removeItems(plex_playlist.items())
             plex_playlist.addItems(tracks)
             logger.info("Updated tracks for playlist '%s'", name)
-        except NotFound:
+        else:
             logger.info("Creating new Plex playlist '%s'", name)
             srv.createPlaylist(title=name, items=tracks)
             plex_playlist = srv.playlist(name)
+
+        if db is not None:
+            try:
+                db.upsert_plex_registry(
+                    who,
+                    str(getattr(plex_playlist, "ratingKey", "") or ""),
+                    name,
+                    "regular",
+                    "trackseerr",
+                )
+            except sqlite3.Error as e:
+                logger.warning("Failed to record registry row for '%s': %s", name, e)
 
         if add_description and description:
             try:
@@ -400,6 +522,7 @@ class PlexClient:
         data_dir: str = "/data",
         threshold: float = 0.9,
         db: Optional[Any] = None,
+        skip_rating_keys: Optional[set] = None,
     ) -> List[SyncResult]:
         """Synchronize a playlist across multiple Plex user profiles.
 
@@ -451,29 +574,14 @@ class PlexClient:
             else:
                 self.delete_missing_csv(playlist.name, data_dir=data_dir)
 
-        admin_username = ""
-        try:
-            account = self.server.myPlexAccount()
-            admin_username = str(getattr(account, "username", "") or "")
-        except Exception as e:
-            logger.debug("Could not determine admin username from myPlexAccount: %s", e)
+        admin_username = self._get_admin_username()
 
         results: List[SyncResult] = []
         for username in target_usernames:
-            is_admin = False
-            if admin_username and username.lower() == admin_username.lower():
-                is_admin = True
-            elif not admin_username and username.lower() in (
-                "admin",
-                str(getattr(self.server, "friendlyName", "") or "").lower(),
-            ):
-                is_admin = True
-
             try:
-                if is_admin:
-                    user_server = self.server
-                else:
-                    user_server = self.server.switchUser(username)
+                user_server = self.get_user_server(username, admin_username=admin_username)
+                if db is not None:
+                    self.refresh_playlist_registry(user_server, username, db)
 
                 self.update_or_create_playlist(
                     name=playlist.name,
@@ -485,6 +593,9 @@ class PlexClient:
                     add_poster=add_poster,
                     server=user_server,
                     admin_server=self.server,
+                    db=db,
+                    username=username,
+                    skip_rating_keys=skip_rating_keys,
                 )
                 results.append(
                     SyncResult(
@@ -493,6 +604,18 @@ class PlexClient:
                         matched_tracks=len(matched),
                         missing_tracks=len(missing),
                         success=True,
+                    )
+                )
+            except PlaylistProtectedError as e:
+                logger.warning("Playlist '%s' not synced to '%s': %s", playlist.name, username, e)
+                results.append(
+                    SyncResult(
+                        playlist_name=playlist.name,
+                        total_tracks=len(playlist.tracks),
+                        matched_tracks=len(matched),
+                        missing_tracks=len(missing),
+                        success=False,
+                        error=str(e),
                     )
                 )
             except Exception as e:
@@ -509,6 +632,299 @@ class PlexClient:
                 )
 
         return results
+
+    # -------------------------------------------------------------------------
+    # Plex Playlist Control: identity helpers
+    # -------------------------------------------------------------------------
+
+    def _get_admin_username(self) -> str:
+        """Return the Plex admin account username, or '' when it cannot be determined."""
+        try:
+            account = self.server.myPlexAccount()
+            return str(getattr(account, "username", "") or "")
+        except Exception as e:  # myPlexAccount raises assorted plexapi/requests/Unauthorized errors
+            logger.warning("Could not determine admin username from myPlexAccount: %s", e)
+            return ""
+
+    def is_admin_username(self, username: str, admin_username: Optional[str] = None) -> bool:
+        """True when ``username`` is the Plex admin account (case-insensitive)."""
+        admin_name = self._get_admin_username() if admin_username is None else admin_username
+        if admin_name and username.lower() == admin_name.lower():
+            return True
+        if not admin_name and username.lower() in (
+            "admin",
+            str(getattr(self.server, "friendlyName", "") or "").lower(),
+        ):
+            return True
+        return False
+
+    def get_user_server(self, username: str, admin_username: Optional[str] = None) -> Any:
+        """Resolve a Plex username to a server handle: admin -> self.server, else switchUser."""
+        if self.is_admin_username(username, admin_username):
+            return self.server
+        return self.server.switchUser(username)
+
+    # -------------------------------------------------------------------------
+    # Plex Playlist Control: playlists
+    # -------------------------------------------------------------------------
+
+    @staticmethod
+    def list_audio_playlists(server: Any) -> List[Any]:
+        """List audio playlists (regular and smart) visible to the given server handle."""
+        playlists = server.playlists(playlistType="audio")
+        return [p for p in playlists if getattr(p, "playlistType", "audio") == "audio"]
+
+    @staticmethod
+    def get_playlist(server: Any, rating_key: str) -> Any:
+        """Fetch one audio playlist by ratingKey. Raises NotFound when absent or not an audio playlist."""
+        try:
+            playlist = server.fetchItem(f"/playlists/{int(rating_key)}")
+        except ValueError as e:
+            raise NotFound(f"Invalid playlist key '{rating_key}'") from e
+        if getattr(playlist, "playlistType", "audio") != "audio":
+            raise NotFound(f"Playlist {rating_key} is not an audio playlist")
+        return playlist
+
+    @staticmethod
+    def get_playlist_items(playlist: Any) -> List[Any]:
+        return list(playlist.items())
+
+    @staticmethod
+    def rename_playlist(playlist: Any, title: str) -> None:
+        playlist.edit(title=title)
+
+    @staticmethod
+    def delete_playlist(playlist: Any) -> None:
+        playlist.delete()
+
+    @staticmethod
+    def find_playlist_item(playlist: Any, playlist_item_id: int) -> Any:
+        """Locate an item by its playlistItemID. Raises NotFound when absent."""
+        for item in playlist.items():
+            try:
+                if int(getattr(item, "playlistItemID", -1)) == int(playlist_item_id):
+                    return item
+            except (TypeError, ValueError):
+                continue
+        raise NotFound(f"Playlist item {playlist_item_id} not found")
+
+    def add_tracks_to_playlist(self, server: Any, playlist: Any, track_rating_keys: List[str]) -> None:
+        """Append library tracks (by ratingKey) to a regular playlist."""
+        tracks = []
+        for key in track_rating_keys:
+            item = server.fetchItem(int(key))
+            if getattr(item, "type", None) != "track":
+                raise ValueError(f"Item {key} is not a track")
+            tracks.append(item)
+        if tracks:
+            playlist.addItems(tracks)
+
+    def remove_playlist_item(self, playlist: Any, playlist_item_id: int) -> None:
+        playlist.removeItems([self.find_playlist_item(playlist, playlist_item_id)])
+
+    def move_playlist_item(
+        self, playlist: Any, playlist_item_id: int, after_playlist_item_id: Optional[int]
+    ) -> None:
+        """Move an item after another item, or to the top when ``after_playlist_item_id`` is None."""
+        item = self.find_playlist_item(playlist, playlist_item_id)
+        if after_playlist_item_id is None:
+            playlist.moveItem(item)
+        else:
+            after_item = self.find_playlist_item(playlist, after_playlist_item_id)
+            playlist.moveItem(item, after=after_item)
+
+    def refresh_playlist_registry(self, server: Any, username: str, db: Any) -> List[Tuple[Any, dict]]:
+        """Sync the registry with the user's audio playlists; classify first-seen ones, prune vanished ones.
+
+        Returns [(plex_playlist, registry_row), ...].
+        """
+        who = username.lower()
+        out: List[Tuple[Any, dict]] = []
+        keys: List[str] = []
+        for pl in self.list_audio_playlists(server):
+            key = str(getattr(pl, "ratingKey", ""))
+            title = str(getattr(pl, "title", "") or "")
+            smart = is_smart_playlist(pl)
+            kind = "smart" if smart else "regular"
+            keys.append(key)
+            existing = db.get_plex_registry_row(who, key)
+            if existing is None:
+                owner = classify_playlist_owner(db, who, title, smart, added_at=getattr(pl, "addedAt", None))
+                row = db.upsert_plex_registry(who, key, title, kind, owner)
+            else:
+                owner = "plexamp" if smart else existing["owner"]
+                row = db.upsert_plex_registry(who, key, title, kind, owner)
+            out.append((pl, row))
+        db.prune_plex_registry(who, keys)
+        return out
+
+    def copy_playlist_to_user(
+        self,
+        source_items: List[Any],
+        title: str,
+        target_username: str,
+        db: Any,
+        description: str = "",
+    ) -> Tuple[Any, int, int]:
+        """Create a static copy of ``source_items`` in the target user's profile (protected path).
+
+        Returns ``(playlist, copied_tracks, omitted_tracks)``; omitted tracks are not visible in the target library
+        or have an unusable ratingKey. Raises PlaylistProtectedError on a name collision with a non-TrackSeerr playlist.
+        """
+        admin_username = self._get_admin_username()
+        target_server = self.get_user_server(target_username, admin_username=admin_username)
+        # Make sure collisions are classified before the protected write.
+        self.refresh_playlist_registry(target_server, target_username, db)
+        if target_server is self.server:
+            tracks = list(source_items)
+        else:
+            tracks = []
+            for item in source_items:
+                item_title = str(getattr(item, "title", "") or "")
+                try:
+                    tracks.append(target_server.fetchItem(int(item.ratingKey)))
+                except NotFound:
+                    logger.warning(
+                        "Skipping track '%s' (%s) for %s: not visible in the target library",
+                        item_title, getattr(item, "ratingKey", "?"), target_username,
+                    )
+                except (ValueError, TypeError) as e:
+                    logger.warning(
+                        "Skipping track '%s' (%s) for %s: invalid ratingKey (%s)",
+                        item_title, getattr(item, "ratingKey", "?"), target_username, e,
+                    )
+        omitted = len(source_items) - len(tracks)
+        if not tracks:
+            raise NotFound("No copyable tracks found in the target profile")
+        playlist = self.update_or_create_playlist(
+            name=title,
+            tracks=tracks,
+            description=description,
+            add_description=False,
+            add_poster=False,
+            server=target_server,
+            admin_server=self.server,
+            db=db,
+            username=target_username,
+        )
+        return playlist, len(tracks), omitted
+
+    # -------------------------------------------------------------------------
+    # Plex Playlist Control: Plexamp mixes
+    # -------------------------------------------------------------------------
+
+    def _iter_mix_items(self, server: Any) -> List[Tuple[Any, Any]]:
+        """Return [(hub, hub_item)] for every 'mix' hub across music sections. Never raises on Plex errors."""
+        pairs: List[Tuple[Any, Any]] = []
+        try:
+            sections = [s for s in server.library.sections() if getattr(s, "type", "") == "artist"]
+        except PLEX_ERRORS as e:
+            logger.warning("Could not list Plex library sections for mixes: %s", e)
+            return pairs
+        for section in sections:
+            try:
+                hubs = section.hubs()
+            except PLEX_ERRORS as e:
+                logger.warning("Could not load hubs for section '%s': %s", getattr(section, "title", "?"), e)
+                continue
+            for hub in hubs:
+                ident = str(getattr(hub, "hubIdentifier", "") or "").lower()
+                hub_title = str(getattr(hub, "title", "") or "").lower()
+                if "mix" not in ident and "mix" not in hub_title:
+                    continue
+                try:
+                    hub_items = list(getattr(hub, "items", []) or [])
+                except PLEX_ERRORS as e:
+                    logger.warning("Could not read items of hub '%s': %s", hub_title, e)
+                    continue
+                for item in hub_items:
+                    pairs.append((hub, item))
+        return pairs
+
+    def get_user_mixes(self, username: str, server: Optional[Any] = None) -> List[dict]:
+        """List Plexamp mixes (read-only recommendation hubs) for a user. Returns [] on Plex failure."""
+        try:
+            srv = server if server is not None else self.get_user_server(username)
+        except PLEX_ERRORS as e:
+            logger.warning("Could not resolve Plex server for '%s' while listing mixes: %s", username, e)
+            return []
+        mixes: List[dict] = []
+        seen: set = set()
+        for hub, item in self._iter_mix_items(srv):
+            key = str(getattr(item, "key", "") or "")
+            if not key or key in seen:
+                continue
+            seen.add(key)
+            count = getattr(item, "leafCount", None)
+            mixes.append(
+                {
+                    "mix_key": key,
+                    "title": str(getattr(item, "title", "") or ""),
+                    "hub_title": str(getattr(hub, "title", "") or ""),
+                    "track_count": int(count) if isinstance(count, int) else None,
+                    "thumb_url": None,
+                }
+            )
+        return mixes
+
+    def get_mix_tracks(self, username: str, mix_key: str, server: Optional[Any] = None) -> List[Any]:
+        """Resolve a mix by key and return its track objects. Raises MixNotFoundError when unavailable."""
+        try:
+            srv = server if server is not None else self.get_user_server(username)
+        except PLEX_ERRORS as e:
+            raise MixNotFoundError(f"Could not open Plex profile for '{username}': {e}") from e
+        for _hub, item in self._iter_mix_items(srv):
+            if str(getattr(item, "key", "") or "") != mix_key:
+                continue
+            try:
+                items_fn = getattr(item, "items", None)
+                if callable(items_fn):
+                    tracks = list(items_fn())
+                else:
+                    tracks = list(srv.fetchItems(item.key))
+            except PLEX_ERRORS as e:
+                raise MixNotFoundError(f"Could not load tracks for mix '{mix_key}': {e}") from e
+            tracks = [t for t in tracks if getattr(t, "type", "track") == "track"]
+            if not tracks:
+                raise MixNotFoundError(f"Mix '{mix_key}' has no tracks")
+            return tracks
+        raise MixNotFoundError(f"Mix '{mix_key}' not found for '{username}'")
+
+    def save_mix_as_playlist(
+        self, db: Any, username: str, mix_key: str, playlist_title: str, server: Optional[Any] = None
+    ) -> Any:
+        """Create or replace a regular playlist from a mix through the protected write path."""
+        srv = server if server is not None else self.get_user_server(username)
+        tracks = self.get_mix_tracks(username, mix_key, server=srv)
+        self.refresh_playlist_registry(srv, username, db)
+        return self.update_or_create_playlist(
+            name=playlist_title,
+            tracks=tracks,
+            add_description=False,
+            add_poster=False,
+            server=srv,
+            admin_server=self.server,
+            db=db,
+            username=username,
+        )
+
+    def refresh_auto_mix_snapshots(self, db: Any) -> int:
+        """Re-resolve every auto_refresh snapshot. Missing mixes leave the playlist alone. Returns count refreshed."""
+        refreshed = 0
+        for snap in db.list_mix_snapshots(auto_refresh_only=True):
+            try:
+                pl = self.save_mix_as_playlist(
+                    db, snap["plex_user"], snap["mix_key"], snap["playlist_title"]
+                )
+                db.mark_mix_snapshot_refreshed(snap["id"], str(getattr(pl, "ratingKey", "") or "") or None)
+                refreshed += 1
+            except MixNotFoundError as e:
+                logger.warning("Mix snapshot '%s' not refreshed: %s", snap["playlist_title"], e)
+            except PlaylistProtectedError as e:
+                logger.warning("Mix snapshot '%s' not refreshed: %s", snap["playlist_title"], e)
+            except PLEX_ERRORS as e:
+                logger.warning("Mix snapshot '%s' refresh failed: %s", snap["playlist_title"], e)
+        return refreshed
 
     def search_library_tracks(self, query: str, limit: int = 20) -> list[dict[str, Any]]:
         """Search tracks in Plex music library for manual matching."""

@@ -10,6 +10,8 @@ from typing import Any, Optional
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, status
 from fastapi.responses import StreamingResponse
+from plexapi.exceptions import BadRequest, NotFound, Unauthorized
+import requests
 
 from plex_playlist_sync.api.dependencies import (
     get_config,
@@ -86,6 +88,44 @@ class SyncState:
         self.log_handler.setFormatter(formatter)
         logging.getLogger("plex_playlist_sync").addHandler(self.log_handler)
 
+    @staticmethod
+    def _refresh_adopted_playlist(
+        db: Database, plex_client: Optional[PlexClient], pl: dict[str, Any]
+    ) -> Optional[set[str]]:
+        """Refresh tracks_json of a service='plex' adopted playlist from its source.
+
+        Returns the set of source rating keys that must not be written to (None if unresolved).
+        Falls back to the stored snapshot when the source is gone or Plex is unreachable.
+        """
+        registry = db.get_plex_registry_by_adopted(pl["id"])
+        if registry is None:
+            logger.warning("Adopted playlist '%s' has no source registry row; using stored snapshot", pl["name"])
+            return None
+        skip = {str(registry["rating_key"])}
+        if plex_client is None:
+            return skip
+        try:
+            server = plex_client.get_user_server(registry["plex_user"])
+            source = plex_client.get_playlist(server, registry["rating_key"])
+            items = plex_client.get_playlist_items(source)
+        except (NotFound, BadRequest, Unauthorized, requests.exceptions.RequestException) as e:
+            logger.warning(
+                "Source Plex playlist for adopted '%s' unavailable (%s); using stored snapshot", pl["name"], e
+            )
+            return skip
+        snapshot = [
+            {
+                "title": str(getattr(i, "title", "") or ""),
+                "artist": str(getattr(i, "grandparentTitle", "") or ""),
+                "album": str(getattr(i, "parentTitle", "") or ""),
+            }
+            for i in items
+        ]
+        payload = json.dumps(snapshot)
+        db.set_playlist_tracks_json(pl["id"], payload)
+        pl["tracks_json"] = payload
+        return skip
+
     def execute_sync(
         self,
         db: Database,
@@ -108,6 +148,13 @@ class SyncState:
         }
 
         try:
+            if plex_client:
+                try:
+                    refreshed = plex_client.refresh_auto_mix_snapshots(db)
+                    if refreshed:
+                        logger.info("Refreshed %d Plexamp mix snapshot(s)", refreshed)
+                except (NotFound, BadRequest, Unauthorized, requests.exceptions.RequestException) as e:
+                    logger.warning("Mix snapshot refresh failed: %s", e)
             playlists = db.list_playlists(enabled_only=True)
             stats["total_playlists"] = len(playlists)
 
@@ -130,6 +177,9 @@ class SyncState:
 
                 tracks: list[Track] = []
                 service = pl.get("service", "spotify")
+                skip_rating_keys: Optional[set[str]] = None
+                if service == "plex":
+                    skip_rating_keys = self._refresh_adopted_playlist(db, plex_client, pl)
                 try:
                     if pl_id.startswith("imp_") or pl.get("tracks_json"):
                         raw_tracks_json = pl.get("tracks_json")
@@ -173,6 +223,8 @@ class SyncState:
                             write_missing_as_csv=config.write_missing_as_csv,
                             data_dir=config.data_dir,
                             threshold=config.search_similarity_threshold,
+                            db=db,
+                            skip_rating_keys=skip_rating_keys,
                         )
                         matched, missing = plex_client.match_playlist_tracks(
                             tracks, threshold=config.search_similarity_threshold

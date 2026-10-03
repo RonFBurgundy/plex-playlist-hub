@@ -4,3 +4,4 @@ export * from './useDiscovery';
 export * from './useRequests';
 export * from './useLibrary';
 export * from './useQueue';
+export * from './usePlexPlaylists';
