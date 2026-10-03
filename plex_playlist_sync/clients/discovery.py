@@ -1,5 +1,6 @@
 """Zero-key music discovery client wrapping iTunes and Deezer public APIs with TTL caching."""
 
+import concurrent.futures
 import copy
 import logging
 import threading
@@ -169,17 +170,78 @@ class DiscoveryClient:
 
         items: list[dict[str, Any]] = []
 
-        # 1. Search Deezer
-        deezer_items = self._search_deezer(clean_q, clean_type, limit=limit)
-        items.extend(deezer_items)
+        # Concurrently search Deezer and iTunes
+        with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
+            future_deezer = executor.submit(self._search_deezer, clean_q, clean_type, limit)
+            future_itunes = executor.submit(self._search_itunes, clean_q, clean_type, limit)
 
-        # 2. Search iTunes
-        itunes_items = self._search_itunes(clean_q, clean_type, limit=limit)
-        items.extend(itunes_items)
+            done, not_done = concurrent.futures.wait(
+                [future_deezer, future_itunes], timeout=self.timeout
+            )
+            for future in done:
+                try:
+                    res = future.result()
+                    if res and isinstance(res, list):
+                        items.extend(res)
+                except Exception as exc:
+                    logger.warning("DiscoveryClient search worker failed: %s", exc)
+
+            for future in not_done:
+                logger.warning("DiscoveryClient search worker timed out after %ss", self.timeout)
+                future.cancel()
 
         deduped = self._deduplicate_items(items, limit=limit)
         self._set_cached(cache_key, deduped)
         return deduped
+
+    def search_artist(self, artist_name: str) -> Optional[dict[str, Any]]:
+        """Queries Deezer public search API to resolve canonical artist metadata and ID."""
+        clean_name = (artist_name or "").strip()
+        if not clean_name:
+            return None
+
+        cache_key = f"artist_search:{clean_name.lower()}"
+        cached = self._get_cached(cache_key)
+        if cached is not None:
+            return cached
+
+        try:
+            encoded_q = urllib.parse.quote(clean_name)
+            url = f"https://api.deezer.com/search/artist?q={encoded_q}&limit=5"
+            resp = self.session.get(url, timeout=self.timeout)
+            if resp.status_code == 200:
+                data = resp.json()
+                artists = data.get("data", []) if isinstance(data, dict) else []
+                for art in artists:
+                    if not isinstance(art, dict):
+                        continue
+                    art_id = art.get("id")
+                    name = str(art.get("name", "")).strip()
+                    if art_id and (name.lower() == clean_name.lower() or clean_name.lower() in name.lower()):
+                        result = {
+                            "id": f"deezer:artist:{art_id}",
+                            "name": name,
+                            "image_url": art.get("picture_xl") or art.get("picture_big") or art.get("picture_medium") or art.get("picture"),
+                            "banner_url": art.get("picture_xl") or art.get("picture_big"),
+                        }
+                        self._set_cached(cache_key, result)
+                        return result
+                if artists and isinstance(artists[0], dict):
+                    first = artists[0]
+                    art_id = first.get("id")
+                    if art_id:
+                        result = {
+                            "id": f"deezer:artist:{art_id}",
+                            "name": str(first.get("name", "")).strip(),
+                            "image_url": first.get("picture_xl") or first.get("picture_big") or first.get("picture_medium") or first.get("picture"),
+                            "banner_url": first.get("picture_xl") or first.get("picture_big"),
+                        }
+                        self._set_cached(cache_key, result)
+                        return result
+        except Exception as exc:
+            logger.warning("DiscoveryClient search_artist error for '%s': %s", clean_name, exc)
+
+        return None
 
     def get_album_details(self, album_id: str) -> Optional[dict[str, Any]]:
         """Fetches full album details, tracklist, and audio previews from Deezer or iTunes with TTL caching."""

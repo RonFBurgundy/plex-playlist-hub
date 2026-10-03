@@ -174,6 +174,7 @@ class Database:
                 (18, self._migration_v18),
                 (19, self._migration_v19),
                 (20, self._migration_v20),
+                (21, self._migration_v21),
             ]
 
             for version, migration_fn in migrations:
@@ -954,6 +955,17 @@ class Database:
                 PRIMARY KEY (collection_id, album_id)
             );
             """
+        )
+
+    def _migration_v21(self, cur: sqlite3.Cursor) -> None:
+        cur.execute("PRAGMA table_info(media_management_settings);")
+        mm_cols = [row[1] for row in cur.fetchall()]
+        if "prefer_local_artwork" not in mm_cols:
+            cur.execute(
+                "ALTER TABLE media_management_settings ADD COLUMN prefer_local_artwork INTEGER NOT NULL DEFAULT 1;"
+            )
+        cur.execute(
+            "UPDATE media_management_settings SET mb_mirror_url = 'https://api.brainzmash.cc' WHERE mb_mirror_url IN ('https://api.brainzmash.org', 'https://musicbrainz.org');"
         )
 
     # -------------------------------------------------------------------------
@@ -1788,7 +1800,8 @@ class Database:
             res["acoustid_api_key"] = (
                 str(res["acoustid_api_key"]) if res.get("acoustid_api_key") is not None else None
             )
-            res["mb_mirror_url"] = str(res.get("mb_mirror_url") or "https://api.brainzmash.org")
+            res["mb_mirror_url"] = str(res.get("mb_mirror_url") or "https://api.brainzmash.cc")
+            res["prefer_local_artwork"] = bool(res.get("prefer_local_artwork", 1))
             return res
 
     def update_media_management_settings(self, settings: dict[str, Any]) -> dict[str, Any]:
@@ -1815,6 +1828,7 @@ class Database:
             "enrich_mbids",
             "acoustid_api_key",
             "mb_mirror_url",
+            "prefer_local_artwork",
         }
         updates: dict[str, Any] = {}
         for k, v in settings.items():
@@ -1827,9 +1841,10 @@ class Database:
                     "delete_completed_transfers",
                     "enable_quality_upgrades",
                     "enrich_mbids",
+                    "prefer_local_artwork",
                 ):
                     if v is not None:
-                        updates[k] = 1 if v else 0
+                        updates[k] = 1 if bool(v) else 0
                 elif k == "seed_ratio_limit":
                     updates[k] = float(v) if v is not None else None
                 elif k == "seed_time_limit_minutes":

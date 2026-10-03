@@ -1,5 +1,6 @@
 """Discovery REST API endpoints for trending charts, new releases, and unified multi-source search."""
 
+import concurrent.futures
 import logging
 from typing import Any, Optional
 
@@ -84,22 +85,45 @@ def annotate_item_statuses(
                 it["status"] = "requested"
             it["request_id"] = matched_req.get("id")
         else:
-            in_plex = False
-            if plex_client is not None and title:
+            it["status"] = "none"
+
+        annotated.append(it)
+
+    # For items without matches, skip individual per-track network round trips on batch discovery lists (> 5 items).
+    # For small sets (<= 5 items) when plex_client is provided, resolve concurrently via ThreadPoolExecutor.
+    if plex_client is not None and len(items) <= 5:
+        plex_lookups: list[tuple[int, str, str]] = []
+        for idx, it in enumerate(annotated):
+            if it.get("status") in (None, "none") and not it.get("request_id"):
+                art = (it.get("artist") or "").lower().strip()
+                tit = (it.get("title") or "").lower().strip()
+                if tit:
+                    plex_lookups.append((idx, art, tit))
+
+        if plex_lookups:
+            def _check_plex(entry: tuple[int, str, str]) -> tuple[int, bool]:
+                i, a, t = entry
                 try:
-                    plex_matches = plex_client.search_library_tracks(query=title, limit=5)
+                    plex_matches = plex_client.search_library_tracks(query=t, limit=5)
                     for pm in plex_matches:
                         pm_artist = (pm.get("artist") or "").lower().strip()
                         pm_title = (pm.get("title") or "").lower().strip()
-                        if (pm_artist and (artist in pm_artist or pm_artist in artist)) and (pm_title == title):
-                            in_plex = True
-                            break
-                except Exception as e:
-                    logger.debug("Plex library check error for '%s': %s", title, e)
+                        if (pm_artist and (a in pm_artist or pm_artist in a)) and (pm_title == t):
+                            return i, True
+                except Exception as exc:
+                    logger.debug("Plex library check error for '%s': %s", t, exc)
+                return i, False
 
-            it["status"] = "in_library" if in_plex else "none"
+            with concurrent.futures.ThreadPoolExecutor(max_workers=min(5, len(plex_lookups))) as executor:
+                futures = [executor.submit(_check_plex, entry) for entry in plex_lookups]
+                for fut in concurrent.futures.as_completed(futures):
+                    try:
+                        idx_found, is_match = fut.result(timeout=2.0)
+                        if is_match:
+                            annotated[idx_found]["status"] = "in_library"
+                    except Exception as exc:
+                        logger.debug("Plex check future error: %s", exc)
 
-        annotated.append(it)
     return annotated
 
 

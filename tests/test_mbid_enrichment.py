@@ -605,7 +605,7 @@ class TestScannerMbidIngestion:
         assert album is not None
         assert album["mb_release_group_id"] == "mb-rg-discovery"
         assert album["mb_release_id"] == "mb-alb-discovery"
-        assert album["cover_url"] == str(cover_file)
+        assert album["cover_url"] == f"/api/library/albums/{album['id']}/cover"
 
         # Check Track
         track = test_db.get_library_track_by_title(album["id"], "One More Time", track_number=1)

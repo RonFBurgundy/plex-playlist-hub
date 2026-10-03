@@ -800,7 +800,7 @@ class AcquisitionWorker:
                     if media_settings.get("enrich_mbids", True):
                         try:
                             enricher = MbidEnricherClient(
-                                base_url=media_settings.get("mb_mirror_url", "https://api.brainzmash.org")
+                                base_url=media_settings.get("mb_mirror_url", "https://api.brainzmash.cc")
                             )
                             artist_query = str(tags_to_write.get("artist") or "")
                             album_query = str(tags_to_write.get("album") or "")

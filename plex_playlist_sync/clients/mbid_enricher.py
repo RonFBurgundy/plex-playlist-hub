@@ -1,6 +1,7 @@
 """MusicBrainz (MBID) and BrainzMash metadata enrichment client with in-memory TTL caching."""
 
 import logging
+import os
 import re
 import threading
 import time
@@ -21,26 +22,113 @@ def _sanitize_lucene_query(text: str) -> str:
 
 
 class MbidEnricherClient:
-    """High-speed cached MBID resolver querying BrainzMash or MusicBrainz REST mirrors and Cover Art Archive."""
+    """High-speed cached MBID resolver querying MusicBrainz REST mirrors and Cover Art Archive."""
 
     def __init__(
         self,
-        base_url: str = "https://api.brainzmash.org",
+        base_url: Optional[str] = None,
         timeout: float = 3.0,
         cache_ttl: float = 3600.0,
+        min_interval: float = 1.0,
     ) -> None:
-        self.base_url = (base_url or "https://api.brainzmash.org").rstrip("/")
+        default_base = (
+            os.getenv("MUSICBRAINZ_URL")
+            or os.getenv("MUSICBRAINZ_MIRROR_URL")
+            or "https://api.brainzmash.cc"
+        )
+        self.base_url = (base_url or default_base).rstrip("/")
         self.timeout = float(timeout)
         self.cache_ttl = float(cache_ttl)
+        self._min_interval = float(min_interval)
+        self._last_request_time: float = 0.0
+        self._rate_limit_lock = threading.Lock()
         self._cache: dict[str, tuple[float, Any]] = {}
         self._lock = threading.Lock()
         self._session = requests.Session()
         self._session.headers.update(
             {
-                "User-Agent": "TrackSeerr/1.0.0 (https://github.com/trackseerr)",
+                "User-Agent": "Lidarr/2.0.0 (TrackSeerr; https://github.com/trackseerr)",
                 "Accept": "application/json",
             }
         )
+
+    def _rate_limit(self, url: str) -> None:
+        """Enforces rate limiting (1 req/sec) when communicating with musicbrainz.org."""
+        if "musicbrainz.org" in url and self._min_interval > 0:
+            with self._rate_limit_lock:
+                now = time.time()
+                elapsed = now - self._last_request_time
+                if elapsed < self._min_interval:
+                    time.sleep(self._min_interval - elapsed)
+                self._last_request_time = time.time()
+
+    def _do_http_call(
+        self, url: str, params: Optional[dict[str, Any]] = None, max_retries: int = 1
+    ) -> Optional[requests.Response]:
+        """Executes a single HTTP request with rate limiting and exponential backoff for 429/503."""
+        for attempt in range(max_retries + 1):
+            self._rate_limit(url)
+            try:
+                resp = self._session.get(url, params=params, timeout=self.timeout)
+                if resp.status_code in (429, 503):
+                    logger.warning(
+                        "MbidEnricherClient: HTTP %d received for %s (attempt %d/%d)",
+                        resp.status_code,
+                        url,
+                        attempt + 1,
+                        max_retries + 1,
+                    )
+                    if attempt < max_retries:
+                        retry_after = 0.5
+                        try:
+                            retry_hdr = resp.headers.get("Retry-After") if resp.headers else None
+                            if retry_hdr:
+                                retry_after = float(retry_hdr)
+                        except (ValueError, TypeError):
+                            pass
+                        time.sleep(min(retry_after, 1.0))
+                        continue
+                    return resp
+                return resp
+            except requests.RequestException as exc:
+                logger.warning(
+                    "MbidEnricherClient: Network error for %s (attempt %d/%d): %s",
+                    url,
+                    attempt + 1,
+                    max_retries + 1,
+                    exc,
+                )
+                if attempt < max_retries:
+                    time.sleep(0.2)
+                    continue
+                return None
+            except Exception as exc:
+                logger.warning("MbidEnricherClient: Unexpected error for %s: %s", url, exc)
+                return None
+        return None
+
+    def _request(
+        self, url: str, params: Optional[dict[str, Any]] = None, max_retries: int = 1
+    ) -> Optional[requests.Response]:
+        """Executes HTTP request with resilient fallback to https://musicbrainz.org upon error/403/5xx."""
+        resp = self._do_http_call(url, params=params, max_retries=max_retries)
+        if resp is not None and resp.status_code == 200:
+            return resp
+
+        # Resilient fallback: if request to self.base_url returns a network error, 403, or 5xx
+        is_error = resp is None or resp.status_code in (403, 500, 502, 503, 504)
+        if is_error and self.base_url != "https://musicbrainz.org" and url.startswith(self.base_url):
+            fallback_url = "https://musicbrainz.org" + url[len(self.base_url):]
+            logger.warning(
+                "MbidEnricherClient: Mirror request failed (status=%s), falling back to %s",
+                resp.status_code if resp is not None else "None",
+                fallback_url,
+            )
+            fallback_resp = self._do_http_call(fallback_url, params=params, max_retries=max_retries)
+            if fallback_resp is not None and fallback_resp.status_code == 200:
+                return fallback_resp
+
+        return resp
 
     def _get_cached(self, key: str) -> tuple[bool, Any]:
         with self._lock:
@@ -79,8 +167,8 @@ class MbidEnricherClient:
             if clean_isrc:
                 url = f"{self.base_url}/ws/2/recording"
                 params = {"query": f"isrc:{clean_isrc}", "fmt": "json"}
-                resp = self._session.get(url, params=params, timeout=self.timeout)
-                if resp.status_code == 200:
+                resp = self._request(url, params=params)
+                if resp is not None and resp.status_code == 200:
                     data = resp.json()
                     recordings = data.get("recordings") or []
 
@@ -94,8 +182,8 @@ class MbidEnricherClient:
                     query_parts.append(f'release:"{clean_album}"')
                 query_str = " AND ".join(query_parts)
                 params = {"query": query_str, "fmt": "json"}
-                resp = self._session.get(url, params=params, timeout=self.timeout)
-                if resp.status_code == 200:
+                resp = self._request(url, params=params)
+                if resp is not None and resp.status_code == 200:
                     data = resp.json()
                     recordings = data.get("recordings") or []
 
@@ -139,6 +227,7 @@ class MbidEnricherClient:
 
         except Exception as exc:
             logger.warning("MbidEnricherClient: lookup_track_mbids failed for '%s - %s': %s", artist, title, exc)
+            self._set_cached(cache_key, None)
             return None
 
     def lookup_artist_mbid(self, artist_name: str) -> Optional[str]:
@@ -155,8 +244,8 @@ class MbidEnricherClient:
         try:
             url = f"{self.base_url}/ws/2/artist"
             params = {"query": f'artist:"{clean_name}"', "fmt": "json"}
-            resp = self._session.get(url, params=params, timeout=self.timeout)
-            if resp.status_code != 200:
+            resp = self._request(url, params=params)
+            if resp is None or resp.status_code != 200:
                 self._set_cached(cache_key, None)
                 return None
 
@@ -172,6 +261,7 @@ class MbidEnricherClient:
 
         except Exception as exc:
             logger.warning("MbidEnricherClient: lookup_artist_mbid failed for '%s': %s", artist_name, exc)
+            self._set_cached(cache_key, None)
             return None
 
     def lookup_album_mbids(
@@ -194,8 +284,8 @@ class MbidEnricherClient:
             if clean_artist:
                 query_parts.append(f'artist:"{clean_artist}"')
             params = {"query": " AND ".join(query_parts), "fmt": "json"}
-            resp = self._session.get(url, params=params, timeout=self.timeout)
-            if resp.status_code != 200:
+            resp = self._request(url, params=params)
+            if resp is None or resp.status_code != 200:
                 self._set_cached(cache_key, None)
                 return None
 
@@ -233,6 +323,7 @@ class MbidEnricherClient:
                 album_title,
                 exc,
             )
+            self._set_cached(cache_key, None)
             return None
 
     def get_cover_art_url(
@@ -263,8 +354,8 @@ class MbidEnricherClient:
         try:
             url = f"{self.base_url}/ws/2/artist/{clean_mbid}"
             params = {"inc": "genres+tags+url-rels", "fmt": "json"}
-            resp = self._session.get(url, params=params, timeout=self.timeout)
-            if resp.status_code != 200:
+            resp = self._request(url, params=params)
+            if resp is None or resp.status_code != 200:
                 self._set_cached(cache_key, None)
                 return None
 
@@ -318,6 +409,7 @@ class MbidEnricherClient:
                 clean_mbid,
                 exc,
             )
+            self._set_cached(cache_key, None)
             return None
 
     def get_artist_discography(self, mbid: str, limit: int = 100) -> list[dict[str, Any]]:
@@ -334,8 +426,8 @@ class MbidEnricherClient:
         try:
             url = f"{self.base_url}/ws/2/release-group"
             params = {"artist": clean_mbid, "limit": limit, "fmt": "json"}
-            resp = self._session.get(url, params=params, timeout=self.timeout)
-            if resp.status_code != 200:
+            resp = self._request(url, params=params)
+            if resp is None or resp.status_code != 200:
                 self._set_cached(cache_key, [])
                 return []
 
@@ -403,4 +495,5 @@ class MbidEnricherClient:
                 clean_mbid,
                 exc,
             )
+            self._set_cached(cache_key, [])
             return []

@@ -747,7 +747,8 @@ class MediaManagementSettings:
     seed_time_limit_minutes: Optional[int] = None
     enrich_mbids: bool = True
     acoustid_api_key: Optional[str] = None
-    mb_mirror_url: str = "https://api.brainzmash.org"
+    mb_mirror_url: str = "https://api.brainzmash.cc"
+    prefer_local_artwork: bool = True
     created_at: Optional[str] = None
     updated_at: Optional[str] = None
 
@@ -772,6 +773,7 @@ class MediaManagementSettings:
             "enrich_mbids": bool(self.enrich_mbids),
             "acoustid_api_key": self.acoustid_api_key,
             "mb_mirror_url": self.mb_mirror_url,
+            "prefer_local_artwork": bool(self.prefer_local_artwork),
             "created_at": self.created_at,
             "updated_at": self.updated_at,
         }

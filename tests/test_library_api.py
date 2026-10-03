@@ -778,3 +778,89 @@ def test_security_path_traversal_and_permissions(
     assert client.post("/api/library/migrate-lidarr", json={}, headers=alice_headers).status_code == 403
     assert client.post("/api/library/manual-import/commit", json={"items": []}, headers=alice_headers).status_code == 403
     assert client.post("/api/library/rename/apply", json={"file_ids": []}, headers=alice_headers).status_code == 403
+
+
+# =========================================================================
+# 8. Artwork Endpoints: Local File & Remote Redirects
+# =========================================================================
+
+def test_get_album_cover_local_file(
+    app_and_client, test_db: Database, test_config: Config, seeded_users, tmp_path: Path
+):
+    """Serves local cover file for an album when present on disk."""
+    _, client = app_and_client
+    alice_headers = _auth_headers(seeded_users["alice"], test_db, test_config)
+
+    album_dir = tmp_path / "music" / "Local Cover Band" / "Local Album"
+    album_dir.mkdir(parents=True, exist_ok=True)
+    cover_file = album_dir / "cover.jpg"
+    fake_image_bytes = b"\xff\xd8\xff\xe0\x00\x10JFIF" + b"\x00" * 32
+    cover_file.write_bytes(fake_image_bytes)
+
+    art = test_db.upsert_library_artist({
+        "id": "art-local-cover",
+        "name": "Local Cover Band",
+    })
+    alb = test_db.upsert_library_album({
+        "id": "alb-local-cover",
+        "artist_id": art["id"],
+        "title": "Local Album",
+        "path": str(album_dir),
+    })
+
+    resp = client.get(f"/api/library/albums/{alb['id']}/cover", headers=alice_headers)
+    assert resp.status_code == 200
+    assert resp.content == fake_image_bytes
+    assert "image/jpeg" in resp.headers.get("content-type", "")
+
+
+def test_get_album_cover_remote_redirect(
+    app_and_client, test_db: Database, test_config: Config, seeded_users
+):
+    """Redirects to remote cover URL when no local cover exists."""
+    _, client = app_and_client
+    alice_headers = _auth_headers(seeded_users["alice"], test_db, test_config)
+
+    art = test_db.upsert_library_artist({
+        "id": "art-remote-cover",
+        "name": "Remote Cover Band",
+    })
+    remote_url = "https://example.com/cover.jpg"
+    alb = test_db.upsert_library_album({
+        "id": "alb-remote-cover",
+        "artist_id": art["id"],
+        "title": "Remote Album",
+        "cover_url": remote_url,
+    })
+
+    resp = client.get(
+        f"/api/library/albums/{alb['id']}/cover",
+        headers=alice_headers,
+        follow_redirects=False,
+    )
+    assert resp.status_code in (302, 307)
+    assert resp.headers["location"] == remote_url
+
+
+def test_get_artist_image_redirect(
+    app_and_client, test_db: Database, test_config: Config, seeded_users
+):
+    """Redirects to remote artist image URL when present."""
+    _, client = app_and_client
+    alice_headers = _auth_headers(seeded_users["alice"], test_db, test_config)
+
+    remote_img = "https://example.com/artist.jpg"
+    art = test_db.upsert_library_artist({
+        "id": "art-remote-img",
+        "name": "Remote Image Band",
+        "image_url": remote_img,
+    })
+
+    resp = client.get(
+        f"/api/library/artists/{art['id']}/image",
+        headers=alice_headers,
+        follow_redirects=False,
+    )
+    assert resp.status_code in (302, 307)
+    assert resp.headers["location"] == remote_img
+
