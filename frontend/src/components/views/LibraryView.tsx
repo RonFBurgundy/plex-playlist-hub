@@ -101,6 +101,10 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
   const [allCollectionsForModal, setAllCollectionsForModal] = useState<CollectionItem[]>([]);
   const [isLoadingModalCollections, setIsLoadingModalCollections] = useState<boolean>(false);
 
+  // Album Detail & Tracklist modal state
+  const [selectedAlbumForModal, setSelectedAlbumForModal] = useState<(AlbumItem & { tracks?: TrackItem[] }) | null>(null);
+  const [isLoadingAlbumModal, setIsLoadingAlbumModal] = useState<boolean>(false);
+
   // Pagination state
   const [page, setPage] = useState<number>(1);
 
@@ -239,6 +243,36 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
     } catch {
       showToast('Error removing album from collection');
     }
+  };
+
+  const handleOpenAlbumModal = async (album: AlbumItem) => {
+    setSelectedAlbumForModal(album);
+    setIsLoadingAlbumModal(true);
+    try {
+      const detailedAlbum = await getAlbumDetail(album.id);
+      setSelectedAlbumForModal(detailedAlbum);
+    } catch {
+      showToast('Failed to load album details');
+    } finally {
+      setIsLoadingAlbumModal(false);
+    }
+  };
+
+  const handleToggleTrackInModal = async (
+    trackId: number | string,
+    currentMonitored: boolean
+  ) => {
+    const nextVal = !currentMonitored;
+    await toggleTrackMonitored(trackId, nextVal);
+    setSelectedAlbumForModal((prev) => {
+      if (!prev) return null;
+      return {
+        ...prev,
+        tracks: prev.tracks?.map((t) =>
+          t.id === trackId ? { ...t, monitored: nextVal } : t
+        ),
+      };
+    });
   };
 
   // Load artist detail when selectedArtistId changes
@@ -644,38 +678,64 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
 
               {/* Lidarr-style Master Monitor Selector */}
               {isAdmin && (
-                <div className="pt-2 border-t border-[#1f1f1f] flex flex-wrap items-center gap-2">
-                  <span className="text-[11px] font-mono text-neutral-400 flex items-center gap-1.5 mr-1">
-                    <Sliders className="h-3 w-3 text-[#e5a00d]" /> Monitor Presets:
-                  </span>
-                  <TapeDeckButton
-                    size="sm"
-                    onClick={() => handleApplyPreset('all')}
-                    className="text-xs py-1"
-                  >
-                    Monitor All
-                  </TapeDeckButton>
-                  <TapeDeckButton
-                    size="sm"
-                    onClick={() => handleApplyPreset('albums')}
-                    className="text-xs py-1"
-                  >
-                    Studio Albums Only
-                  </TapeDeckButton>
-                  <TapeDeckButton
-                    size="sm"
-                    onClick={() => handleApplyPreset('singles_eps')}
-                    className="text-xs py-1"
-                  >
-                    Singles &amp; EPs Only
-                  </TapeDeckButton>
-                  <TapeDeckButton
-                    size="sm"
-                    onClick={() => handleApplyPreset('none')}
-                    className="text-xs py-1 text-neutral-400"
-                  >
-                    Unmonitor All
-                  </TapeDeckButton>
+                <div className="pt-2 border-t border-[#1f1f1f]">
+                  {/* Mobile Dropdown */}
+                  <div className="flex sm:hidden items-center gap-2">
+                    <span className="text-[11px] font-mono text-neutral-400 flex items-center gap-1.5 shrink-0">
+                      <Sliders className="h-3 w-3 text-[#e5a00d]" /> Monitor:
+                    </span>
+                    <select
+                      className="bg-[#141414] border border-[#2a2a2a] text-xs font-mono text-neutral-300 rounded-[3px] px-2 py-1 focus:border-[#e5a00d] focus:outline-none flex-1 min-w-0"
+                      defaultValue=""
+                      onChange={(e) => {
+                        if (e.target.value) {
+                          handleApplyPreset(e.target.value as 'all' | 'albums' | 'singles_eps' | 'none');
+                          e.target.value = "";
+                        }
+                      }}
+                    >
+                      <option value="" disabled>Apply Monitor Preset...</option>
+                      <option value="all">Monitor All</option>
+                      <option value="albums">Studio Albums Only</option>
+                      <option value="singles_eps">Singles & EPs Only</option>
+                      <option value="none">Unmonitor All</option>
+                    </select>
+                  </div>
+
+                  {/* Desktop Button Group */}
+                  <div className="hidden sm:flex flex-wrap items-center gap-2">
+                    <span className="text-[11px] font-mono text-neutral-400 flex items-center gap-1.5 mr-1">
+                      <Sliders className="h-3 w-3 text-[#e5a00d]" /> Monitor Presets:
+                    </span>
+                    <TapeDeckButton
+                      size="sm"
+                      onClick={() => handleApplyPreset('all')}
+                      className="text-xs py-1"
+                    >
+                      Monitor All
+                    </TapeDeckButton>
+                    <TapeDeckButton
+                      size="sm"
+                      onClick={() => handleApplyPreset('albums')}
+                      className="text-xs py-1"
+                    >
+                      Studio Albums Only
+                    </TapeDeckButton>
+                    <TapeDeckButton
+                      size="sm"
+                      onClick={() => handleApplyPreset('singles_eps')}
+                      className="text-xs py-1"
+                    >
+                      Singles &amp; EPs Only
+                    </TapeDeckButton>
+                    <TapeDeckButton
+                      size="sm"
+                      onClick={() => handleApplyPreset('none')}
+                      className="text-xs py-1 text-neutral-400"
+                    >
+                      Unmonitor All
+                    </TapeDeckButton>
+                  </div>
                 </div>
               )}
             </div>
@@ -690,7 +750,8 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
             onClick={() => setDiscographyTab('studio')}
             icon={<Disc className="h-3.5 w-3.5" />}
           >
-            Studio Albums ({categorizedAlbums.studio.length})
+            <span className="hidden sm:inline">Studio Albums</span>
+            <span className="sm:hidden">Studio</span> ({categorizedAlbums.studio.length})
           </TapeDeckButton>
           <TapeDeckButton
             size="sm"
@@ -698,7 +759,8 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
             onClick={() => setDiscographyTab('singles_eps')}
             icon={<Music className="h-3.5 w-3.5" />}
           >
-            EPs &amp; Singles ({categorizedAlbums.singles_eps.length})
+            <span className="hidden sm:inline">EPs & Singles</span>
+            <span className="sm:hidden">Singles</span> ({categorizedAlbums.singles_eps.length})
           </TapeDeckButton>
           <TapeDeckButton
             size="sm"
@@ -706,7 +768,8 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
             onClick={() => setDiscographyTab('live')}
             icon={<Radio className="h-3.5 w-3.5" />}
           >
-            Live Recordings ({categorizedAlbums.live.length})
+            <span className="hidden sm:inline">Live Recordings</span>
+            <span className="sm:hidden">Live</span> ({categorizedAlbums.live.length})
           </TapeDeckButton>
           <TapeDeckButton
             size="sm"
@@ -714,7 +777,8 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
             onClick={() => setDiscographyTab('compilations')}
             icon={<HardDrive className="h-3.5 w-3.5" />}
           >
-            Compilations &amp; Box Sets ({categorizedAlbums.compilations.length})
+            <span className="hidden sm:inline">Compilations & Box Sets</span>
+            <span className="sm:hidden">Compilations</span> ({categorizedAlbums.compilations.length})
           </TapeDeckButton>
         </TapeTransportBay>
 
@@ -737,9 +801,9 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
               return (
                 <MachinedCard key={album.id} className="p-4 space-y-4">
                   {/* Album Header Bar */}
-                  <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+                  <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 sm:gap-4">
                     <div
-                      className="flex items-center gap-3 cursor-pointer min-w-0 flex-1"
+                      className="flex items-center gap-3 cursor-pointer min-w-0 w-full sm:w-auto flex-1"
                       onClick={() => handleToggleExpandAlbum(album.id)}
                     >
                       <div className="h-12 w-12 rounded-[3px] bg-[#1a1a1a] border border-[#262626] overflow-hidden flex-shrink-0 flex items-center justify-center">
@@ -754,7 +818,7 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
                           <Disc className="h-6 w-6 text-neutral-600" />
                         )}
                       </div>
-                      <div className="min-w-0">
+                      <div className="min-w-0 flex-1">
                         <div className="flex items-center gap-2">
                           <h4 className="font-bold text-sm text-white truncate" title={album.title}>
                             {album.title}
@@ -772,11 +836,11 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
                       </div>
                     </div>
 
-                    <div className="flex items-center gap-3 self-end sm:self-center">
+                    <div className="flex items-center gap-2 sm:gap-3 self-stretch sm:self-center justify-between sm:justify-end flex-wrap sm:flex-nowrap">
                       {isAdmin && (
                         <div className="flex items-center gap-2">
                           <span
-                            className={`text-[10px] font-mono uppercase tracking-wider ${
+                            className={`text-[10px] font-mono uppercase tracking-wider hidden sm:inline ${
                               album.monitored ? 'text-[#e5a00d]' : 'text-neutral-500'
                             }`}
                           >
@@ -794,32 +858,34 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
                           />
                         </div>
                       )}
-                      <TapeDeckButton
-                        size="sm"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          handleOpenAddToCollection(album);
-                        }}
-                        icon={<BookmarkPlus className="h-3.5 w-3.5 text-[#e5a00d]" />}
-                        title="Add to Collection"
-                      >
-                        Collect
-                      </TapeDeckButton>
-                      <TapeDeckButton
-                        size="sm"
-                        onClick={() => handleToggleExpandAlbum(album.id)}
-                        icon={
-                          isLoadingTracks ? (
-                            <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                          ) : isExpanded ? (
-                            <ChevronUp className="h-3.5 w-3.5" />
-                          ) : (
-                            <ChevronDown className="h-3.5 w-3.5" />
-                          )
-                        }
-                      >
-                        {isExpanded ? 'Collapse' : 'Tracks'}
-                      </TapeDeckButton>
+                      <div className="flex items-center gap-2">
+                        <TapeDeckButton
+                          size="sm"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleOpenAddToCollection(album);
+                          }}
+                          icon={<BookmarkPlus className="h-3.5 w-3.5 text-[#e5a00d]" />}
+                          title="Add to Collection"
+                        >
+                          Collect
+                        </TapeDeckButton>
+                        <TapeDeckButton
+                          size="sm"
+                          onClick={() => handleToggleExpandAlbum(album.id)}
+                          icon={
+                            isLoadingTracks ? (
+                              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                            ) : isExpanded ? (
+                              <ChevronUp className="h-3.5 w-3.5" />
+                            ) : (
+                              <ChevronDown className="h-3.5 w-3.5" />
+                            )
+                          }
+                        >
+                          {isExpanded ? 'Collapse' : 'Tracks'}
+                        </TapeDeckButton>
+                      </div>
                     </div>
                   </div>
 
@@ -843,7 +909,12 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
                                   <span className="font-mono text-xs text-neutral-500 w-6 text-right flex-shrink-0">
                                     {t.track_number || 1}
                                   </span>
-                                  <span className="text-sm text-neutral-200 truncate">{t.title}</span>
+                                  <span
+                                    className="text-sm text-neutral-200 min-w-0 flex-1 truncate"
+                                    title={t.title}
+                                  >
+                                    {t.title}
+                                  </span>
                                 </div>
 
                                 <div className="flex items-center gap-3 flex-shrink-0 font-mono text-xs">
@@ -862,7 +933,7 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
                                   {isAdmin && (
                                     <div className="flex items-center gap-1.5 pl-1">
                                       <span
-                                        className={`text-[9px] uppercase tracking-wider hidden md:inline ${
+                                        className={`text-[9px] uppercase tracking-wider hidden sm:inline ${
                                           t.monitored ? 'text-[#e5a00d]' : 'text-neutral-500'
                                         }`}
                                       >
@@ -1329,14 +1400,19 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
         <div className="space-y-4">
           <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
             {(paginatedItems as AlbumItem[]).map((album) => (
-              <MachinedCard key={album.id} className="p-4 flex flex-col justify-between gap-3">
+              <MachinedCard
+                key={album.id}
+                interactive
+                onClick={() => handleOpenAlbumModal(album)}
+                className="p-4 flex flex-col justify-between gap-3 group"
+              >
                 <div className="flex items-center gap-3 min-w-0">
                   <div className="h-12 w-12 rounded-[3px] bg-[#1a1a1a] border border-[#2a2a2a] overflow-hidden flex-shrink-0 flex items-center justify-center">
                     {album.cover_url ? (
                       <img
                         src={album.cover_url}
                         alt={album.title}
-                        className="w-full h-full object-cover"
+                        className="w-full h-full object-cover transition-transform duration-300 group-hover:scale-105"
                         loading="lazy"
                       />
                     ) : (
@@ -1344,7 +1420,10 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
                     )}
                   </div>
                   <div className="min-w-0 flex-1">
-                    <h4 className="font-bold text-sm text-white truncate" title={album.title}>
+                    <h4
+                      className="font-bold text-sm text-white truncate group-hover:text-[#e5a00d] transition-colors"
+                      title={album.title}
+                    >
                       {album.title}
                     </h4>
                     <p className="text-xs text-neutral-400 truncate mt-0.5" title={album.artist_name}>
@@ -1353,9 +1432,12 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
                   </div>
                 </div>
 
-                <div className="pt-2 border-t border-[#1f1f1f] flex items-center justify-between">
+                <div
+                  className="pt-2 border-t border-[#1f1f1f] flex items-center justify-between"
+                  onClick={(e) => e.stopPropagation()}
+                >
                   <span
-                    className={`text-[10px] font-mono uppercase tracking-wider ${
+                    className={`text-[10px] font-mono uppercase tracking-wider hidden sm:inline ${
                       album.monitored ? 'text-[#e5a00d]' : 'text-neutral-500'
                     }`}
                   >
@@ -1364,7 +1446,10 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
                   <div className="flex items-center gap-2">
                     <TapeDeckButton
                       size="sm"
-                      onClick={() => handleOpenAddToCollection(album)}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleOpenAddToCollection(album);
+                      }}
                       icon={<BookmarkPlus className="h-3.5 w-3.5 text-[#e5a00d]" />}
                       title="Add to Collection"
                     />
@@ -1702,6 +1787,195 @@ export const LibraryView: React.FC<LibraryViewProps> = ({
             </div>
           )}
         </div>
+      </ObsidianModal>
+
+      {/* Album Detail & Tracklist Modal (Albums Tab) */}
+      <ObsidianModal
+        isOpen={selectedAlbumForModal !== null}
+        onClose={() => setSelectedAlbumForModal(null)}
+        title="Album Details"
+        subtitle={
+          selectedAlbumForModal
+            ? `${selectedAlbumForModal.title}${
+                selectedAlbumForModal.artist_name
+                  ? ` • ${selectedAlbumForModal.artist_name}`
+                  : ''
+              }`
+            : undefined
+        }
+        footer={
+          <div className="flex flex-wrap items-center justify-between w-full gap-2">
+            <div className="flex items-center gap-2">
+              <TapeDeckButton
+                size="sm"
+                onClick={() => {
+                  if (selectedAlbumForModal) {
+                    handleOpenAddToCollection(selectedAlbumForModal);
+                  }
+                }}
+                icon={<BookmarkPlus className="h-3.5 w-3.5 text-[#e5a00d]" />}
+              >
+                Collect
+              </TapeDeckButton>
+              <TapeDeckButton
+                size="sm"
+                onClick={() => {
+                  if (selectedAlbumForModal) {
+                    const artistId = selectedAlbumForModal.artist_id;
+                    setSelectedAlbumForModal(null);
+                    setSelectedArtistId(artistId);
+                  }
+                }}
+                icon={<User className="h-3.5 w-3.5" />}
+              >
+                Go to Artist
+              </TapeDeckButton>
+            </div>
+            <TapeDeckButton
+              size="sm"
+              onClick={() => setSelectedAlbumForModal(null)}
+            >
+              Close
+            </TapeDeckButton>
+          </div>
+        }
+      >
+        {selectedAlbumForModal && (
+          <div className="space-y-4">
+            {/* Header: Album cover thumbnail, title, artist name, year, genre, and total tracks */}
+            <div className="flex items-center gap-4 p-3 bg-[#181818] border border-[#262626] rounded-[4px]">
+              <div className="h-16 w-16 sm:h-20 sm:w-20 rounded-[3px] bg-[#1a1a1a] border border-[#2a2a2a] overflow-hidden flex-shrink-0 flex items-center justify-center shadow-md">
+                {selectedAlbumForModal.cover_url ? (
+                  <img
+                    src={selectedAlbumForModal.cover_url}
+                    alt={selectedAlbumForModal.title}
+                    className="w-full h-full object-cover"
+                    loading="lazy"
+                  />
+                ) : (
+                  <Disc className="h-8 w-8 text-neutral-600" />
+                )}
+              </div>
+              <div className="min-w-0 flex-1">
+                <h3
+                  className="text-base sm:text-lg font-bold text-white truncate font-mono"
+                  title={selectedAlbumForModal.title}
+                >
+                  {selectedAlbumForModal.title}
+                </h3>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const artistId = selectedAlbumForModal.artist_id;
+                    setSelectedAlbumForModal(null);
+                    setSelectedArtistId(artistId);
+                  }}
+                  className="text-sm text-[#e5a00d] hover:underline truncate block font-mono text-left"
+                  title="View Artist Discography"
+                >
+                  {selectedAlbumForModal.artist_name || 'Unknown Artist'}
+                </button>
+                <div className="flex flex-wrap items-center gap-2 pt-1 text-xs font-mono text-neutral-400">
+                  <span>
+                    {selectedAlbumForModal.release_date
+                      ? selectedAlbumForModal.release_date.slice(0, 4)
+                      : 'Unknown Year'}
+                  </span>
+                  {selectedAlbumForModal.genres &&
+                    selectedAlbumForModal.genres.length > 0 && (
+                      <>
+                        <span>&bull;</span>
+                        <span className="px-1.5 py-0.5 rounded-[2px] text-[10px] bg-[#e5a00d]/10 text-[#e5a00d] border border-[#e5a00d]/30">
+                          {Array.isArray(selectedAlbumForModal.genres)
+                            ? selectedAlbumForModal.genres.join(', ')
+                            : selectedAlbumForModal.genres}
+                        </span>
+                      </>
+                    )}
+                  <span>&bull;</span>
+                  <span>
+                    {selectedAlbumForModal.tracks?.length ??
+                      selectedAlbumForModal.track_count ??
+                      0}{' '}
+                    Tracks
+                  </span>
+                </div>
+              </div>
+            </div>
+
+            {/* Body: Loading indicator or scrollable tracklist table/list */}
+            {isLoadingAlbumModal ? (
+              <div className="flex flex-col items-center justify-center py-12 gap-2">
+                <Loader2 className="h-8 w-8 text-[#e5a00d] animate-spin" />
+                <span className="text-xs uppercase tracking-widest text-neutral-400 font-mono">
+                  Loading Album Tracks...
+                </span>
+              </div>
+            ) : selectedAlbumForModal.tracks &&
+              selectedAlbumForModal.tracks.length > 0 ? (
+              <div className="divide-y divide-[#181818] border border-[#1f1f1f] rounded-[3px] overflow-hidden bg-[#0d0d0d] max-h-80 overflow-y-auto">
+                {selectedAlbumForModal.tracks.map((t) => {
+                  const badge = getQualityBadge(t);
+                  return (
+                    <div
+                      key={t.id}
+                      className="p-2.5 flex items-center justify-between gap-3 hover:bg-[#141414] transition-colors"
+                    >
+                      <div className="flex items-center gap-3 min-w-0 flex-1">
+                        <span className="font-mono text-xs text-neutral-500 w-6 text-right flex-shrink-0">
+                          {t.track_number || 1}
+                        </span>
+                        <span
+                          className="text-sm text-neutral-200 min-w-0 flex-1 truncate"
+                          title={t.title}
+                        >
+                          {t.title}
+                        </span>
+                      </div>
+
+                      <div className="flex items-center gap-3 flex-shrink-0 font-mono text-xs">
+                        <span className="text-neutral-500 hidden sm:inline">
+                          {formatTrackDuration(t.duration_ms)}
+                        </span>
+
+                        {/* Quality Badge */}
+                        <span
+                          className={`px-2 py-0.5 rounded-[2px] text-[10px] font-bold ${badge.className}`}
+                        >
+                          {badge.label}
+                        </span>
+
+                        {/* Track Monitoring Toggle */}
+                        {isAdmin && (
+                          <div className="flex items-center gap-1.5 pl-1">
+                            <span
+                              className={`text-[9px] uppercase tracking-wider hidden sm:inline ${
+                                t.monitored ? 'text-[#e5a00d]' : 'text-neutral-500'
+                              }`}
+                            >
+                              {t.monitored ? 'Monitored' : 'Unmonitored'}
+                            </span>
+                            <TactileSwitch
+                              checked={t.monitored}
+                              onChange={() =>
+                                handleToggleTrackInModal(t.id, t.monitored)
+                              }
+                              label={t.monitored ? 'Monitored' : 'Unmonitored'}
+                            />
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            ) : (
+              <p className="text-xs text-neutral-500 font-mono py-8 text-center">
+                No tracks registered for this album.
+              </p>
+            )}
+          </div>
+        )}
       </ObsidianModal>
     </div>
   );
