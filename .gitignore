@@ -141,6 +141,11 @@ Notebooks/
 # Local Orchestration & Runner Harness
 .opencode/
 .claude/
+CLAUDE.md
+AGENTS.md
+GEMINI.md
+ORCHESTRATOR.md
+.gemini/
 .skills/
 skills/
 scripts/
