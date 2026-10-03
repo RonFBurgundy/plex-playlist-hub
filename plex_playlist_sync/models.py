@@ -557,6 +557,7 @@ class LibraryArtist:
     foreign_artist_id: Optional[str] = None
     path: Optional[str] = None
     monitored: bool = True
+    monitor_option: str = "all"
     quality_profile_id: Optional[str] = None
     metadata_json: Optional[str] = None
     mbid: Optional[str] = None
@@ -576,6 +577,7 @@ class LibraryArtist:
             "foreign_artist_id": self.foreign_artist_id,
             "path": self.path,
             "monitored": bool(self.monitored),
+            "monitor_option": self.monitor_option,
             "quality_profile_id": self.quality_profile_id,
             "metadata_json": self.metadata_json,
             "mbid": self.mbid,

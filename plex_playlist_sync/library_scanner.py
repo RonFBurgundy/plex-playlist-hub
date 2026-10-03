@@ -299,6 +299,7 @@ class LibraryScanner:
             existing_files_map = {
                 f["file_path"]: f for f in db.list_library_files(limit=100000)
             }
+            newly_created_artist_ids: list[str] = []
             artist_cache: dict[str, dict[str, Any]] = {}
             album_cache: dict[tuple[str, str], dict[str, Any]] = {}
             track_cache: dict[tuple[str, str, int], dict[str, Any]] = {}
@@ -456,6 +457,7 @@ class LibraryScanner:
                                     image_url=art_img_url,
                                 )
                             )
+                            newly_created_artist_ids.append(artist_id)
                             with self._lock:
                                 self._status["artists_created"] += 1
                         else:
@@ -698,6 +700,19 @@ class LibraryScanner:
                     )
                 except Exception as e:
                     logger.warning("LibraryScanner: Failed to record scan_completed event: %s", e)
+
+            # Auto-hydrate newly created artists in the background
+            if newly_created_artist_ids and not self._stop_event.is_set():
+                try:
+                    from plex_playlist_sync.artist_refresh_worker import artist_refresh_worker
+                    refresh_ids = list(newly_created_artist_ids)
+                    threading.Thread(
+                        target=lambda: artist_refresh_worker.refresh_once(db=db, artist_ids=refresh_ids),
+                        daemon=True,
+                        name="AutoArtistHydrationThread",
+                    ).start()
+                except Exception as exc:
+                    logger.warning("LibraryScanner: Failed to launch background artist auto-hydration: %s", exc)
 
             with self._lock:
                 self._status["current_file"] = None

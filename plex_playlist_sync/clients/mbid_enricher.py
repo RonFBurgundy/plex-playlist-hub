@@ -497,3 +497,99 @@ class MbidEnricherClient:
             )
             self._set_cached(cache_key, [])
             return []
+
+    def get_release_group_tracks(self, release_group_id: str) -> list[dict[str, Any]]:
+        """Queries MusicBrainz / BrainzMash for canonical tracks within a release group."""
+        if not release_group_id or not str(release_group_id).strip():
+            return []
+
+        clean_rg_id = str(release_group_id).strip()
+        cache_key = f"tracks:rg:{clean_rg_id.lower()}"
+        hit, cached_data = self._get_cached(cache_key)
+        if hit:
+            return cached_data
+
+        try:
+            url = f"{self.base_url}/ws/2/release"
+            params = {
+                "release-group": clean_rg_id,
+                "inc": "recordings",
+                "limit": 1,
+                "fmt": "json",
+            }
+            resp = self._request(url, params=params)
+            if resp is None or resp.status_code != 200:
+                self._set_cached(cache_key, [])
+                return []
+
+            data = resp.json()
+            if not isinstance(data, dict):
+                self._set_cached(cache_key, [])
+                return []
+
+            releases = data.get("releases") or []
+            if not releases or not isinstance(releases, list):
+                self._set_cached(cache_key, [])
+                return []
+
+            first_release = releases[0]
+            if not isinstance(first_release, dict):
+                self._set_cached(cache_key, [])
+                return []
+
+            media = first_release.get("media") or []
+            results: list[dict[str, Any]] = []
+
+            for medium in media:
+                if not isinstance(medium, dict):
+                    continue
+                try:
+                    disc_number = int(medium.get("position") or 1)
+                except (ValueError, TypeError):
+                    disc_number = 1
+
+                tracks = medium.get("tracks") or []
+                for track in tracks:
+                    if not isinstance(track, dict):
+                        continue
+                    try:
+                        track_number = int(track.get("position") or 1)
+                    except (ValueError, TypeError):
+                        track_number = 1
+
+                    title = str(track.get("title") or "Unknown Track").strip()
+                    length_ms = track.get("length")
+                    duration_seconds: Optional[float] = None
+                    if length_ms is not None:
+                        try:
+                            duration_seconds = round(float(length_ms) / 1000.0, 2)
+                        except (ValueError, TypeError):
+                            duration_seconds = None
+
+                    rec_obj = track.get("recording")
+                    mb_recording_id: Optional[str] = None
+                    if isinstance(rec_obj, dict) and rec_obj.get("id"):
+                        mb_recording_id = str(rec_obj["id"]).strip() or None
+
+                    results.append(
+                        {
+                            "track_number": track_number,
+                            "disc_number": disc_number,
+                            "title": title,
+                            "duration_seconds": duration_seconds,
+                            "mb_recording_id": mb_recording_id,
+                        }
+                    )
+
+            self._set_cached(cache_key, results)
+            return results
+
+        except Exception as exc:
+            logger.warning(
+                "MbidEnricherClient: get_release_group_tracks failed for '%s': %s",
+                clean_rg_id,
+                exc,
+            )
+            self._set_cached(cache_key, [])
+            return []
+

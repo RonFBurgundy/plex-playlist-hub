@@ -22,7 +22,11 @@ from pydantic import BaseModel, Field
 import httpx
 
 from plex_playlist_sync.acquisition_coordinator import _to_quality_profile
-from plex_playlist_sync.acquisition_worker import place_audio_file, safe_atomic_move
+from plex_playlist_sync.acquisition_worker import (
+    place_audio_file,
+    reconcile_audio_file_to_track,
+    safe_atomic_move,
+)
 from plex_playlist_sync.api.dependencies import (
     get_config,
     get_db,
@@ -41,7 +45,14 @@ from plex_playlist_sync.clients.mbid_enricher import MbidEnricherClient
 from plex_playlist_sync.clients.plex import PlexClient
 from plex_playlist_sync.config import Config
 from plex_playlist_sync.library_availability import get_item_availability
-from plex_playlist_sync.models import LibraryArtist, LibraryAlbum, LibraryCollection, LibraryTrack
+from plex_playlist_sync.mediacover import mediacover_service
+from plex_playlist_sync.models import (
+    LibraryAlbum,
+    LibraryArtist,
+    LibraryCollection,
+    LibraryFile,
+    LibraryTrack,
+)
 from plex_playlist_sync.library import (
     AUDIO_EXTENSIONS,
     fingerprint_audio_file,
@@ -316,6 +327,7 @@ def ingest_artist(
             foreign_artist_id=body.foreign_artist_id,
             path=artist_folder,
             monitored=body.monitored,
+            monitor_option=body.monitor_option,
             quality_profile_id=body.quality_profile_id,
         )
     )
@@ -537,6 +549,15 @@ def get_artist_image(
         except Exception as exc:
             logger.debug("Failed validating artist image path '%s': %s", artist_path_str, exc)
 
+    # Check mediacover cached artwork
+    cached_art = mediacover_service.ensure_artwork("artist_poster", artist_id, artist.get("image_url"))
+    if cached_art and cached_art.is_file() and cached_art.stat().st_size > 0:
+        return FileResponse(
+            str(cached_art),
+            media_type="image/jpeg",
+            headers={"Cache-Control": "public, max-age=31536000, immutable"},
+        )
+
     # Else if artist has image_url (http/https), return RedirectResponse
     image_url = artist.get("image_url")
     if image_url and (image_url.startswith("http://") or image_url.startswith("https://")):
@@ -569,6 +590,49 @@ def get_artist_image(
     return RedirectResponse(url="/placeholder.svg", status_code=status.HTTP_307_TEMPORARY_REDIRECT)
 
 
+@router.get("/artists/{artist_id}/banner")
+def get_artist_banner(
+    artist_id: str,
+    db: Database = Depends(get_db),
+    _user: dict[str, Any] = Depends(require_user),
+) -> Any:
+    """Serves cached or local artist banner artwork."""
+    artist = db.get_library_artist(artist_id)
+    if artist is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Artist not found")
+
+    artist_path_str = artist.get("path")
+    if artist_path_str:
+        try:
+            validated = validate_media_path(artist_path_str, db=db)
+            if validated.is_dir():
+                for cand_name in ("banner.jpg", "banner.png", "artist-banner.jpg"):
+                    cand = validated / cand_name
+                    if cand.is_file():
+                        media_type = "image/png" if cand_name.endswith(".png") else "image/jpeg"
+                        return FileResponse(
+                            str(cand),
+                            media_type=media_type,
+                            headers={"Cache-Control": "public, max-age=86400"},
+                        )
+        except Exception as exc:
+            logger.debug("Failed validating artist banner path '%s': %s", artist_path_str, exc)
+
+    cached_banner = mediacover_service.ensure_artwork("artist_banner", artist_id, artist.get("banner_url"))
+    if cached_banner and cached_banner.is_file() and cached_banner.stat().st_size > 0:
+        return FileResponse(
+            str(cached_banner),
+            media_type="image/jpeg",
+            headers={"Cache-Control": "public, max-age=31536000, immutable"},
+        )
+
+    banner_url = artist.get("banner_url")
+    if banner_url and (banner_url.startswith("http://") or banner_url.startswith("https://")):
+        return RedirectResponse(url=banner_url, status_code=status.HTTP_307_TEMPORARY_REDIRECT)
+
+    return RedirectResponse(url="/placeholder.svg", status_code=status.HTTP_307_TEMPORARY_REDIRECT)
+
+
 @router.put("/artists/{artist_id}/monitored", dependencies=[Depends(require_core_tier)])
 def set_artist_monitored(
     artist_id: str,
@@ -584,7 +648,7 @@ def set_artist_monitored(
     if body.monitor_option == "all":
         with db._lock:
             db.conn.execute(
-                "UPDATE library_artists SET monitored = 1, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                "UPDATE library_artists SET monitored = 1, monitor_option = 'all', updated_at = CURRENT_TIMESTAMP WHERE id = ?",
                 (str(artist_id),),
             )
             db.conn.execute(
@@ -599,7 +663,7 @@ def set_artist_monitored(
     elif body.monitor_option == "albums":
         with db._lock:
             db.conn.execute(
-                "UPDATE library_artists SET monitored = 1, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                "UPDATE library_artists SET monitored = 1, monitor_option = 'albums', updated_at = CURRENT_TIMESTAMP WHERE id = ?",
                 (str(artist_id),),
             )
             db.conn.execute(
@@ -618,7 +682,7 @@ def set_artist_monitored(
     elif body.monitor_option == "singles_eps":
         with db._lock:
             db.conn.execute(
-                "UPDATE library_artists SET monitored = 1, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                "UPDATE library_artists SET monitored = 1, monitor_option = 'singles_eps', updated_at = CURRENT_TIMESTAMP WHERE id = ?",
                 (str(artist_id),),
             )
             db.conn.execute(
@@ -637,7 +701,7 @@ def set_artist_monitored(
     elif body.monitor_option == "none":
         with db._lock:
             db.conn.execute(
-                "UPDATE library_artists SET monitored = 0, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                "UPDATE library_artists SET monitored = 0, monitor_option = 'none', updated_at = CURRENT_TIMESTAMP WHERE id = ?",
                 (str(artist_id),),
             )
             db.conn.execute(
@@ -660,18 +724,127 @@ def set_artist_monitored(
     return updated or {}
 
 
-@router.post("/artists/{artist_id}/refresh", dependencies=[Depends(require_core_tier)])
-def refresh_artist(
+def reconcile_artist_files(db: Database, artist_id: str) -> int:
+    """Matches unlinked or unassigned library_files in artist folder to canonical library_tracks."""
+    artist = db.get_library_artist(artist_id)
+    if not artist:
+        return 0
+
+    reconciled_count = 0
+    candidate_tracks = db.list_library_tracks(artist_id=artist_id, limit=5000)
+    if not candidate_tracks:
+        return 0
+
+    artist_path_str = artist.get("path")
+    if not artist_path_str:
+        return 0
+
+    artist_path = Path(artist_path_str)
+    if not artist_path.is_dir():
+        return 0
+
+    # 1. Look for orphaned library_files (files where track_id doesn't exist)
+    with db._lock:
+        cur = db.conn.execute(
+            """
+            SELECT f.* FROM library_files f
+            LEFT JOIN library_tracks t ON f.track_id = t.id
+            WHERE t.id IS NULL AND f.file_path LIKE ?
+            """,
+            (f"{artist_path_str}%",),
+        )
+        orphaned_files = [dict(r) for r in cur.fetchall()]
+
+    for f in orphaned_files:
+        fpath = Path(f["file_path"])
+        if not fpath.is_file():
+            continue
+        try:
+            meta = inspect_audio_file(fpath)
+            matched = reconcile_audio_file_to_track(meta, candidate_tracks)
+            if matched:
+                with db._lock:
+                    db.conn.execute(
+                        "UPDATE library_files SET track_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                        (matched["id"], f["id"]),
+                    )
+                    db.conn.commit()
+                reconciled_count += 1
+        except Exception as exc:
+            logger.debug("reconcile_artist_files: Failed matching orphaned file %s: %s", fpath, exc)
+
+    # 2. Check tracks that have no library_file, and look for matching audio files on disk
+    tracks_without_files = [
+        t for t in candidate_tracks if db.get_library_file_for_track(t["id"]) is None
+    ]
+    if not tracks_without_files:
+        return reconciled_count
+
+    try:
+        for audio_ext in AUDIO_EXTENSIONS:
+            for disk_file in artist_path.rglob(f"*{audio_ext}"):
+                if not disk_file.is_file():
+                    continue
+                existing_f = db.get_library_file_by_path(str(disk_file))
+                if existing_f and db.get_library_track(existing_f["track_id"]):
+                    continue
+
+                try:
+                    meta = inspect_audio_file(disk_file)
+                    matched = reconcile_audio_file_to_track(meta, tracks_without_files)
+                    if matched:
+                        rel_path = (
+                            str(disk_file.relative_to(artist_path.parent))
+                            if artist_path.parent != artist_path
+                            else disk_file.name
+                        )
+                        file_id = str(existing_f["id"]) if existing_f else str(uuid.uuid4())
+                        file_size = 0
+                        try:
+                            file_size = disk_file.stat().st_size
+                        except OSError:
+                            pass
+
+                        db.upsert_library_file(
+                            LibraryFile(
+                                id=file_id,
+                                track_id=matched["id"],
+                                file_path=str(disk_file),
+                                relative_path=rel_path,
+                                codec=str(meta.get("codec") or disk_file.suffix.lstrip(".").upper() or "UNKNOWN"),
+                                bitrate=meta.get("bitrate"),
+                                sample_rate=meta.get("sample_rate"),
+                                bits_per_sample=meta.get("bits_per_sample"),
+                                quality_name=str(meta.get("quality_full") or "Unknown"),
+                                size_bytes=file_size,
+                                cutoff_met=True,
+                            )
+                        )
+                        tracks_without_files = [t for t in tracks_without_files if t["id"] != matched["id"]]
+                        reconciled_count += 1
+                except Exception as exc:
+                    logger.debug("reconcile_artist_files: Failed inspecting disk file %s: %s", disk_file, exc)
+    except Exception as exc:
+        logger.debug("reconcile_artist_files: Error traversing artist directory %s: %s", artist_path, exc)
+
+    return reconciled_count
+
+
+def refresh_single_artist(
     artist_id: str,
-    db: Database = Depends(get_db),
-    discovery_client: DiscoveryClient = Depends(get_discovery_client),
-    enricher: MbidEnricherClient = Depends(get_mbid_enricher),
-    _admin: dict[str, Any] = Depends(require_admin),
+    db: Database,
+    discovery_client: Optional[DiscoveryClient] = None,
+    enricher: Optional[MbidEnricherClient] = None,
 ) -> dict[str, Any]:
-    """Refreshes artist discography from Deezer/discovery metadata and enriches via MusicBrainz."""
+    """Refreshes artist metadata, canonical discography, full tracklist hydration, artwork, and file reconciliation."""
+    if enricher is None:
+        enricher = MbidEnricherClient()
+    if discovery_client is None:
+        discovery_client = DiscoveryClient()
+
     artist = db.get_library_artist(artist_id)
     if artist is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Artist not found")
+        return {"success": False, "message": "Artist not found", "artist_id": artist_id}
 
     artist_name = str(artist.get("name") or "").strip()
     foreign_artist_id = artist.get("foreign_artist_id")
@@ -735,9 +908,23 @@ def refresh_artist(
             if discography and len(discography) > 0:
                 mb_discography_found = True
                 artist_path = artist.get("path")
+                monitor_opt = artist.get("monitor_option", "all")
                 for rg in discography:
                     rg_id = rg.get("id")
                     title = rg.get("title") or "Unknown Album"
+                    album_type = rg.get("album_type", "album")
+
+                    if not artist.get("monitored", True):
+                        alb_monitored = False
+                    elif monitor_opt == "all":
+                        alb_monitored = True
+                    elif monitor_opt == "albums":
+                        alb_monitored = (album_type == "album")
+                    elif monitor_opt == "singles_eps":
+                        alb_monitored = (album_type in ("single", "ep"))
+                    else:  # "none"
+                        alb_monitored = False
+
                     existing_alb = None
                     if rg_id:
                         existing_alb = db.get_library_album_by_release_group_id(rg_id)
@@ -745,6 +932,8 @@ def refresh_artist(
                         existing_alb = db.get_library_album_by_title(artist_id, title)
 
                     if existing_alb:
+                        album_id = existing_alb["id"]
+                        alb_monitored = bool(existing_alb["monitored"])
                         upd_album: list[str] = []
                         upd_params: list[Any] = []
                         if rg_id and existing_alb.get("mb_release_group_id") != rg_id:
@@ -756,27 +945,98 @@ def refresh_artist(
                         if upd_album:
                             upd_album.append("updated_at = CURRENT_TIMESTAMP")
                             alb_sql = f"UPDATE library_albums SET {', '.join(upd_album)} WHERE id = ?"
-                            upd_params.append(existing_alb["id"])
+                            upd_params.append(album_id)
                             with db._lock:
                                 db.conn.execute(alb_sql, upd_params)
                                 db.conn.commit()
                     else:
-                        new_album_id = str(uuid.uuid4())
+                        album_id = str(uuid.uuid4())
                         alb_path = str(Path(artist_path) / title) if artist_path else None
                         db.upsert_library_album(
                             LibraryAlbum(
-                                id=new_album_id,
+                                id=album_id,
                                 artist_id=artist_id,
                                 title=title,
                                 clean_title=clean_library_name(title),
                                 mb_release_group_id=rg_id,
-                                album_type=rg.get("album_type", "album"),
+                                album_type=album_type,
                                 year=rg.get("year"),
                                 cover_url=rg.get("cover_url"),
-                                monitored=bool(artist.get("monitored", True)),
+                                monitored=alb_monitored,
                                 path=alb_path,
                             )
                         )
+
+                    # Cache cover artwork via mediacover
+                    cov_url = rg.get("cover_url") or (existing_alb.get("cover_url") if existing_alb else None)
+                    if cov_url:
+                        try:
+                            mediacover_service.ensure_artwork("album_cover", album_id, cov_url)
+                        except Exception as c_err:
+                            logger.debug("Error caching cover for album %s: %s", album_id, c_err)
+
+                    # Track hydration: If album is monitored, hydrate canonical tracks
+                    if alb_monitored and rg_id:
+                        tracks = enricher.get_release_group_tracks(rg_id)
+                        if not tracks and discovery_client:
+                            # Fallback to Deezer album search/details for that album title
+                            try:
+                                dz_results = discovery_client.search(f"{artist_name} {title}", item_type="album", limit=3)
+                                if isinstance(dz_results, list):
+                                    for dz_item in dz_results:
+                                        if clean_library_name(dz_item.get("title") or "") == clean_library_name(title):
+                                            dz_alb_details = discovery_client.get_album_details(dz_item["id"])
+                                            if dz_alb_details and dz_alb_details.get("tracks"):
+                                                tracks = [
+                                                    {
+                                                        "track_number": int(t.get("track_number") or 1),
+                                                        "disc_number": int(t.get("disc_number") or 1),
+                                                        "title": t.get("title") or "Unknown Track",
+                                                        "duration_seconds": float(t["duration_seconds"]) if t.get("duration_seconds") is not None else None,
+                                                        "mb_recording_id": None,
+                                                    }
+                                                    for t in dz_alb_details["tracks"]
+                                                ]
+                                                if dz_alb_details.get("cover_url") and not rg.get("cover_url"):
+                                                    mediacover_service.ensure_artwork("album_cover", album_id, dz_alb_details["cover_url"])
+                                                break
+                            except Exception as dz_err:
+                                logger.debug("Deezer track fallback failed for %s - %s: %s", artist_name, title, dz_err)
+
+                        if tracks:
+                            for trk in tracks:
+                                trk_title = trk.get("title") or "Unknown Track"
+                                trk_num = int(trk.get("track_number") or 1)
+                                disc_num = int(trk.get("disc_number") or 1)
+                                dur = trk.get("duration_seconds")
+                                mb_rec_id = trk.get("mb_recording_id")
+
+                                existing_trk = db.get_library_track_by_title(
+                                    album_id,
+                                    trk_title,
+                                    track_number=trk_num,
+                                )
+                                if existing_trk:
+                                    trk_id = existing_trk["id"]
+                                    t_monitored = bool(existing_trk["monitored"])
+                                else:
+                                    trk_id = str(uuid.uuid4())
+                                    t_monitored = True
+
+                                db.upsert_library_track(
+                                    LibraryTrack(
+                                        id=trk_id,
+                                        album_id=album_id,
+                                        artist_id=artist_id,
+                                        title=trk_title,
+                                        clean_title=clean_library_name(trk_title),
+                                        track_number=trk_num,
+                                        disc_number=disc_num,
+                                        duration_seconds=dur,
+                                        monitored=t_monitored,
+                                        mb_recording_id=mb_rec_id,
+                                    )
+                                )
         except Exception as exc:
             logger.warning("Error enriching artist %s via MusicBrainz: %s", artist_id, exc)
 
@@ -925,7 +1185,18 @@ def refresh_artist(
                                 )
                             else:
                                 album_id = str(uuid.uuid4())
-                                alb_monitored = bool(artist.get("monitored", True))
+                                monitor_opt = artist.get("monitor_option", "all")
+                                if not artist.get("monitored", True):
+                                    alb_monitored = False
+                                elif monitor_opt == "all":
+                                    alb_monitored = True
+                                elif monitor_opt == "albums":
+                                    alb_monitored = (section_name == "albums")
+                                elif monitor_opt == "singles_eps":
+                                    alb_monitored = (section_name == "singles_eps")
+                                else:
+                                    alb_monitored = False
+
                                 alb_path = str(Path(artist_path) / album_title) if artist_path else None
                                 db.upsert_library_album(
                                     LibraryAlbum(
@@ -942,6 +1213,14 @@ def refresh_artist(
                                         cover_url=album.get("cover_url"),
                                     )
                                 )
+
+                            # Cache album cover
+                            cov = album.get("cover_url") or (existing_alb.get("cover_url") if existing_alb else None)
+                            if cov:
+                                try:
+                                    mediacover_service.ensure_artwork("album_cover", album_id, cov)
+                                except Exception:
+                                    pass
 
                             if alb_monitored and foreign_album_id:
                                 album_details = None
@@ -1081,6 +1360,24 @@ def refresh_artist(
             except Exception as exc:
                 logger.warning("Error enriching artist %s via MusicBrainz: %s", artist_id, exc)
 
+    # Cache artist poster & banner
+    if artist.get("image_url"):
+        try:
+            mediacover_service.ensure_artwork("artist_poster", artist_id, artist["image_url"])
+        except Exception:
+            pass
+    if artist.get("banner_url"):
+        try:
+            mediacover_service.ensure_artwork("artist_banner", artist_id, artist["banner_url"])
+        except Exception:
+            pass
+
+    # Reconcile files
+    try:
+        reconcile_artist_files(db, artist_id)
+    except Exception as r_err:
+        logger.warning("Error running file reconciliation for artist %s: %s", artist_id, r_err)
+
     if not foreign_artist_id and not mbid:
         return {"success": False, "message": "Artist has no linked discovery foreign ID or MusicBrainz ID"}
 
@@ -1089,6 +1386,27 @@ def refresh_artist(
         "artist_id": artist_id,
         "refreshed_at": datetime.now().isoformat(),
     }
+
+
+@router.post("/artists/{artist_id}/refresh", dependencies=[Depends(require_core_tier)])
+def refresh_artist(
+    artist_id: str,
+    db: Database = Depends(get_db),
+    discovery_client: DiscoveryClient = Depends(get_discovery_client),
+    enricher: MbidEnricherClient = Depends(get_mbid_enricher),
+    _admin: dict[str, Any] = Depends(require_admin),
+) -> dict[str, Any]:
+    """Refreshes artist discography from Deezer/discovery metadata and enriches via MusicBrainz."""
+    artist = db.get_library_artist(artist_id)
+    if artist is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Artist not found")
+
+    return refresh_single_artist(
+        artist_id=artist_id,
+        db=db,
+        discovery_client=discovery_client,
+        enricher=enricher,
+    )
 
 
 @router.delete("/artists/{artist_id}", dependencies=[Depends(require_core_tier)])
@@ -1220,8 +1538,13 @@ def get_album_cover(
             headers={"Cache-Control": "public, max-age=86400"},
         )
 
-    if remote_cover and (remote_cover.startswith("http://") or remote_cover.startswith("https://")):
-        return RedirectResponse(url=remote_cover, status_code=status.HTTP_307_TEMPORARY_REDIRECT)
+    cached_cover = mediacover_service.ensure_artwork("album_cover", album_id, remote_cover)
+    if cached_cover and cached_cover.is_file() and cached_cover.stat().st_size > 0:
+        return FileResponse(
+            str(cached_cover),
+            media_type="image/jpeg",
+            headers={"Cache-Control": "public, max-age=31536000, immutable"},
+        )
 
     if local_img:
         media_type = "image/png" if local_img.suffix.lower() == ".png" else "image/jpeg"
@@ -1230,6 +1553,9 @@ def get_album_cover(
             media_type=media_type,
             headers={"Cache-Control": "public, max-age=86400"},
         )
+
+    if remote_cover and (remote_cover.startswith("http://") or remote_cover.startswith("https://")):
+        return RedirectResponse(url=remote_cover, status_code=status.HTTP_307_TEMPORARY_REDIRECT)
 
     return RedirectResponse(url="/placeholder.svg", status_code=status.HTTP_307_TEMPORARY_REDIRECT)
 

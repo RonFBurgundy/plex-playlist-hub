@@ -361,6 +361,11 @@ def main() -> int:
                 interval_seconds=config.rss_sync_interval_minutes * 60,
             )
 
+        from .artist_refresh_worker import artist_refresh_worker
+
+        logger.info("Starting ArtistRefreshWorker (interval: 24h, pace: 1.5s)")
+        artist_refresh_worker.start(db=db, interval_seconds=86400, pace_delay=1.5)
+
     app = create_app(db=db, config=config)
 
     uvicorn_config = uvicorn.Config(
@@ -389,6 +394,12 @@ def main() -> int:
 
                 backlog_worker.stop()
                 rss_worker.stop()
+            except Exception:
+                pass
+            try:
+                from .artist_refresh_worker import artist_refresh_worker
+
+                artist_refresh_worker.stop()
             except Exception:
                 pass
         db.close()

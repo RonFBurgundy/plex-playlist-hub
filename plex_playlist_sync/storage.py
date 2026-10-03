@@ -176,6 +176,7 @@ class Database:
                 (20, self._migration_v20),
                 (21, self._migration_v21),
                 (22, self._migration_v22),
+                (23, self._migration_v23),
             ]
 
             for version, migration_fn in migrations:
@@ -989,6 +990,13 @@ class Database:
         cur.execute(
             "CREATE INDEX IF NOT EXISTS idx_system_events_type ON system_events (event_type);"
         )
+
+    def _migration_v23(self, cur: sqlite3.Cursor) -> None:
+        cur.execute("PRAGMA table_info(library_artists);")
+        art_cols = [row[1] for row in cur.fetchall()]
+        if "monitor_option" not in art_cols:
+            cur.execute("ALTER TABLE library_artists ADD COLUMN monitor_option TEXT NOT NULL DEFAULT 'all';")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_lib_artists_monitored ON library_artists(monitored);")
 
     # -------------------------------------------------------------------------
     # Users CRUD
@@ -2989,6 +2997,7 @@ class Database:
     def _map_library_artist(self, row: sqlite3.Row) -> dict[str, Any]:
         res = dict(row)
         res["monitored"] = bool(res.get("monitored", 1))
+        res["monitor_option"] = str(res.get("monitor_option") or "all")
         return res
 
     def _map_library_album(self, row: sqlite3.Row) -> dict[str, Any]:
@@ -3032,6 +3041,7 @@ class Database:
         foreign_artist_id = str(d["foreign_artist_id"]) if d.get("foreign_artist_id") is not None else None
         path = str(d["path"]) if d.get("path") is not None else None
         monitored = 1 if d.get("monitored", True) else 0
+        monitor_option = str(d.get("monitor_option") or "all")
         quality_profile_id = str(d["quality_profile_id"]) if d.get("quality_profile_id") is not None else None
         metadata_json = d.get("metadata_json")
         if isinstance(metadata_json, dict):
@@ -3051,15 +3061,16 @@ class Database:
                 """
                 INSERT INTO library_artists (
                     id, name, clean_name, foreign_artist_id, path, monitored,
-                    quality_profile_id, metadata_json, mbid, image_url, banner_url,
-                    bio, genres, country, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, COALESCE(?, CURRENT_TIMESTAMP), CURRENT_TIMESTAMP)
+                    monitor_option, quality_profile_id, metadata_json, mbid,
+                    image_url, banner_url, bio, genres, country, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, COALESCE(?, CURRENT_TIMESTAMP), CURRENT_TIMESTAMP)
                 ON CONFLICT(id) DO UPDATE SET
                     name = excluded.name,
                     clean_name = excluded.clean_name,
                     foreign_artist_id = COALESCE(excluded.foreign_artist_id, library_artists.foreign_artist_id),
                     path = COALESCE(excluded.path, library_artists.path),
                     monitored = excluded.monitored,
+                    monitor_option = excluded.monitor_option,
                     quality_profile_id = COALESCE(excluded.quality_profile_id, library_artists.quality_profile_id),
                     metadata_json = COALESCE(excluded.metadata_json, library_artists.metadata_json),
                     mbid = COALESCE(excluded.mbid, library_artists.mbid),
@@ -3077,6 +3088,7 @@ class Database:
                     foreign_artist_id,
                     path,
                     monitored,
+                    monitor_option,
                     quality_profile_id,
                     metadata_json,
                     mbid,

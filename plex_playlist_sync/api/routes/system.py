@@ -21,6 +21,7 @@ from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
 
 from plex_playlist_sync.acquisition_worker import acquisition_worker
+from plex_playlist_sync.artist_refresh_worker import artist_refresh_worker
 from plex_playlist_sync.api.dependencies import (
     get_config,
     get_current_user,
@@ -890,6 +891,7 @@ VALID_TASK_IDS = {
     "indexer_rss_sync",
     "lidarr_auto_trickle",
     "download_queue_monitor",
+    "artist_metadata_refresh",
 }
 
 _running_tasks: set[str] = set()
@@ -1023,6 +1025,23 @@ def get_all_scheduled_tasks(
             interval=f"Every {acq_poll_sec}s",
             status=acq_status_val,
             last_run_at=acq_last_run,
+            can_trigger=True,
+            can_cancel=False,
+        )
+    )
+
+    # 7. artist_metadata_refresh: Artist Metadata & Discography Refresh (artist_refresh_worker)
+    ar_stat = artist_refresh_worker.get_status()
+    ar_status_val = "running" if (ar_stat.get("running") or "artist_metadata_refresh" in _running_tasks) else "idle"
+    ar_last_run = ar_stat.get("last_run_at") or _task_last_run_at.get("artist_metadata_refresh")
+    tasks.append(
+        ScheduledTaskItem(
+            id="artist_metadata_refresh",
+            name="Artist Metadata & Discography Refresh",
+            description="Refreshes artist metadata, canonical discographies, full tracklists, and artwork cache from BrainzMash / MusicBrainz and Deezer.",
+            interval="Every 24h",
+            status=ar_status_val,
+            last_run_at=ar_last_run,
             can_trigger=True,
             can_cancel=False,
         )
@@ -1164,6 +1183,18 @@ def run_scheduled_task(
                     _running_tasks.discard("download_queue_monitor")
 
         threading.Thread(target=_acq_thread, daemon=True, name="ManualAcquisitionTask").start()
+
+    elif task_id == "artist_metadata_refresh":
+        def _refresh_thread():
+            with _tasks_lock:
+                _running_tasks.add("artist_metadata_refresh")
+            try:
+                artist_refresh_worker.refresh_once(db=db)
+            finally:
+                with _tasks_lock:
+                    _running_tasks.discard("artist_metadata_refresh")
+
+        threading.Thread(target=_refresh_thread, daemon=True, name="ManualArtistRefreshTask").start()
 
     return {"success": True, "message": f"Task '{task_id}' dispatched successfully"}
 

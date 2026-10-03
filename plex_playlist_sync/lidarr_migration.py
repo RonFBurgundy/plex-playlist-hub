@@ -152,12 +152,37 @@ class LidarrMigrationJob:
                 existing = db.get_library_artist_by_name(artist_name)
                 artist_id = str(existing["id"]) if existing else str(uuid.uuid4())
 
+                image_url: Optional[str] = None
+                banner_url: Optional[str] = None
+                fanart_url: Optional[str] = None
+                for img in (artist.get("images") or []):
+                    if not isinstance(img, dict):
+                        continue
+                    ctype = str(img.get("coverType") or "").strip().lower()
+                    url = img.get("url")
+                    if not url:
+                        continue
+                    url_str = str(url)
+                    if ctype == "poster":
+                        image_url = url_str
+                    elif ctype == "banner":
+                        banner_url = url_str
+                    elif ctype == "fanart":
+                        fanart_url = url_str
+
+                if not banner_url and fanart_url:
+                    banner_url = fanart_url
+                if not image_url and fanart_url:
+                    image_url = fanart_url
+
                 artist_model = LibraryArtist(
                     id=artist_id,
                     name=artist_name,
                     foreign_artist_id=foreign_artist_id,
                     path=path,
                     monitored=monitored,
+                    image_url=image_url,
+                    banner_url=banner_url,
                 )
                 upserted = db.upsert_library_artist(artist_model)
                 new_artist_id = str(upserted["id"])
@@ -234,6 +259,16 @@ class LidarrMigrationJob:
                 existing_album = db.get_library_album_by_title(mapped_artist_id, album_title)
                 album_id = str(existing_album["id"]) if existing_album else str(uuid.uuid4())
 
+                cover_url: Optional[str] = None
+                for img in (album.get("images") or []):
+                    if not isinstance(img, dict):
+                        continue
+                    ctype = str(img.get("coverType") or "").strip().lower()
+                    url = img.get("url")
+                    if url and ctype == "cover":
+                        cover_url = str(url)
+                        break
+
                 album_model = LibraryAlbum(
                     id=album_id,
                     artist_id=mapped_artist_id,
@@ -243,6 +278,7 @@ class LidarrMigrationJob:
                     year=year,
                     monitored=monitored,
                     path=album_path,
+                    cover_url=cover_url,
                 )
                 upserted_album = db.upsert_library_album(album_model)
                 new_album_id = str(upserted_album["id"])
