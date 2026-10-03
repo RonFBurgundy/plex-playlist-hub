@@ -1,11 +1,14 @@
 import logging
-from typing import List, Optional
+from typing import TYPE_CHECKING, List, Optional
 
 from .clients.deezer import DeezerClient
 from .clients.plex import PlexClient
 from .clients.spotify import SpotifyClient
 from .config import Config
 from .models import SyncResult
+
+if TYPE_CHECKING:
+    from .storage import Database
 
 logger = logging.getLogger(__name__)
 
@@ -19,11 +22,13 @@ class SyncCoordinator:
         plex_client: PlexClient,
         spotify_client: Optional[SpotifyClient] = None,
         deezer_client: Optional[DeezerClient] = None,
+        db: Optional["Database"] = None,
     ):
         self.config = config
         self.plex = plex_client
         self.spotify = spotify_client
         self.deezer = deezer_client
+        self.db = db
 
     def run_sync_cycle(self) -> List[SyncResult]:
         """Execute one complete sync cycle across all configured music providers."""
@@ -95,5 +100,15 @@ class SyncCoordinator:
             total_matched,
             total_missing,
         )
+        if self.db:
+            try:
+                self.db.record_event(
+                    "sync_completed",
+                    f"Playlist sync completed: {len(results)} playlists processed ({total_matched} matched, {total_missing} missing)",
+                    source="SyncCoordinator",
+                    severity="info",
+                )
+            except Exception as ev_err:
+                logger.warning("Failed to record sync_completed event: %s", ev_err)
         logger.info("========================================================================")
         return results

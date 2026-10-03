@@ -301,3 +301,30 @@ export interface LidarrTestResult {
   version?: string;
   error?: string;
 }
+
+export interface SystemEventItem {
+  id: number;
+  event_type: string;
+  severity: 'info' | 'warn' | 'error';
+  source: string;
+  message: string;
+  details?: Record<string, any>;
+  created_at: string;
+}
+
+export interface SystemEventsResponse {
+  items: SystemEventItem[];
+  total: number;
+  page: number;
+  page_size: number;
+}
+
+export interface SystemLogItem {
+  id: string;
+  timestamp: string;
+  level: 'info' | 'warn' | 'error' | 'debug';
+  name: string;
+  message: string;
+  raw?: string;
+}
+

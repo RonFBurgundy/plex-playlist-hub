@@ -490,6 +490,15 @@ class AcquisitionWorker:
 
             def _notify_failed(err_text: str) -> None:
                 try:
+                    db.record_event(
+                        "download_failed",
+                        f"Download failed for '{item.get('title', '')}': {err_text}",
+                        source="AcquisitionWorker",
+                        severity="error",
+                    )
+                except Exception as ev_err:
+                    logger.warning("Failed to record download_failed event: %s", ev_err)
+                try:
                     notification_dispatcher.dispatch(
                         NotificationEvent.DOWNLOAD_FAILED,
                         data={
@@ -543,6 +552,25 @@ class AcquisitionWorker:
             progress = float(status_dict.get("progress") or 0.0)
             size_bytes = status_dict.get("size_bytes")
             db.update_download_progress(download_id, progress, size_bytes)
+
+            if item.get("status") == DownloadStatus.QUEUED.value and cur_status == DownloadStatus.DOWNLOADING.value:
+                client_name = client_config.get("name", "Client") if client_config else "Client"
+                try:
+                    db.record_event(
+                        "download_started",
+                        f"Grabbed '{item.get('title', '')}' via {client_name}",
+                        source="AcquisitionWorker",
+                        severity="info",
+                        details={
+                            "artist": item.get("artist"),
+                            "title": item.get("title"),
+                            "client": client_name,
+                            "download_id": download_id,
+                            "size_bytes": size_bytes,
+                        },
+                    )
+                except Exception as ev_err:
+                    logger.warning("Failed to record download_started event: %s", ev_err)
 
             # If failed
             if cur_status == DownloadStatus.FAILED.value:
@@ -606,6 +634,15 @@ class AcquisitionWorker:
                         db.update_request_status(item["request_id"], RequestStatus.AVAILABLE.value)
                         req_row = db.get_request(item["request_id"])
                     stats["imported"] += 1
+                    try:
+                        db.record_event(
+                            "item_available",
+                            f"Imported '{item.get('title', '')}' to library",
+                            source="AcquisitionWorker",
+                            severity="info",
+                        )
+                    except Exception as ev_err:
+                        logger.warning("Failed to record Lidarr item_available event: %s", ev_err)
                     try:
                         notification_dispatcher.dispatch(
                             NotificationEvent.ITEM_AVAILABLE,
@@ -783,6 +820,15 @@ class AcquisitionWorker:
                     if matched_expected_track:
                         placed_to_track[str(placed_path)] = matched_expected_track
                     logger.info("Successfully imported '%s' -> '%s'", af.name, placed_path)
+                    try:
+                        db.record_event(
+                            "item_available",
+                            f"Imported '{af.name}' to library",
+                            source="AcquisitionWorker",
+                            severity="info",
+                        )
+                    except Exception as ev_err:
+                        logger.warning("Failed to record item_available event: %s", ev_err)
 
                     # Tag writing and artwork embedding
                     tags_to_write: dict[str, Any] = {

@@ -465,6 +465,16 @@ class WantedBacklogWorker:
             self.items_grabbed += items_grabbed
             self.errors += errors_count
 
+        try:
+            db.record_event(
+                "backlog_sweep",
+                f"Backlog sweep completed: {items_checked} items checked, {items_grabbed} grabbed",
+                source="BacklogWorker",
+                severity="info",
+            )
+        except Exception as ev_err:
+            logger.warning("Failed to record backlog_sweep event: %s", ev_err)
+
         return {
             "items_checked": items_checked,
             "items_grabbed": items_grabbed,
@@ -770,6 +780,25 @@ class RSSSyncWorker:
                     except Exception as ex:
                         logger.warning("Failed to dispatch RSS DOWNLOAD_STARTED notification: %s", ex)
 
+                    try:
+                        db.record_event(
+                            "download_started",
+                            f"Grabbed '{active_dl.title}' via {client.get('name')}",
+                            source="AcquisitionWorker",
+                            severity="info",
+                            details={
+                                "artist": active_dl.artist,
+                                "title": active_dl.title,
+                                "release": candidate.title,
+                                "client": client.get("name"),
+                                "request_id": matched_req["id"],
+                                "download_id": download_id,
+                                "size_bytes": candidate.size_bytes,
+                            },
+                        )
+                    except Exception as ev_err:
+                        logger.warning("Failed to record RSS download_started event: %s", ev_err)
+
                     logger.info(
                         "RSSSyncWorker grabbed '%s' for request %s via %s (score=%s)",
                         candidate.title,
@@ -785,6 +814,16 @@ class RSSSyncWorker:
             self.releases_scanned += releases_scanned
             self.grabs_triggered += grabs_triggered
             self.errors += errors_count
+
+        try:
+            db.record_event(
+                "rss_synced",
+                f"RSS sync completed: {releases_scanned} releases scanned, {grabs_triggered} grabbed",
+                source="RssSyncWorker",
+                severity="info",
+            )
+        except Exception as ev_err:
+            logger.warning("Failed to record rss_synced event: %s", ev_err)
 
         return {
             "releases_scanned": releases_scanned,

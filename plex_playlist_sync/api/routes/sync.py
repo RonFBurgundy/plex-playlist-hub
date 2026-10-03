@@ -203,6 +203,15 @@ class SyncState:
                 stats["total_matched"],
                 stats["total_missing"],
             )
+            try:
+                db.record_event(
+                    "sync_completed",
+                    f"Playlist sync completed: {stats['total_playlists']} playlists processed ({stats['total_matched']} matched, {stats['total_missing']} missing)",
+                    source="SyncCoordinator",
+                    severity="info",
+                )
+            except Exception as ev_err:
+                logger.warning("Failed to record sync_completed event: %s", ev_err)
             return {"status": "success", "stats": stats}
         except Exception as e:
             logger.error("Unexpected error during sync cycle: %s", e)

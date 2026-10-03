@@ -374,6 +374,28 @@ class AcquisitionCoordinator:
         except Exception as e:
             logger.warning("Failed to dispatch DOWNLOAD_STARTED notification: %s", e)
 
+        try:
+            client_name = client.get("name", "Unknown Client")
+            db.record_event(
+                "download_started",
+                f"Grabbed '{top_candidate.title}' via {client_name}",
+                source="AcquisitionWorker",
+                severity="info",
+                details={
+                    "artist": artist,
+                    "title": top_candidate.title,
+                    "album": album,
+                    "item_type": item_type,
+                    "request_id": request_id,
+                    "client": client_name,
+                    "release": top_candidate.title,
+                    "download_id": download_id,
+                    "size_bytes": top_candidate.size_bytes,
+                },
+            )
+        except Exception as ev_err:
+            logger.warning("Failed to record download_started event: %s", ev_err)
+
         logger.info(
             "Successfully grabbed release '%s' via %s (download_id=%s, score=%d)",
             top_candidate.title,

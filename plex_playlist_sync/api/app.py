@@ -53,6 +53,11 @@ def create_app(
         app.state.db = db
     if config is not None:
         app.state.config = config
+        try:
+            from plex_playlist_sync.cli import setup_logging
+            setup_logging(config.log_level, config=config)
+        except Exception:
+            pass
 
     # 1. Security Headers Middleware
     @app.middleware("http")

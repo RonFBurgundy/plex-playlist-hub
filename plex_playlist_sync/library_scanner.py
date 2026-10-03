@@ -260,6 +260,16 @@ class LibraryScanner:
                     self._status["completed_at"] = datetime.now(timezone.utc).isoformat()
                     return dict(self._status)
 
+            try:
+                db.record_event(
+                    "scan_started",
+                    f"Filesystem scan started on {root}",
+                    source="LibraryScanner",
+                    severity="info",
+                )
+            except Exception as e:
+                logger.warning("LibraryScanner: Failed to record scan_started event: %s", e)
+
             # Step c: Collect audio files
             audio_files: list[Path] = []
             try:
@@ -641,6 +651,12 @@ class LibraryScanner:
                 if pending_files_to_batch:
                     db.upsert_library_files_batch(pending_files_to_batch)
 
+                logger.info(
+                    "LibraryScanner: Processed %d/%d files...",
+                    self._status["processed_files"],
+                    len(audio_files),
+                )
+
             if self._stop_event.is_set():
                 with self._lock:
                     self._status["status"] = "cancelled"
@@ -672,6 +688,17 @@ class LibraryScanner:
                     )
 
             # Step g: Conclude scan
+            if not self._stop_event.is_set():
+                try:
+                    db.record_event(
+                        "scan_completed",
+                        f"Scan completed: {self._status['files_indexed']} files indexed ({self._status['artists_created']} artists, {self._status['albums_created']} albums)",
+                        source="LibraryScanner",
+                        severity="info",
+                    )
+                except Exception as e:
+                    logger.warning("LibraryScanner: Failed to record scan_completed event: %s", e)
+
             with self._lock:
                 self._status["current_file"] = None
                 self._status["is_scanning"] = False

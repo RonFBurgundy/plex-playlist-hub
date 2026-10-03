@@ -1,4 +1,5 @@
 import logging
+from logging.handlers import RotatingFileHandler
 import os
 import signal
 import sqlite3
@@ -11,6 +12,7 @@ import uvicorn
 
 from .api.app import create_app
 from .api.routes.sync import sync_state
+from .api.routes.system import get_log_file_path, log_ring_buffer
 from .clients.deezer import DeezerClient
 from .clients.plex import PlexClient
 from .clients.spotify import SpotifyClient
@@ -30,7 +32,7 @@ def _signal_handler(signum, frame):
     _shutdown_requested = True
 
 
-def setup_logging(level_name: str) -> None:
+def setup_logging(level_name: str, config: Optional[Config] = None) -> None:
     numeric_level = getattr(logging, level_name.upper(), logging.INFO)
     logging.basicConfig(
         stream=sys.stdout,
@@ -38,6 +40,38 @@ def setup_logging(level_name: str) -> None:
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
         datefmt="%Y-%m-%d %H:%M:%S",
     )
+    root_logger = logging.getLogger()
+    root_logger.setLevel(numeric_level)
+
+    # Attach LogRingBuffer to root logger
+    if log_ring_buffer not in root_logger.handlers:
+        log_ring_buffer.setLevel(numeric_level)
+        root_logger.addHandler(log_ring_buffer)
+
+    # Attach RotatingFileHandler
+    try:
+        log_path = get_log_file_path(config)
+        has_rfh = any(
+            isinstance(h, RotatingFileHandler) and getattr(h, "baseFilename", "") == str(log_path)
+            for h in root_logger.handlers
+        )
+        if not has_rfh:
+            rfh = RotatingFileHandler(
+                str(log_path),
+                maxBytes=5 * 1024 * 1024,
+                backupCount=3,
+                encoding="utf-8",
+            )
+            rfh.setLevel(numeric_level)
+            rfh.setFormatter(
+                logging.Formatter(
+                    "%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+                    datefmt="%Y-%m-%d %H:%M:%S",
+                )
+            )
+            root_logger.addHandler(rfh)
+    except Exception as ex:
+        logger.warning("Could not initialize RotatingFileHandler: %s", ex)
 
 
 def main() -> int:
@@ -45,7 +79,7 @@ def main() -> int:
     signal.signal(signal.SIGTERM, _signal_handler)
 
     config = Config.from_env()
-    setup_logging(config.log_level)
+    setup_logging(config.log_level, config=config)
 
     logger.info("Initializing TrackSeerr v1.0.0")
 

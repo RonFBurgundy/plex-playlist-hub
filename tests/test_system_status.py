@@ -1,7 +1,6 @@
-"""Unit and integration tests for System Diagnostics & Telemetry API (/api/system/status)."""
-
+import logging
 import os
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastapi.testclient import TestClient
 
@@ -14,6 +13,7 @@ from plex_playlist_sync.api.routes.system import (
     _ping_download_clients,
     _ping_indexers,
     _ping_plex,
+    log_ring_buffer,
 )
 from plex_playlist_sync.auth import create_session_token, get_or_create_secret_key
 from plex_playlist_sync.config import Config
@@ -368,3 +368,197 @@ def test_worker_statuses():
     assert isinstance(status.sync_coordinator, dict)
     assert "running" in status.acquisition_worker
     assert "is_syncing" in status.sync_coordinator
+
+
+# =============================================================================
+# System Events & Logging Tests
+# =============================================================================
+
+
+def test_record_and_list_system_events(test_db):
+    """Verifies db.record_event, db.list_events fields, and ring-buffer 5,000 row capping."""
+    event_id = test_db.record_event(
+        event_type="test_event",
+        message="Test message",
+        source="TestSource",
+        severity="info",
+        details={"meta": "data"},
+    )
+    assert event_id > 0
+
+    items, total = test_db.list_events()
+    assert total == 1
+    assert len(items) == 1
+    ev = items[0]
+    assert ev["id"] == event_id
+    assert ev["event_type"] == "test_event"
+    assert ev["message"] == "Test message"
+    assert ev["source"] == "TestSource"
+    assert ev["severity"] == "info"
+    assert ev["created_at"] is not None
+    assert ev["details"] == {"meta": "data"}
+
+    # Ring-buffer pruning test:
+    # Bulk insert 5,005 dummy events directly into SQLite table
+    with test_db._lock:
+        test_db.conn.executemany(
+            "INSERT INTO system_events (event_type, severity, source, message) VALUES (?, ?, ?, ?)",
+            [(f"bulk_event_{i}", "info", "bulk", f"message {i}") for i in range(5005)],
+        )
+        test_db.conn.commit()
+
+    # Trigger ring-buffer pruning via record_event
+    test_db.record_event(
+        event_type="overflow_trigger",
+        message="Trigger ring buffer cap",
+        source="TestSource",
+        severity="info",
+    )
+
+    items, total = test_db.list_events(limit=10)
+    assert total == 5000
+    assert items[0]["event_type"] == "overflow_trigger"
+
+
+def test_get_system_events_api(app_and_client, seeded_users, secret_key, test_db):
+    """Tests GET /api/system/events with pagination, severity filtering, and text search."""
+    _, client = app_and_client
+    cookies = create_auth_cookies(test_db, seeded_users["alice"], secret_key)
+
+    # Seed 3 events: one info, one warn, one error
+    test_db.record_event(
+        event_type="sync_finished",
+        message="Sync ran successfully",
+        source="SyncService",
+        severity="info",
+    )
+    test_db.record_event(
+        event_type="disk_warning",
+        message="Disk space is below 15%",
+        source="DiskWatcher",
+        severity="warn",
+    )
+    test_db.record_event(
+        event_type="indexer_error",
+        message="Indexer connection failed needle keyword",
+        source="IndexerClient",
+        severity="error",
+    )
+
+    # 1. Pagination: page=1&page_size=2
+    resp = client.get("/api/system/events?page=1&page_size=2", cookies=cookies)
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["total"] == 3
+    assert len(data["items"]) == 2
+    assert data["page"] == 1
+    assert data["page_size"] == 2
+
+    # 2. Severity filtering: ?severity=error
+    resp_err = client.get("/api/system/events?severity=error", cookies=cookies)
+    assert resp_err.status_code == 200
+    err_data = resp_err.json()
+    assert err_data["total"] == 1
+    assert len(err_data["items"]) == 1
+    assert err_data["items"][0]["severity"] == "error"
+    assert err_data["items"][0]["event_type"] == "indexer_error"
+
+    # 3. Text search filtering: ?search=needle
+    resp_search = client.get("/api/system/events?search=needle", cookies=cookies)
+    assert resp_search.status_code == 200
+    search_data = resp_search.json()
+    assert search_data["total"] == 1
+    assert len(search_data["items"]) == 1
+    assert "needle" in search_data["items"][0]["message"]
+
+
+def test_delete_system_events_admin_only(app_and_client, seeded_users, secret_key, test_db):
+    """Tests that DELETE /api/system/events requires admin and wipes all events."""
+    _, client = app_and_client
+    alice_cookies = create_auth_cookies(test_db, seeded_users["alice"], secret_key)
+    admin_cookies = create_auth_cookies(test_db, seeded_users["admin"], secret_key)
+
+    test_db.record_event(
+        event_type="sample_event",
+        message="Event before deletion",
+        source="TestModule",
+        severity="info",
+    )
+    assert test_db.list_events()[1] == 1
+
+    # Non-admin user gets 403
+    resp_non_admin = client.delete("/api/system/events", cookies=alice_cookies)
+    assert resp_non_admin.status_code == 403
+    assert "Administrator access required" in resp_non_admin.json()["detail"]
+    assert test_db.list_events()[1] == 1
+
+    # Admin user gets 200 and events are cleared
+    resp_admin = client.delete("/api/system/events", cookies=admin_cookies)
+    assert resp_admin.status_code == 200
+    assert resp_admin.json()["success"] is True
+    assert test_db.list_events()[1] == 0
+
+
+def test_system_logs_api_and_stream(app_and_client, seeded_users, secret_key, test_db):
+    """Tests GET/DELETE /api/system/logs, SSE /api/system/logs/stream, and log download."""
+    _, client = app_and_client
+    alice_cookies = create_auth_cookies(test_db, seeded_users["alice"], secret_key)
+    admin_cookies = create_auth_cookies(test_db, seeded_users["admin"], secret_key)
+
+    log_ring_buffer.clear()
+    logger = logging.getLogger("trackseerr.system_test")
+    logger.setLevel(logging.INFO)
+    if log_ring_buffer not in logger.handlers and log_ring_buffer not in logging.getLogger().handlers:
+        logger.addHandler(log_ring_buffer)
+
+    logger.info("Informational system status message")
+    logger.warning("Warning message for logs test")
+    logger.error("Error needle message in log buffer")
+
+    # 1. GET /api/system/logs returns recent logs list
+    resp = client.get("/api/system/logs", cookies=alice_cookies)
+    assert resp.status_code == 200
+    logs = resp.json()
+    assert len(logs) >= 3
+    assert any("Informational system status message" in l["message"] for l in logs)
+
+    # 2. GET /api/system/logs?level=ERROR filters by level
+    resp_err = client.get("/api/system/logs?level=ERROR", cookies=alice_cookies)
+    assert resp_err.status_code == 200
+    err_logs = resp_err.json()
+    assert len(err_logs) >= 1
+    assert all(l["level"] == "ERROR" for l in err_logs)
+    assert any("needle" in l["message"] for l in err_logs)
+
+    # 3. GET /api/system/logs/stream SSE
+    unauth_stream = client.get("/api/system/logs/stream")
+    assert unauth_stream.status_code == 401
+
+    with patch("starlette.requests.Request.is_disconnected", AsyncMock(return_value=True)):
+        resp_stream = client.get("/api/system/logs/stream", cookies=admin_cookies)
+        assert resp_stream.status_code == 200
+        assert "text/event-stream" in resp_stream.headers["content-type"]
+        assert "connected" in resp_stream.text
+
+    # 4. GET /api/system/logs/download returns log file
+    resp_dl_non_admin = client.get("/api/system/logs/download", cookies=alice_cookies)
+    assert resp_dl_non_admin.status_code == 403
+
+    resp_dl_admin = client.get("/api/system/logs/download", cookies=admin_cookies)
+    assert resp_dl_admin.status_code == 200
+    assert resp_dl_admin.headers["content-type"].startswith("text/plain")
+
+    # 5. DELETE /api/system/logs clears in-memory log buffer
+    del_non_admin = client.delete("/api/system/logs", cookies=alice_cookies)
+    assert del_non_admin.status_code == 403
+
+    del_admin = client.delete("/api/system/logs", cookies=admin_cookies)
+    assert del_admin.status_code == 200
+    assert del_admin.json()["success"] is True
+    # Verify pre-existing logs were purged by DELETE endpoint
+    remaining_test_logs = [l for l in log_ring_buffer.get_logs() if "system_test" in l.get("name", "")]
+    assert len(remaining_test_logs) == 0
+    # Direct clear verifies empty buffer
+    log_ring_buffer.clear()
+    assert len(log_ring_buffer.get_logs()) == 0
+

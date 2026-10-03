@@ -175,6 +175,7 @@ class Database:
                 (19, self._migration_v19),
                 (20, self._migration_v20),
                 (21, self._migration_v21),
+                (22, self._migration_v22),
             ]
 
             for version, migration_fn in migrations:
@@ -966,6 +967,27 @@ class Database:
             )
         cur.execute(
             "UPDATE media_management_settings SET mb_mirror_url = 'https://api.brainzmash.cc' WHERE mb_mirror_url IN ('https://api.brainzmash.org', 'https://musicbrainz.org');"
+        )
+
+    def _migration_v22(self, cur: sqlite3.Cursor) -> None:
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS system_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                event_type TEXT NOT NULL,
+                severity TEXT NOT NULL DEFAULT 'info',
+                source TEXT NOT NULL,
+                message TEXT NOT NULL,
+                details_json TEXT,
+                created_at TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP)
+            );
+            """
+        )
+        cur.execute(
+            "CREATE INDEX IF NOT EXISTS idx_system_events_created_at ON system_events (created_at DESC);"
+        )
+        cur.execute(
+            "CREATE INDEX IF NOT EXISTS idx_system_events_type ON system_events (event_type);"
         )
 
     # -------------------------------------------------------------------------
@@ -4109,6 +4131,108 @@ class Database:
                 d["order_index"] = int(r["order_index"])
                 results.append(d)
             return results
+
+    # -------------------------------------------------------------------------
+    # System Events CRUD
+    # -------------------------------------------------------------------------
+
+    def record_event(
+        self,
+        event_type: str,
+        message: str,
+        source: str = "system",
+        severity: str = "info",
+        details: Optional[dict[str, Any]] = None,
+    ) -> int:
+        """Records a system lifecycle event and enforces 5,000-row ring-buffer capping."""
+        details_json = json.dumps(details) if details is not None else None
+        sev = (severity or "info").lower().strip()
+        with self._lock:
+            cur = self.conn.execute(
+                """
+                INSERT INTO system_events (event_type, severity, source, message, details_json)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (str(event_type), sev, str(source), str(message), details_json),
+            )
+            event_id = int(cur.lastrowid)
+            cur.execute(
+                """
+                DELETE FROM system_events
+                WHERE id NOT IN (
+                    SELECT id FROM system_events ORDER BY id DESC LIMIT 5000
+                )
+                """
+            )
+            self.conn.commit()
+            return event_id
+
+    def list_events(
+        self,
+        limit: int = 50,
+        offset: int = 0,
+        event_type: Optional[str] = None,
+        severity: Optional[str] = None,
+        search: Optional[str] = None,
+    ) -> tuple[list[dict[str, Any]], int]:
+        """Queries system events with dynamic filtering and returns (items, total_count)."""
+        where_clauses: list[str] = []
+        params: list[Any] = []
+
+        if event_type:
+            where_clauses.append("event_type = ?")
+            params.append(event_type)
+
+        if severity and severity.lower() != "all":
+            where_clauses.append("LOWER(severity) = ?")
+            params.append(severity.lower().strip())
+
+        if search:
+            where_clauses.append("(message LIKE ? OR source LIKE ?)")
+            s_param = f"%{search}%"
+            params.extend([s_param, s_param])
+
+        where_sql = f" WHERE {' AND '.join(where_clauses)}" if where_clauses else ""
+
+        with self._lock:
+            count_cur = self.conn.execute(
+                f"SELECT COUNT(*) FROM system_events{where_sql}",
+                tuple(params),
+            )
+            total = int(count_cur.fetchone()[0])
+
+            item_params = list(params) + [limit, offset]
+            cur = self.conn.execute(
+                f"""
+                SELECT id, event_type, severity, source, message, details_json, created_at
+                FROM system_events{where_sql}
+                ORDER BY id DESC
+                LIMIT ? OFFSET ?
+                """,
+                tuple(item_params),
+            )
+            rows = cur.fetchall()
+
+        items: list[dict[str, Any]] = []
+        for r in rows:
+            d = dict(r)
+            d_json = d.get("details_json")
+            if d_json:
+                try:
+                    d["details"] = json.loads(d_json)
+                except Exception:
+                    d["details"] = None
+            else:
+                d["details"] = None
+            items.append(d)
+
+        return items, total
+
+    def clear_events(self) -> None:
+        """Deletes all system events from the database."""
+        with self._lock:
+            self.conn.execute("DELETE FROM system_events")
+            self.conn.commit()
 
 
 
